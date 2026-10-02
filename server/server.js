@@ -14395,7 +14395,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const out = await photoQuality.apply({ by, hashes: Array.isArray(payload && payload.hashes) ? payload.hashes.map(String) : null });
       rebuildCatalogFromOverrides();
-      await settings.recordAudit({ who: by, action: "part-photo.quality.upgrade", note: `Upgraded ${out.applied.length} live photo(s) to a larger copy of the same picture${out.skipped.length ? `; ${out.skipped.length} skipped` : ""}`, after: out });
+      await settings.recordAudit({ who: by, action: "part-photo.quality.upgrade", note: `Restored ${out.applied.length} stored image(s) to the larger copy of the same picture (${out.applied.filter((a) => a.kind === "live").length} live, ${out.applied.filter((a) => a.kind === "candidate").length} review candidate(s); tiers, checks and approvals unchanged)${out.skipped.length ? `; ${out.skipped.length} skipped` : ""}`, after: out });
       return sendJson(res, 200, { ok: true, ...out });
     } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't apply the upgrades."] }); }
   }

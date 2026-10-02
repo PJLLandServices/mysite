@@ -338,7 +338,7 @@
   // photo. Older candidates carry only the stored 1200-copy dimensions.
   function qualityHtml(c) {
     const src = c.source || {};
-    const up = src.upgradedFrom ? " · larger than the page's thumbnail" : "";
+    const up = src.restoredFrom ? ` · restored from its ${src.restoredFrom.width || "?"}×${src.restoredFrom.height || "?"} thumbnail` : src.upgradedFrom ? " · larger than the page's thumbnail" : "";
     if (c.quality && c.imageSource) {
       const q = c.quality;
       const dims = `${c.imageSource.width}×${c.imageSource.height} source`;
@@ -466,36 +466,47 @@
     const ups = qp.upgrades || [];
     const status = !plan ? "No plan built yet."
       : plan.status === "building" || plan.building ? `Building… ${plan.done} of ${plan.total} photos checked.`
-      : `Plan ${esc(plan.id)} · ${plan.total} live photo${plan.total === 1 ? "" : "s"} under 800 px · <b>${c.applicable || 0}</b> can be upgraded deterministically · <b>${c.openReview || 0}</b> need a look${c.applied ? ` · ${c.applied} already applied` : ""}`;
+      : `Plan ${esc(plan.id)} · ${plan.total} stored image${plan.total === 1 ? "" : "s"} under 800 px (live photos and review candidates) · <b>${c.applicable || 0}</b> can be restored deterministically (${c.applicableLive || 0} live, ${c.applicableCandidates || 0} review candidate${c.applicableCandidates === 1 ? "" : "s"}) · <b>${c.openReview || 0}</b> need a look${c.applied ? ` · ${c.applied} already applied` : ""}`;
+    // The grade of the larger file is shown as measured: a soft or blurry
+    // original still replaces its own 96px thumbnail, and says so.
+    const gradeWord = (q) => q.grade === "good" || q.grade === "ok" ? q.grade : (/blurry/.test(q.reason || "") ? "blurry source" : "soft source");
+    const kept = (r) => r.kind === "candidate"
+      ? `Review candidate<br><small>stays ${esc(TIER_LABEL[r.current.candidateTier] || r.current.candidateTier || "as it is")} · checks unchanged</small>`
+      : `Live · ${esc(r.current.approvedBy || "")}<br><small>approval kept as is</small>`;
     const rows = ups.map((r) => `<tr>
       <td><span class="pp-mono">${r.skus.map(esc).join(", ")}</span><br><small>${esc(r.label)}</small></td>
       <td><a class="pr-q-img" href="${img(r.current.hash, 1200)}" target="_blank" rel="noopener"><img src="${img(r.current.hash, 480)}" alt=""></a><br>${r.current.longest}px · ${esc(r.current.domain || "")}</td>
-      <td><a class="pr-q-img" href="${img(r.upgrade.hash, r.upgrade.sizes && r.upgrade.sizes.includes(2000) ? 2000 : 1200)}" target="_blank" rel="noopener"><img src="${img(r.upgrade.hash, 480)}" alt=""></a><br>${r.upgrade.source.width}×${r.upgrade.source.height} · ${esc(r.upgrade.quality.grade)} · match ${r.upgrade.similarity}</td>
-      <td>${esc(r.current.approvedBy || "")}<br><small>kept as is</small></td>
+      <td><a class="pr-q-img" href="${img(r.upgrade.hash, r.upgrade.sizes && r.upgrade.sizes.includes(2000) ? 2000 : 1200)}" target="_blank" rel="noopener"><img src="${img(r.upgrade.hash, 480)}" alt=""></a><br>${r.upgrade.source.width}×${r.upgrade.source.height} · ${esc(gradeWord(r.upgrade.quality))} · match ${r.upgrade.similarity}</td>
+      <td>${kept(r)}</td>
     </tr>`).join("");
     const building = plan && (plan.status === "building" || plan.building);
     return `<section class="pr-quality">
-      <h3>Quality upgrade of live photos</h3>
+      <h3>Resolution restoration — live photos and review candidates</h3>
       <p class="pr-q-status">${status}</p>
       <div class="pr-controls">
-        <button type="button" class="pp-btn" data-act="quality-plan"${building ? " disabled" : ""}>${plan ? "Rebuild the plan" : "Build the plan"} (reads each photo's product page)</button>
-        ${ups.length ? `<button type="button" class="pp-btn pp-btn-primary" data-act="quality-apply">Apply the ${ups.length} deterministic upgrade${ups.length === 1 ? "" : "s"}</button>` : ""}
+        <button type="button" class="pp-btn" data-act="quality-plan"${building ? " disabled" : ""}>${plan ? "Rebuild the plan" : "Build the plan"} (reads each image's product page)</button>
+        ${ups.length ? `<button type="button" class="pp-btn pp-btn-primary" data-act="quality-apply">Apply the ${ups.length} deterministic restoration${ups.length === 1 ? "" : "s"}</button>` : ""}
         <span class="pp-panel-status" data-status aria-live="polite"></span>
       </div>
-      ${ups.length ? `<div class="pr-bench-scroll"><table class="pr-q-table"><thead><tr><th>Part(s)</th><th>Today (live)</th><th>Same picture, larger</th><th>Approval (unchanged)</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+      ${ups.length ? `<div class="pr-bench-scroll"><table class="pr-q-table"><thead><tr><th>Part(s)</th><th>Stored today</th><th>Same picture, larger</th><th>What stays unchanged</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
     </section>`;
   }
   function qualityCardHtml(r, idx) {
     const isCur = idx === state.cur;
     const tried = (r.tried || []).filter((t) => t.width).map((t) => `${t.width}×${t.height}${t.note ? ` — ${esc(t.note)}` : ""}`).join("; ");
     const href = safeHref(r.current.pageUrl);
-    return `<article class="pr-card${isCur ? " is-current" : ""}" data-idx="${idx}" data-group="${esc(r.groupId)}" tabindex="-1" aria-label="${esc(r.label)}">
+    const what = r.kind === "candidate" ? "review candidate" : "live photo";
+    // A larger same-family copy that matched under the 0.98 line is HELD:
+    // shown beside the stored image for a look, never restored on its own.
+    const held = r.held && r.held.hash
+      ? `<figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.held.hash)}" aria-label="Larger copy held for review, open full size"><img src="${img(r.held.hash, 480)}" alt="Larger copy held for review" loading="lazy"></button><figcaption><p class="pr-quality is-unknown">Held: ${r.held.source.width}×${r.held.source.height} · match ${r.held.similarity} (under 0.98)</p></figcaption></figure>` : "";
+    return `<article class="pr-card${isCur ? " is-current" : ""}" data-idx="${idx}" data-group="${esc(r.id || r.groupId)}" tabindex="-1" aria-label="${esc(r.label)}">
       <header class="pr-card-head"><div class="pr-part">
         <div class="pp-desc">${esc(r.label)}</div>
-        <div class="pp-meta"><span class="pp-mono">${r.skus.map(esc).join(", ")}</span> · live photo ${r.current.longest}px${r.current.domain ? ` · ${esc(r.current.domain)}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</div>
+        <div class="pp-meta"><span class="pp-mono">${r.skus.map(esc).join(", ")}</span> · ${what} ${r.current.longest}px${r.current.domain ? ` · ${esc(r.current.domain)}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</div>
         <div class="pr-reason is-tbd"><b>Needs a look</b> — ${esc(r.reason)}${tried ? `<br><small>Tried: ${tried}</small>` : ""}</div>
       </div></header>
-      <div class="pr-cands is-single"><figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.current.hash)}" aria-label="Current photo, open full size"><img src="${img(r.current.hash, 480)}" alt="Current live photo for ${esc(r.label)}" loading="lazy"></button><figcaption><p class="pr-quality is-low">! ${r.current.longest}px stored — below the 800 px threshold</p></figcaption></figure></div>
+      <div class="pr-cands${held ? "" : " is-single"}"><figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.current.hash)}" aria-label="Stored image, open full size"><img src="${img(r.current.hash, 480)}" alt="Stored ${what} for ${esc(r.label)}" loading="lazy"></button><figcaption><p class="pr-quality is-low">! ${r.current.longest}px stored — below the 800 px threshold</p></figcaption></figure>${held}</div>
       <footer class="pr-actions">
         <button type="button" class="pp-btn" data-act="quality-keep">Keep as is</button>
         <span class="pp-panel-status" data-status aria-live="polite"></span>
@@ -506,7 +517,7 @@
     const s = (card || els.list).querySelector("[data-status]");
     const say = (t, bad) => { if (s) { s.textContent = t; s.classList.toggle("is-error", !!bad); } };
     if (kind === "plan") {
-      const ok = await window.pjlDialog.confirm("Build the quality-upgrade plan? Our server re-reads the product page of every live photo under 800 px and measures any larger copy of the same picture. Nothing is replaced by this step.", { confirmLabel: "Build the plan", cancelLabel: "Cancel" });
+      const ok = await window.pjlDialog.confirm("Build the resolution-restoration plan? Our server re-reads the product page of every live photo and review candidate under 800 px and measures any larger copy of the same picture. No model is called and nothing is replaced by this step.", { confirmLabel: "Build the plan", cancelLabel: "Cancel" });
       if (!ok) return;
       say("Building…");
       try { await post("/api/part-photo-quality/plan", {}); await load(true); } catch (err) { say(err.message, true); }
@@ -514,8 +525,9 @@
     }
     if (kind === "apply") {
       const ups = (state.data.qualityPlan && state.data.qualityPlan.upgrades) || [];
-      const list = ups.map((r) => `${r.skus.join(", ")} — ${r.current.longest}px → ${r.upgrade.source.width}×${r.upgrade.source.height} (${r.upgrade.quality.grade})`).join("\n");
-      const ok = await window.pjlDialog.confirm(`Replace ${ups.length} live photo${ups.length === 1 ? "" : "s"} with the larger copy of the same picture? Part match, fitting, approval and confidence stay exactly as they are; the old image is kept in the history.\n\n${list}`, { confirmLabel: "Apply the upgrades", cancelLabel: "Cancel" });
+      const list = ups.map((r) => `${r.kind === "candidate" ? "candidate" : "live"} · ${r.skus.join(", ")} — ${r.current.longest}px → ${r.upgrade.source.width}×${r.upgrade.source.height} (${r.upgrade.quality.grade === "good" || r.upgrade.quality.grade === "ok" ? r.upgrade.quality.grade : "soft/blurry source"}, match ${r.upgrade.similarity})`).join("\n");
+      const nLive = ups.filter((r) => r.kind !== "candidate").length, nCand = ups.length - nLive;
+      const ok = await window.pjlDialog.confirm(`Restore ${ups.length} stored image${ups.length === 1 ? "" : "s"} (${nLive} live, ${nCand} review candidate${nCand === 1 ? "" : "s"}) to the larger copy of the same picture? Only the image changes. Part match, fitting, approval, tier, evidence checks and confidence stay exactly as they are: a To-be-determined candidate stays To be determined, a Not-confident one stays Not confident.\n\n${list}`, { confirmLabel: "Apply the restorations", cancelLabel: "Cancel" });
       if (!ok) return;
       say("Applying…");
       try { const out = await post("/api/part-photo-quality/upgrade", { hashes: ups.map((r) => r.upgrade.hash) }); say(`Upgraded ${out.applied.length}${out.skipped.length ? `, skipped ${out.skipped.length}` : ""}.`); await load(true); } catch (err) { say(err.message, true); }
