@@ -1661,6 +1661,21 @@ body.tech-lightbox-open { overflow: hidden; }
    Color: subtle PJL green tint with amber-cross for unmet gates so the
    tech (and customer watching them sign) reads it as "the steps left
    to wrap up" rather than alarming. */
+/* Re-signing (2026-09-26): the work order changed in price after the
+   customer signed; they sign the revised one. */
+.tech-resign-notice {
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-left: 4px solid var(--tech-amber);
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--tech-text);
+}
+.tech-resign-notice[hidden] { display: none; }
+.tech-resign-notice strong { color: var(--tech-amber-ink); }
 .tech-pre-sign-checklist {
   margin: 0 0 4px;
   padding: 12px 14px;

@@ -2,6 +2,878 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
+The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
+(`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already
+exist:
+- the job's invoices: `projects.invoicesForProject`;
+- `isLiveInvoice`;
+- the signed agreement;
+- the deposit lifecycle;
+- the billing preview: `billingPreviewFor`, now shared with `GET …/billing-preview`;
+- the completion check's money blockers.
+
+Totals are added up there in cents:
+- **invoiced:** sent live invoices;
+- **received:** the live ledgers;
+- **owed now:** sent live invoices, where held, void and marked-paid invoices owe nothing;
+- **not yet invoiced:** fixed price only.
+
+**The header now agrees with the tab.** Its Billing card and next action read `billingSummary` of
+the same model, instead of classifying one invoice in the browser. That classification called a
+held balance invoice "outstanding" and offered "Collect payment" on an invoice nobody could send.
+
+**Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
+
+**Payment reconciliation, displayed** (Patrick, 2026-09-28: *"A manually marked-Paid invoice with
+less money recorded must not display 'None owed.'"*). The rule itself is #350's
+(`invoices.reconciliationFor`, derived on every read as `invoice.paymentReconciliation`); the
+tab only shows it. For a $1,260 invoice with $1,000 recorded and marked Paid:
+- **the tab's first card**, red, reads *Received $1,000.00 · Unresolved $260.00 · Status: Payment
+  reconciliation required · Customer amount owed: Not determined until reconciled*, and links to
+  the invoice page;
+- **"Owed now"** reads *Not determined*;
+- **the invoice** carries a red *"$260.00 not recorded"* flag, the status "Payment reconciliation
+  required", and "Unresolved" in place of "Owed";
+- **the header's Billing card** reads *"⚠ Payment reconciliation required · $260.00 unresolved"*,
+  never "None owed";
+- **the next action** is *Reconcile payment*, never "Collect payment";
+- **a deposit in reconciliation** shows as not satisfied, with no balance invoice and the
+  completion hold;
+- **a resolved invoice** says when, by whom and how it was reconciled.
+
+The $260 counts as neither received nor owed.
+
+**Test:** `scripts/test-financials-view.mjs` (in `build:check`). It covers:
+- the route's totals equal the invoices' own sums, worked out independently;
+- part-paid, reconciliation (marked Paid with $1,000 of $2,260) and held deposits;
+- the exact $1,260 / $1,000 / $260 case, in the tab and the header;
+- a void invoice;
+- a T&M job with no rate;
+- the header agreeing with the tab;
+- the screen does no money arithmetic.
+
+`npm run test:financials-tab-screen` adds browser checks: desktop and phone renders showing the
+server's figures, the header agreeing, the red reconciliation card first with its four facts, the
+$260 flag on the invoice, "Owed now" Not determined, no actions and no sideways scroll. Like the other `*-tab` screen tests it is outside `build:check`,
+because the CI runner has no browser.
+**2026-09-28 (Payment reconciliation: the ledger is the source of truth for money received; "Mark paid" never stands in for a payment; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Patrick: *"A manually marked-Paid invoice with less money recorded must not display 'None owed.'"*
+The example is a $1,260 invoice with $1,000 recorded and marked Paid: **$1,000 received, $260
+unresolved, payment reconciliation required**, and the customer's amount owed not determined until
+it is reconciled.
+
+**The rules, once (`server/lib/invoices.js`):**
+1. **The payment ledger is the source of truth for money received.** It is the net valid payments
+   (`amountPaidOf`): a reversed or refunded payment is off it, and a processor excess never went on
+   it.
+2. **A status never proves money.**
+   - `ledgerCovers(inv)` is true when the recorded payments cover the total.
+   - `isSettled(inv)` is paid AND covered.
+   - `reconciliationFor(inv)` returns `{required, total, recorded, unresolved}`. Required means
+     marked Paid with the ledger short.
+   - It is derived on every read as `invoice.paymentReconciliation`.
+3. **"Mark paid" never stands in for a payment.** `update()` refuses a change to `paid` the ledger
+   doesn't cover, with 409 `record_payment_required`. The error names what is recorded, the total
+   and the outstanding amount, and directs the office to Record payment (method, date, reference,
+   amount); the invoice becomes Paid when that payment is recorded. A change to `partially_paid`
+   is refused unless money is recorded that doesn't cover it (`status_mismatch`).
+4. **An existing invoice marked Paid with payments short is in reconciliation.**
+   - The gap is **neither received nor collectible**.
+   - `payBlockReason` returns `reconciliation_required`: no pay page charge, no Tap to Pay
+     (`openForOnSitePayment`), and no collection reminder or invoice text, which already skip
+     Paid.
+   - The claim, and the gap, is **preserved through any ledger change**
+     (`statusAfterMoneyChange`): a part payment toward the gap or a reversal that widens it keeps
+     it Paid-in-reconciliation.
+   - It ends only when the ledger covers it (the missing payment recorded, by hand or by a card
+     that lands) or the status is corrected (to Partially paid, or back to Sent, where the ledger
+     then decides).
+5. **Deposits.**
+   - The deposit lifecycle follows **settled**, not status (`deposits.onInvoiceStatusChange`, and
+     the store's change detection).
+   - So a deposit in reconciliation is **not satisfied** and makes no balance invoice.
+   - Completion's new `payment_reconciliation_required` blocker (which replaces "deposit unpaid"
+     for it) is in `HARD_BLOCKERS`: **no admin override** can complete the job, because that would
+     release the balance invoice.
+   - The cascade's and the portal's "deposit paid" read `isSettled`.
+6. **Audit.** Leaving reconciliation writes `invoice.reconciliations[]` with who, when, and how
+   (`recorded_payment`, `status_corrected` or `voided`), plus the unresolved amount, what was
+   recorded, the total and the payment id. A `payment_reconciled` history line goes with it, and
+   any change to the gap is logged (`payment_reconciliation_changed`). The PATCH route now passes
+   the signed-in person as `by`.
+7. **Resolution stays on the classic invoice page.** When one is required, the page shows *"⚠
+   Payment reconciliation required · $260.00 unresolved …"*, and **Partially paid becomes
+   selectable there only then**.
+
+**Test:** `scripts/test-payment-reconciliation.mjs` (46 checks, in `build:check`; **the code before
+this change fails 33**). It covers:
+- the exact $1,260 / $1,000 / $260 case;
+- full and partial payment;
+- Mark paid refused, with its message;
+- a part payment toward the gap and a reversal, both preserving it;
+- resolution by recorded payment and by status correction, both audited;
+- Partially paid refused where the ledger doesn't bear it out;
+- void (refused while Paid; resolved, then voided);
+- no reminder, no pay-page or Tap to Pay charge, and no Stripe intent started;
+- a real card that lands for the gap reconciles it, then is refunded and reversed; the
+  redelivery adds nothing (S6);
+- a deposit in reconciliation: no balance invoice, completion blocked even with override, then
+  satisfied once the missing payment is recorded.
+
+`test-deposit-payment-lifecycle` case D now proves Mark paid is refused and a recorded payment pays
+the invoice.
+
+**Re-verification of FLOW-23 (PASS):** the handoff §6 invariants are unchanged. These suites pass:
+
+| Suite | Checks |
+|---|---|
+| `test-payment-reversal` (#348) | 47 |
+| `test-qbo-payment-amount` (#349) | 39 |
+| `test-payment-exceptions` | 66 |
+| `test-stripe` | 74 |
+| `test-taptopay-server` | 33 |
+| `test-taptopay-second-tap` | 38 |
+| `test-klarna-financing` | 269 |
+| `test-invoice-balance-surfaces` | 47 |
+| `test-resign-reprice` | 126 |
+| `test-store-concurrency` | 29 |
+| `test-billing-one-path` | 32 |
+| `test-no-charge-recovery` | 24 |
+| `test-price-confirm` | 53 |
+
+**2026-09-28 (Financials Fix A: a deposit counts when its invoice is PAID, however it was paid, and stops counting when that payment is reversed; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Found mapping the Financials tab. The deposit lifecycle (`quote.deposit.stage`, the held balance
+invoice) was advanced by explicit `deposits.onInvoicePaid()` calls in two routes only: the manual
+"Mark paid" PATCH and the Stripe finalizer.
+- **"Record payment" never counted a deposit.** Cash, e-transfer and cheque (`POST /payments`), a
+  corrected payment, and a Klarna capture never told it. So the deposit invoice read Paid while the
+  job read "awaiting deposit", no balance invoice was made, and completion was blocked with
+  *"Deposit … hasn't been paid"*.
+- **The Stripe path counted a PART payment** as the whole deposit: it called the hook whenever
+  money was applied.
+- **Nothing un-counted a deposit.** A reversed payment (#348: "refunded in Stripe", a bounced
+  e-transfer) left the deposit counted, and the held balance invoice still credited it.
+- **Found testing against #348's reversal rules:** reversing the ONLY payment on an emailed
+  invoice left it **Paid with $0 received**. `statusForPayments` keeps a "paid" that has nothing
+  on the ledger, to protect a manual "Mark paid". So the pay link refused the customer's next
+  payment. #348's own test used never-sent invoices, which take the draft branch and were right.
+
+**The rule, once:**
+- **The invoice store reports every change of an invoice to or from "paid", and to "void",** from
+  every writer. Each locked write compares status with what is on disk, then hands each change,
+  after the lock is released, to `deposits.onInvoiceStatusChange`. It is the one place that
+  decides what the change means. No route calls the deposit hooks itself any more (the PATCH,
+  void and Stripe calls are gone).
+- **Paid means PAID:** a `partially_paid` invoice never reaches `onInvoicePaid`.
+- **`onInvoiceUnpaid` (new) is the reverse:**
+  - A deposit before completion stops counting (`awaiting_deposit`), and its unsent held balance
+    invoice is withdrawn (voided, unlinked), exactly as a voided deposit's is. Paying again makes a
+    fresh one.
+  - A reversal after the balance invoice was sent does not rewrite what the customer has. Both
+    the balance invoice and the quote say the deposit it credits was reversed, naming the invoice
+    to correct.
+  - A balance invoice's reversal re-opens `closed` → `awaiting_balance_payment`.
+- **`invoices.statusAfterLedgerChange` (new):** when a payment is reversed or corrected, the money
+  decides the status. A "paid" the payments no longer cover falls back to `sent`, or `draft` if it
+  was never sent. It is used by `removePayment` and `updatePayment`.
+
+**The workflow, walked:**
+- **Customer:** sees nothing new. The held balance invoice was never sent to them. A refunded
+  customer's pay link works again, for what is owed.
+- **Patrick:** receives nothing new; no email or alert was added.
+- **Completion:** the `deposit_unpaid` blocker now tells the truth both ways.
+- **Linked records:** the held balance invoice (withdrawn or flagged as above); the portal's
+  "deposit paid" stage already reads the invoice status.
+- **Audit:** every transition writes a `deposit_lifecycle` note on the quote. A withdrawn balance
+  invoice keeps its void reason. A flagged one gets a `deposit_reversed` history line.
+- **Deliberately untouched:** deleting a whole invoice (`remove`, which refuses paid ones), QuickBooks
+  mirroring, and the T&M rollup's deposit credit at completion.
+
+**Test:** `scripts/test-deposit-payment-lifecycle.mjs` (36 checks, in `build:check`; **the old code
+fails 19**). It covers:
+- a recorded part payment, then the rest;
+- a reversal, then paying again;
+- a payment corrected down and back up;
+- a card paid, refunded and reversed, the refunded payment redelivered (S6), then a new card;
+- a card that is only part of the deposit;
+- "Mark paid" and its undo;
+- a T&M deposit;
+- a reversal after the balance invoice was sent;
+- a balance invoice paid and reversed.
+
+**Re-verification of FLOW-23 (PASS):**
+- **Handoff §6 invariants are unchanged:** no retry, no card data, method lists unchanged,
+  `balanceDue` still charged, webhook still acks first, ledger still append-only. The finalizer
+  only lost its own best-effort deposit call; the store makes it.
+- **Suites:** listed in the PR.
+- **Awaiting a walked acceptance:** the next real deposit payment.
+**2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Found mapping the Financials tab.
+1. **Three rules for "this job's invoices".**
+   - The workspace looked up deposit and balance invoices on the quote chain.
+   - The deposit lifecycle used the quote's own pointers.
+   - The **customer portal** matched `invoice.projectId`, which a deposit invoice (made at
+     acceptance, before the project exists) and the held balance invoice never carry. So the portal
+     listed the deposit as a loose invoice in service history, never on its project card, and the
+     card's **"deposit paid" stage could not be reached**.
+2. **A void invoice was "the" invoice.** The workspace picked the newest deposit or balance
+   invoice, void or not. The Overview's "Billing" and "Collect payment" then showed a voided
+   invoice's balance as money owed.
+3. **Two parts catalogs.**
+   - The T&M billing preview priced materials from the effective catalog (admin edits, supplier
+     prices).
+   - The completion cascade re-read raw `parts.json`.
+   - So an edited price previewed at one figure and billed at another (test: $123.45 previewed,
+     $109.74 billed), or blocked the invoice as an unknown SKU.
+
+**The rules, once:**
+- **`projects.invoiceBelongsToProject` / `invoicesForProject(s)`.** An invoice is the project's
+  when any of these holds:
+  - it is tagged with it (a tag for another project is final);
+  - it is its final invoice;
+  - it is a deposit or balance invoice on the project's quote chain. The chain includes every
+    version of its billing anchor, its `sourceQuoteId`, and, before acceptance, the design's
+    linked quote.
+- **Both readers now ask it:** the workspace (`GET /api/projects/:id`) and the portal. The portal
+  uses one read: its loose-invoice list excludes a project's invoices, and the project card shows
+  them.
+- **`projects.isLiveInvoice`:** a void invoice stays in the history but is never picked as the
+  job's invoice or its final invoice.
+- **Completion passes the route's effective catalog** (`deps.partsCatalog: PARTS`) to the cascade.
+  Raw `parts.json` is a logged fallback only.
+
+**The workflow, walked:**
+- **Customer: a visible change.** On the portal, a paid or sent deposit (and a sent balance)
+  invoice now appears on the project card, and not as a loose service-history entry. The card
+  reaches "deposit paid". Drafts and voids stay hidden, as before.
+- **Patrick:** the Overview's Billing card and "Collect payment" no longer read a voided invoice.
+  A T&M invoice matches its preview.
+- **Linked records and money are unchanged:** no invoice, payment or lifecycle write was added.
+- **Deliberately untouched (for the Financials tab):** the Overview still summarises ONE invoice,
+  and its paid/outstanding wording is still decided in the browser. The pay page, receipts and
+  every payment route (FLOW-23) are untouched.
+
+**Test:** `scripts/test-project-invoices.mjs` (21 checks, in `build:check`; **the old code fails
+14**). It covers:
+- deposit, then balance;
+- a newer voided duplicate deposit;
+- the portal card, stage and loose list;
+- a T&M part at an edited price, from preview to final invoice.
+
+`test-project-invoice-resolution` (the pre-acceptance design-linked quote) still passes.
+**2026-09-27 (One contract value everywhere: projects list and Dashboard; stacked on the Change Orders tab; no PASS flow touched):**
+Patrick: *"Otherwise the workspace will show the correct signed contract while the list and Dashboard
+show old snapshot values, and the Dashboard total will still be browser arithmetic."*
+- `GET /api/projects` now carries each project's `agreement`. It comes from
+  `projects.agreementsForProjects`, which reads the quotes store once and then, per project, runs
+  exactly what the workspace header and the Change Orders tab run: the same anchor
+  (`projectQuoteAnchor`: `currentQuoteId`, else `sourceQuoteId`), the same `quotes.describeChain`,
+  and the same `describeAgreement`.
+- It also carries `totals`: the Dashboard's **active contract value**, summed on the server in
+  cents from each active job's signed agreement (`projects.contractTotals`), plus a count of active
+  jobs with nothing signed.
+- The projects list shows `agreement.governing.total`. The Dashboard shows `totals` and adds up no
+  money. Neither reads `proposalSnapshot` any more.
+- **One HST treatment.** The list and the Dashboard show the agreement's total **with HST**, the
+  same figure the header and the Change Orders tab lead with (those two are corrected in the
+  Change Orders tab PR itself).
+- **Truthful empty states.** A job with nothing signed shows **"Not signed"** in the list. With no
+  signed active job, the Dashboard shows **"None signed"**, never $0.00.
+
+**Test:** `scripts/test-contract-value-consistency.mjs` (in `build:check`) covers:
+- an original-only job;
+- two signed revisions;
+- a newer unsigned draft, which is never the contract;
+- a legacy job with no `currentQuoteId` and a stale snapshot, which the chain still finds;
+- a planning job, left out of the total;
+- an active job with nothing signed.
+
+For every one, the list, header and tab agree, and the Dashboard total is the server's sum. The
+test fails 16 checks without this change.
+**2026-09-27 (Change Orders tab, read-only — PR 3 of Change Orders; no PASS flow touched):**
+The workspace's Change Orders tab replaces its placeholder. `GET /api/projects/:id/change-orders`
+(`lib/change-orders-view.js`) returns every figure and sentence the tab shows. Open counts come from
+the shared `scopeChangeStage` rule, the agreement from the quote chain's governing quote, and the
+holds are `completionPreflight`'s blockers word for word. The tab has no buttons; actions stay on
+the classic page's office-only routes. **Also fixed:** the workspace header's "Contract value" showed
+a draft revision's total while it was unsigned. It now reads `linkedQuote.agreement`, the signed
+quote the invoice bills. **Test:** `scripts/test-change-orders-view.mjs` (in `build:check`); on main
+before this, the route does not exist. **Patrick's four checks (2026-09-27):**
+- The header and the tab both read `projects.describeAgreement`, one server function, and React has
+  no fallback.
+- Signed change value = newest signed minus original, before HST and with HST. It is never a sum,
+  and drafts are excluded (tested with two signed revisions and a pending draft).
+- A deposit job shows **"Billing on hold"** and never "billed at completion".
+- An interrupted send shows "Delivery uncertain".
+
+- **One HST treatment:** the header and the tab both lead with the agreement's total **with HST**,
+  with before-HST alongside. That covers the tab's agreement line, its version rows, and "Signed
+  changes".
+- **Truthful empty state:** a job with nothing signed shows **"Not signed"** in the header, never "$0"
+  or a bare dash.
+
+**Still reading the snapshot:** the projects list and the Dashboard's summed "Active contract value",
+flagged for a follow-up. **Patrick's walk (UNMAPPED until done):** open a job with a
+change order in the new app → Change Orders. The counts, stages and "Billed on …" amount should
+match the classic page and the quote.
+**2026-09-27 (Change-order guards: follow-up to #338 before the first manual deploy; no PASS flow touched):**
+Patrick's checks, run against the merged code. **Proven on main** (`test-change-order-guards.mjs`: 20 of 30 checks failed):
+- A crash between the email leaving and the result being saved left no trace, so the next Send
+  emailed the customer **a second time**.
+- A change on a **completed, invoiced** job could still be approved or withdrawn.
+- A change already in a revised quote could not be withdrawn at all. The refusal was a bare
+  "already executed_under_revision", with nothing on what to do.
+- A **trashed** draft revision still held completion, and the next change order added its lines to
+  the trashed quote.
+
+**Now:**
+- **Withdrawing a change that is in a revised quote** depends on where that quote stands, through
+  one shared rule, `projects.scopeChangeRevisionState`:
+  - **Signed:** refused (`scr_in_signed_agreement`). A signed agreement is never rewritten; the
+    reduction needs a new change order and a new signed revision.
+  - **Unsigned:** that revised quote is **cancelled**. `quotes.retireUnsignedRevision` marks it
+    superseded, pointing at the agreement that stands, so every customer approval route refuses it.
+    It is queued with the signature writers, so if the customer signed first the withdrawal is
+    refused. The change is withdrawn, and any **other** change in the same revised quote returns
+    to "approved — needs revised quote" with a history entry.
+  - **Declined:** the change is simply withdrawn.
+- **A completed or invoiced job** refuses every decision on its changes (`project_closed`).
+- **Send once is on disk.** `sendInFlight` is saved inside the project lock before the email goes,
+  and cleared when the outcome is saved. A send interrupted by a restart leaves it behind, and the
+  next Send is refused as `delivery_uncertain`, with no email. The office records the outcome
+  (`POST …/scope-changes/:id/send-outcome`, office-only, "sent" or "not_sent"). The classic page
+  shows "⚠ Delivery uncertain" with "It arrived / It didn't arrive".
+- `quotes.isUnsignedLive` ignores trashed quotes.
+- **Signing guard, in the domain (Patrick's second pass).** The approval routes refused only
+  superseded quotes; the five acceptance functions checked nothing. Each now calls `assertSignable`
+  **inside the quotes-store lock it shares with `retireUnsignedRevision`**. It refuses trashed,
+  cancelled, superseded and **replaced** quotes (a newer live or signed version exists), with
+  `quote_not_signable`, so only the current offer can be signed. A withdrawal and a signature on
+  the same revision resolve to exactly one outcome. Before this, the retire-first race let
+  **both** happen. Each writer's idempotent re-sign return runs first, unchanged. **FLOW-02 (PASS)
+  touched additively:** a normal first-time accept is unchanged.
+- **A staged PDF is not a signature.** `hasAcceptanceRecord` counted any quote with staged evidence
+  as signed, because every quote starts with `acceptanceMethod: "pending"`. So a customer's uploaded
+  PDF made a revision the billed agreement **before the office attested it**. Evidence now counts
+  only with a real method, and never while `pending_admin_attestation`.
+- An interrupted send settled by the office records `settledBy`, `settledAt` and `outcome`
+  (`confirmed_delivered` / `confirmed_not_delivered`) on the attempt, next to who started it and when.
+
+**Test:** `scripts/test-change-order-guards.mjs` (in `build:check`, 83 checks; 12 fail on the previous
+head). It includes a real process crash after the email and before the save, a forced signature
+mid-withdrawal, and 12 simultaneous withdraw/sign races.
+**2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
+**Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 40 of 53 failed):
+- Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send
+  a change to the customer, record the customer's approval, withdraw it, and generate the revised
+  quote, and all of it was logged as "admin".
+- The office's actions were logged as a user id (`USR-002`), not a name.
+- A change was marked **Sent before the email was tried**. No customer email, email not set up, or a
+  bounce still showed "Awaiting customer", and the failure was only a server log line.
+- An approve or reject entered by the office was stored as `approved_by_customer` with nothing
+  saying the office recorded it.
+- The readers disagreed about "open". The Overview count and the customer's status email ignored an
+  approved change still waiting for its revised quote. The completion check tested
+  `billingMode === "fixed_price"`, so a job with no billing mode recorded could close without it.
+- An approved change could not be withdrawn.
+
+**Now:**
+- **Permissions follow the account's role, not the device.** A technician may create a change
+  (notes, line items, photos) and edit its notes. Send, editing the customer email, recording the
+  customer's answer, withdraw, and generate revision are **office-only**, and a technician gets a
+  403 with nothing changed. The classic project page and the build work order's "Save & send" show
+  those buttons from `/api/session`, so Patrick signed in as admin on the tech page keeps them.
+- **Names:** `by` is `actorLabel()`, the person's name, on capture, send, decisions, withdrawals and
+  revisions.
+- **Customer vs office:** approve/reject keep `resolvedAs: *_by_customer` and add
+  `decisionSource: "recorded_by_office"` and `recordedBy`; the history says "recorded by the
+  office". A withdrawal is `withdrawn_by_office`. The customer signing the revised quote in the
+  portal stays attributed to `customer`.
+- **Honest send:** `projects.sendScopeChangeRequest` takes the email sender (`deliver`) and marks
+  the change sent only after delivery succeeds. No recipient (409), email not set up (503) or a
+  failed delivery (502) leaves it unsent. The attempt is recorded in `sendAttempts` (when, who, to,
+  reason) with a `scope_change_send_failed` history entry, and it stays on record after a later
+  send succeeds. The project page shows "⚠ Not sent: reason". The office can record a customer's
+  answer without sending, for a customer with no email.
+- **One "open" rule:** `projects.scopeChangeStage()` / `openScopeChanges()`, read by the Overview
+  count, the completion check and the status email. A change is open while `in_review`,
+  `awaiting_customer`, or `awaiting_revision` (approved, not time & material, no revised quote). The
+  status email says "approved — revised quote to follow". An approved change can be withdrawn,
+  which lifts its block.
+
+**Left alone on purpose:** quote signing and billing (the previous entry), the status-update send
+itself, and the new app's screens (the read-only Change Orders tab is PR 3).
+**Test:** `scripts/test-change-order-safety.mjs`, in `build:check`, boots the real server with a
+technician and an office account. The stub mailer (`scripts/lib/stub-outbound.cjs`) gains
+`$PJL_STUB_OUTBOX.email-fail` to simulate a bounce. **Patrick's walk (UNMAPPED until done):** sign
+in as a technician and add a change from the build work order. There should be no "Save & send",
+and on the project page no Send/Approve/Withdraw buttons. Sign in as yourself and send it to a
+customer with no email: it stays unsent, with the reason shown.
+**2026-09-27 (Quote lifecycle and billing: a signed agreement governs until its revision is signed; FLOW-02 accept path and FLOW-20/21/22 touched; no PASS flow's behaviour changes for a quote with no revisions):**
+Patrick's rule: *"The quote's status is operational data… Creating an unsigned draft should not
+eliminate the accepted agreement."* **Defects proven before the fix** (`test-quote-lifecycle-billing.mjs`
+on the old code: 25 of 44 failed):
+- A second change order failed with "Original has already been superseded", leaving a fixed-price
+  job with two approved changes **permanently blocked**.
+- A signed $5,400 revision was **invoiced at $5,000**, because the final invoice read the original's
+  frozen snapshot.
+- Two simultaneous "Generate revision" clicks built two quotes with the **same number**, and the
+  second silently overwrote the first.
+- A technician could override the completion checks, and no reason was required.
+- "Convert to project" on a signed revision of a converted job created a **second project** for
+  the same job.
+
+**Now:**
+- `createRevision` leaves a **signed** original Accepted and logs `revision_drafted`. An **unsigned**
+  sent original is still superseded immediately, so the Q-2026-0078 dead-link protection stands.
+  Only one revision can be in progress at a time (`revision_in_progress`).
+- Every acceptance writer (`accept`, `acceptWithSignature`, `recordOfflineAcceptance`,
+  `recordPortalSignAcceptance`, `recordPdfReturnAcceptance`) calls `supersedeOlderVersions()` in the
+  **same file write**. The older versions become Superseded, and the project moves to the revision
+  (`currentQuoteId`, `proposalSnapshot`, history `revision_signed`). `sourceQuoteId` never moves,
+  because deposits, the quote folder and convert-to-project key on it.
+- **One rule decides which quote governs.** `quotes.describeChain()` returns `governing` (the newest
+  signed agreement), `pending` (an unsigned newer version, which is the completion hold) and `head`
+  (what the next change order builds on). Readers: the completion preflight (`revision_unsigned`,
+  and `deposit_balance_predates_revision` for a deposit job whose balance invoice was built from an
+  older version), the final invoice (`completion-cascade.js` bills the governing agreement's lines
+  and adds on-site extras once) and the Complete dialog's invoice preview, through one function
+  (`projects.fixedPriceBillingSource`), the change-order revision builder, the project page's quote panel
+  (`resolveRevisionChain`), and convert-to-project (a signed revision of a converted job returns
+  that job's project instead of creating a second one).
+- Legacy chains, where the old code superseded a signed original too early, resolve through
+  acceptance evidence (`hasAcceptanceRecord`), not status.
+- Revisions and signatures are queued on the quotes store (`serialize`). Change-order revisions
+  are queued per project, and a retry returns the same revision.
+- A completion override needs a written reason and is recorded in the project history
+  (`completion_override`: who, why, which blockers). The route refuses it from a technician (403).
+  The classic Complete dialog now asks for the reason.
+
+**Left alone on purpose:** a quote's lines, signature and frozen PDF (the test asserts that they
+are byte-identical after both the draft and the signing); deposit amounts and the payment routes
+(FLOW-23 untouched; a deposit job with a stale balance invoice is **held**, not re-computed);
+emails; and change-order permissions and send status, which are the next PR.
+**Test:** `scripts/test-quote-lifecycle-billing.mjs`, in `build:check`. **Patrick's walk
+(UNMAPPED until done):** on a test job, sign a $5,000 proposal, approve a $400 change, then
+generate the revision. The original should still say Accepted and Complete should be blocked. Sign
+the revision; the original should say Superseded, and completing should bill $5,400.
+**2026-09-27 (PJL-105 — "first in the fitting" no longer depends on clock resolution; FLOW-47/48 touched, one rule):**
+`fittingDefaultFor()`'s last rule, "the member linked first", sorted on `firstLinkedAt`, a millisecond
+ISO timestamp, and broke ties by SKU. Two links written in the same millisecond therefore made the
+alphabetically first part the default, even when it joined second. CI hit this at random (PR #325,
+run 935); the same could happen to a real batch link.
+**Now:** each link records `firstLinkSeq`, the order it first joined its fitting, when it is written
+(`keepFirstLinked`, inside `mutate()`'s locks, as one past the highest on file). A re-upload or
+reconfirm keeps it. `fittingDefaultFor` uses it only when the timestamps tie, so different timestamps
+decide exactly as before, and records written before this change fall back to the SKU as they did.
+Rules 1 and 2 (Patrick's choice, the single original-catalog part), photos, the picker, `/api/parts`
+and the safety rule are untouched.
+**Test:** `test-part-photo-lifecycle.mjs` section 11 runs the fitting on a frozen clock, where the old
+code fails 4 of 7 every time. It now passes 113 of 113, including the whole file under a frozen clock
+(the CI failure's exact scenario). FLOW-47 re-verified by its suite; nothing changes on screen.
+**2026-09-27 (Part photos — 30-part wave accepted; waves of 50 next; FLOW-49 still UNMAPPED):**
+The 30-part wave (`BF-202609271811-d509`, auto-approve OFF) processed 30/30 with 0 errors: 23 To be
+determined, 7 No reliable photo, 60 candidates, 29/30 parts with a candidate, 1 fitting proposal;
+106 Claude calls, 233 searches, 70 model fetches, 42 page + 65 image fetches by our server,
+5,241,323 in / 170,416 out tokens. Patrick's call: retrieval works; "size/ends unknown from the
+photo" is a legitimate limit and the evidence rules are NOT to be weakened. **What changed:** the
+wave cap is 50 (`WAVE_MAX`), the plan excludes every part any calibration or wave processed
+(`processedByRuns`, from the current run and the history, including parts that errored and still
+show no photo state), and the run status carries `usageByKind` (branded vs generic: parts, calls,
+searches, fetches, tokens, per-part averages), shown on the Review tab. Same protections: exact plan
+shown first, `POST /wave {skus}` must equal the current plan in order, auto-approve OFF, one run at a
+time, no automatic start, no whole-catalog button. Watch-list from the wave (not changed): Hunter
+pages where the large-image fallback picked family images (HC075FLOW, HC100FLOW, PCZ10140).
+`test-photo-backfill.mjs` 296. **Next:** the first 50-part plan is shown to Patrick before anything runs.
+**2026-09-27 (Part photos M3c follow-up — after the first calibration; FLOW-49 still UNMAPPED):**
+The first production calibration (15 parts, auto-approve OFF, 0 errors) left 7 parts with "no reliable
+photo" for one reason: the finder found the right product page but could not capture an image URL
+within its tool budget (`web_fetch` gives the model text, not HTML). Patrick approved this follow-up
+and nothing else. **What changed:** (1) **server-side product-image extraction**
+(`photo-evidence.extractProductImages`): once the finder names a page, OUR server reads the fetched
+HTML and collects candidates from og:image / twitter:image, Product JSON-LD `image`, and product-ish
+`<img>` (itemprop, product/gallery/zoom markers; logos, icons, svg, pixels, tiny, http and
+header/nav/footer images skipped); the finder's own URL, if any, comes first; at most 2 images per
+page and 3 candidates per part, so the vision-call bound is unchanged; every extracted URL is a
+CANDIDATE that still goes through the safe downloader and the vision check. The finder is told not to
+spend searches/fetches hunting image URLs; tool caps are NOT raised. (2) **Known-brand recovery**
+(`proposedBrand` / `effectiveManufacturer`): a blank catalog manufacturer whose description names
+Watts, Blu-Lock, Hunter, Rain Bird, Netafim, Oil Creek or Dawn is treated as a PROPOSED brand for the
+branded path; the catalog field is never rewritten; the review card says so. (3) **Size
+normalisation** (`normalizeSize` / `sameSize`): `.5"`, `0.5"`, `1/2"`, `1/2 in`, `½"` compare
+equal (deterministic), used by the spec parser, the page spec check and same-fitting grouping —
+BL37070 / BL37970 are now proposed as one fitting. (4) **Usage counters**: Claude calls, web
+searches, the model's web fetches, and our server's page and image fetches, per part and per run,
+tokens kept; shown on the Review tab. Also: an OFFICIAL manufacturer page that doesn't print our part
+number is now "needs a look" (To be determined, with the photo) instead of "no reliable photo" — it
+can never be Confident that way (Oil Creek's base-SKU page for POPO100300). **Re-run door:**
+`POST /api/part-photo-backfill/rerun-unresolved` → `startCalibrationRerun()`: only the last
+calibration's parts that still have no live photo, auto-approve OFF, refused while a run is active;
+the Review tab offers it as "Re-run the N unresolved calibration parts". `test-admin-gates.mjs`
+asserts exactly one call site; `test-photo-backfill.mjs` (+66, 232) covers the seven failure
+patterns (official page with no image URL, Oil Creek base SKU, blank-manufacturer Watts/Blu-Lock,
+size matching), the counters, the caps and the re-run door; each new rule was broken on purpose and
+caught. **Next:** re-run only the 7 unresolved parts on production and report recovery rate and cost
+before any decision on the full 292-part run.
+**2026-09-27 (Part photos M3c — the calibration run is wired, NOT yet run; FLOW-49 still UNMAPPED):**
+P-PJL-35 M3c, approved by Patrick to build after M3b was accepted on production. **What changed:** the
+server's backfill engine is wired to the real Claude client (`lib/photo-ai.createAnthropicClient`,
+created lazily on the first call — never at boot) and to our own safe fetchers (`fetchPageSafely` /
+`fetchImageSafely`: https only, never a private address, HTML/images only, size-capped). The ONLY start
+door is `photoBackfill.startCalibration()`: the approved 15-part mixed sample from
+`pickCalibrationSample` (8 branded, 7 generic; parts with a live photo excluded), auto-approve forced
+OFF, refused while a run is active. Routes: `GET /api/part-photo-backfill/plan` (the exact SKUs and a
+worst-case call estimate), `POST /api/part-photo-backfill/calibration|pause|resume` (admin-only,
+audited). The Review tab's progress panel gains **Start calibration run (15 parts, auto-approve off)**
+with a confirm listing the SKUs and the estimate, Pause / Resume, the current SKU and step, and a
+5-second refresh while running; there is **no whole-catalog button**. A run interrupted by a deploy is
+shown as paused and waits for Resume — nothing runs on startup. When a run finishes, grouping runs
+(auto-link only same mfr + mfr part # on official pages; the rest → Fittings to confirm) and the
+catalog's photo states are rebuilt. `test-admin-gates.mjs` asserts: no general `start()` call in
+server.js, exactly one `startCalibration` call site, no `autoApprove: true` and no SKU list in the
+route, no full-catalog route, lazy client, nothing touched at boot. `test-photo-backfill.mjs` (+22):
+plan limits, refusal while active, nothing live with auto-approve off, refused/failed AI calls end as
+errors with no link, interrupted runs don't self-resume. **Not yet done:** the first real AI run —
+Patrick approves it separately after seeing the 15 SKUs and the estimate; `ANTHROPIC_API_KEY` must be
+set on Render with web search enabled for the key.
+**2026-09-27 (Part photos M3b — Photo Review tab, progress panel, Fittings to confirm; FLOW-49 still UNMAPPED):**
+P-PJL-35 M3b, approved by Patrick after #327 deployed (e58f8e9). **What changed:** Materials → Part
+photos gains a **Review** tab (`server/part-photo-review.js`, `lib/photo-review.js` builds the queues)
+with a whole-catalog progress panel (Live auto/approved · Review needed · No reliable photo · Not
+processed yet · Errors, plus the last run's status and token usage) and four queues: To be determined,
+Not confident, Recently auto-approved, Fittings to confirm. One card per fitting: our part on top, up
+to 3 candidates each with the source domain/pass, "Open page", and every check as ✓/✗/?. Actions:
+Approve (A / tap), Reject (R), Upload my own, Next (→), 1–3 picks a photo; phones stack candidates as
+thumbnail + checks rows with 44px targets and the page stays exactly phone-width. Routes:
+`GET /api/part-photo-review`, `POST /api/part-photo-review/:sku/approve|reject`,
+`POST /api/part-photo-review/fittings/:id` (all fenced; writes admin-only, audited). Store rules
+(`lib/part-photos.js`): `approveCandidate` makes the chosen candidate an APPROVED photo (as if uploaded)
+with Patrick's confirmed link, shared by the fitting; `rejectAiResult` makes the result Not confident,
+remembers every candidate image as rejected so no later run can auto-approve it, and — when the photo
+had gone live automatically — takes down every photo auto-approved by the same rule (same kind) in the
+same run and sends it back to To be determined (the M3 plan's safety net). A photo a person approved is
+never rejected through this door (Remove photo is the way). Fittings to confirm: confirm links the pair
+as Patrick's link keeping the photo he chose; dismiss means never asked again (survives restarts).
+**Deliberately not built:** no route starts, pauses or resumes a backfill run — the server's engine is
+wired with a refusing AI stub and `test-admin-gates.mjs` asserts no `photoBackfill.start/resume` call
+exists in server.js. The picker, `/api/parts`, FLOW-47/48/27 are untouched. Tests:
+`test-photo-review.mjs` (new), `test-admin-gates.mjs` (+1), `demo-photo-review.mjs` seeds a LOCAL data
+folder with clearly-marked mock images for walking the tab (refuses to run on Render). **Walk (local,
+Playwright, desktop + iPhone 14 Pro Max):** approve by key and by tap, reject, reject an auto-approval,
+confirm and dismiss a fitting, zoom, All parts tab — no console errors. FLOW-49 stays UNMAPPED until
+M3c's calibration run on production, which Patrick approves separately.
+**2026-09-27 (Part photos M3a — AI photo backfill ENGINE only, no routes/UI; FLOW-49 opened):**
+P-PJL-35 M3a, approved by Patrick with these rules: grouping auto-links ONLY same manufacturer + same
+manufacturer part # backed by an official manufacturer page (everything else → "Fittings to confirm");
+the first run is a 15-part calibration (8 branded, 7 generic) with auto-approve OFF; afterwards only
+Branded Confident and Generic Confident (full triple check) may go live automatically — TBD and Not
+confident never do. Part-number rule: harmless formatting (spaces, dashes, case, punctuation) is
+ignored, but the number must be in the page's VISIBLE product text — URL, filename, image alt, link
+text, title, meta and scripts never count. **What changed:** `lib/photo-evidence.js` (the rules, plain
+code: `partNumberOnPage`, `pageMatchesSpec`, `tierFor`, `groupingDecision`, `pickCalibrationSample`);
+`lib/photo-ai.js` (find / verify / compare via the Claude API; verify sees only the image bytes and our
+spec); `lib/photo-backfill.js` (runner: state in `server/data/part-photos-backfill.json` saved after
+every step, resume, retry with backoff on 429/5xx, pause, 2 at a time, progress counts, grouping);
+`lib/part-photos.js` gains `fetchPageSafely`, `saveCandidateImage`, `readCandidateImage`,
+`recordAiResult` (never overwrites a live photo; live only if Confident AND auto-approve on) and
+`autoLinkSameFitting` (never moves a photo Patrick approved himself or a link he made). Dependency
+`@anthropic-ai/sdk` added (loaded lazily; nothing runs without ANTHROPIC_API_KEY). **Nothing is wired
+into server.js yet** — no route, no UI, no automatic run; `/api/parts` and FLOW-47/48/27 are
+untouched. **Refinements (Patrick, same day):** (1) a branded part whose catalog number is a distributor code (HSPGPADJ) can be Confident when the official page shows the manufacturer model (PGP-ADJ) in visible text AND a SiteOne/Central/manufacturer page shows BOTH numbers in visible product text (`supplierCodeMapping`, the runner's `map` step) — URLs, filenames, alt text, metadata, hidden code or the model never establish it; (2) same-fitting auto-link is allowed when neither or one part has a live AI photo, or both show the same stored image; two DIFFERENT live AI photos go to Fittings to confirm. Tests: `test-photo-backfill.mjs` (136, fully mocked). FLOW-49 is UNMAPPED until M3b/M3c.
+**2026-09-26 (Part photos M2a — supplier identity and one row per fitting in the picker; FLOW-48 opened):**
+P-PJL-35 M2a, approved by Patrick with these decisions: an explicit "Default for this fitting" per
+fitting (never a company-wide SiteOne-first/Central-first rule, and never "whichever part got the
+photo"); the grouped row shows the default part's description, part # and price and its main Add adds
+it; official SiteOne and Central logos, resized only; no change to material-list lines or PO routing.
+**What changed:** suppliers gain `shortName` and `logo` (`lib/supplier-logos.js`: official file,
+resized to fit 600×200, PNG, transparency kept, never cropped; `POST/DELETE /api/suppliers/:id/logo`
+admin-only; `GET /api/supplier-logos/<hash>.png`). Part-photo groups gain `defaultSku`; the ONE rule
+`fittingDefaultFor()` (lib/part-photos.js) picks Patrick's choice, else the original-catalog part when
+exactly one member is, else the member linked first; `/api/parts` carries `photo.fittingDefaultSku`.
+`POST /api/part-photo-groups/:id/default` (admin) and "Make default for this fitting" on Part photos.
+The picker (`server/picker-rows.js`, shared with its test) merges VERIFIED same-fitting part numbers
+into one row; a supplier chip (default part's default supplier logo, "+N") opens a panel (drop-down on
+desktop, sheet on phones) listing every offer with its logo, name, own part # and price. An offer can
+be added only when adding its part # reaches that supplier today; a different supplier for the SAME
+part # shows its price but its Add is disabled — "Supplier selection coming next". The photo viewer
+lists the offers read-only (it still adds nothing). **FLOW-27 deliberately untouched:** material-list
+line shape, `addOrIncrementLine`, PO planning/generation, RFQ and prices are unchanged — adding from
+a supplier only ever adds an existing part number, exactly as the picker always did. Tests:
+`test-picker-rows.mjs` (29), `test-supplier-logos.mjs` (18), `test-part-photo-lifecycle.mjs` (+13 →
+106), `test-admin-gates.mjs` (+1); FLOW-27's suites pass unchanged. FLOW-48 is UNMAPPED until walked.
+**2026-09-26 (FLOW-47 PASS — part photos walked on production):** Patrick walked all four
+FLOW-47 checks on production after #321 deployed: (1) a photo set by upload and one by an https image
+link; (2) a second SKU linked with "Same fitting as…" sharing the photo; (3) the picker and viewer on
+desktop and phone — normalized thumbnails whole, centred and inside the tile, "No photo" elsewhere,
+opening a photo adds nothing; (4) a description edit hides the photo until "Photo is still right".
+**#321 is the production follow-up that met the thumbnail acceptance criteria** (found on the first
+walk: tall Pro-Spray photos ran out of the tile) — normalized square t160/t320 thumbnails, the CSS
+pin, one in-flight build per photo, and the plain-photo fallback. M1 of P-PJL-35 is complete; M2
+(supplier identity + one row per fitting) is next and touches FLOW-27's material-list lines, so it
+will be planned against FLOW-27 before any change.
+
+**2026-09-26 (Part photos: tile thumbnails are normalized — the whole part, centred, inside the tile):**
+Found on the FLOW-47 production walk: tall, narrow photos (Hunter Pro-Spray bodies) ran out of the
+64px picker tile. Two fixes, one PR. (1) CSS: the tile image is pinned to the tile, so no image can
+ever leave it (the admin tile would otherwise have CLIPPED a tall part). (2) At Patrick's request
+(Sep 26) the tile no longer shows the raw photo: `normalizeThumbs()` in `lib/part-photos.js` makes a
+square `t160`/`t320` thumbnail — finds the part only when the photo's border is a plain even
+background, keeps its bounding box PLUS an 8% margin of ORIGINAL pixels (so a white fitting's faint
+edge on white is never cut), fits that whole and centred (contain, padded with the photo's own
+background). A busy background is never trimmed. Photos saved before this get their thumbnails made
+on first request (`ensureThumb`). The 480/1200 viewer images stay the untouched photo. The only
+region cut in the module is that plain-background trim (pinned by test). 18 new assertions in
+`test-part-photo-lifecycle.mjs` (81 total), mutation-checked: no margin, trimming a busy background,
+cover instead of contain, and an off-centre trim each fail it. Browser: 16/16 inside-tile
+measurements, desktop + 390px. **FLOW-47 step 3 (picker) must be re-walked after this deploys.**
+
+**2026-09-26 (Part photos M1 — a verified photo in the parts picker, and nothing unverified):**
+Linear P-PJL-35 (PRD/TRD attached there). Patrick checks a part number once and then recognises the
+part by its picture, so the design goal is that a wrong-but-plausible photo can never reach the
+picker. **One rule, every reader:** `photoStateFor()` in `server/lib/part-photos.js` answers
+verified / none / tbd / not_confident / changed, and the `/api/parts` merge
+(`rebuildCatalogFromOverrides`) sets `photo` only for "verified" — a To-be-determined candidate's
+image is never in the payload. **Photo groups:** one photo per real fitting; SKUs link to a group
+("same fitting as"), so SiteOne's and Central's numbers for one tee share one photo. **Edits:** the
+link stores a fingerprint of the part's number + description when matched; any later edit, by any
+write path (PATCH, xlsx import), hides the photo until Patrick reconfirms — no write hook to forget.
+Soft-delete/restore round-trips by construction. **Images:** resized only (160/480/1200 WebP,
+content-addressed under `server/data/part-photos/`); the one transform is honouring the file's own
+EXIF orientation so it displays as it did — no crop, flip or rotation of ours. Pasted image links
+are https-only and refused for private/metadata addresses (re-checked per redirect). **Surfaces:**
+Material List picker (thumbnail or explicit "No photo" tile; tap/click → centred viewer on desktop,
+bottom sheet on phones; the viewer has no Add) and a new `/admin/part-photos` page (set by upload
+or link, same fitting as…, reconfirm, unlink, remove). All writes `requireAdmin`; all routes fenced
+by `needsAuth` (pinned in `test-admin-gates.mjs`). **Tests:** `scripts/test-part-photo-lifecycle.mjs`
+(63 assertions, build:check) — mutation-checked: letting a TBD candidate through, dropping edit
+detection, or adding a rotation each fail it. Local Playwright walk: 33/33 (upload, shared fitting,
+edit hides → reconfirm restores, private-URL refused, anonymous refused, picker viewer open/Esc/
+outside/Back/swipe, opening a photo adds nothing, Add still adds, 390px no overflow).
+**Deliberately NOT in M1:** one row per fitting when two SKUs are the same fitting (rows stay one
+per SKU, sharing the photo) and the supplier logo chip/panel — both M2; the AI finder/review queue
+— M3; POs, PO PDFs, the catalog table — photos are picker-only by decision. **No PASS flow
+touched:** FLOW-27's material list keeps its routes and payloads; `/api/parts` gains two fields.
+FLOW-47 opened below — UNMAPPED until Patrick walks it on production.
+
+**2026-09-26 (A shipped change that looked like nothing happened — the classic page now says where the new one is):**
+Patrick walked the Tasks release, landed on `/admin/project/<id>`, and saw no change: *"It is still the
+classic project page, and it cannot display partial task progress — only checked or unchecked... we
+failed to make the transition obvious. You were sent back to an unchanged classic screen with no
+indication that the new Tasks interface lives somewhere else."*
+
+He was right, and it is a defect in the TRANSITION, not in either screen. Two pages for one job, both
+live, neither mentioning the other — so every natural link went to the older one and #307's work was
+invisible. Verified on the real deploy: `/app/projects/PROJ-2026-0008/tasks` showed 75% / 50% / 75%,
+31% overall, 3 of 16, 12.21 person-hours, while the classic page drew the same tasks as unticked boxes.
+
+**Why the classic page stays the default:** six of the workspace's nine tabs are still placeholders.
+Redirecting every project click there today would trade this confusion for a worse one — Materials
+would be a stub where the classic page has the real list. So the classic page keeps its job and gains
+a signpost; the default moves when the tabs are real. The band is deliberately loud (brand band above
+the job, filled primary button) because a quiet link is what it effectively had before.
+
+Two pointers, at the two places the reader actually is: a **workspace band** above the job header
+naming what moved, and a line in the **Tasks panel itself** — "Open in the workspace for partial
+progress" — because that list can say done or not done and nothing in between, which is exactly what
+sent him looking. Both carry the job's own id; a handoff to a generic index would be worse than none.
+
+`scripts/test-workspace-handoff.mjs` (20 assertions, `npm run test:workspace-handoff`, Playwright,
+opt-in) drives the real classic page on a real job with a 75% task: the band exists and is above the
+fold, both links carry that job, clicking lands on a workspace that renders it, the Tasks link reaches
+the tab reading **38%** where the classic page would say 0 of 2, the way back to classic survives, and
+the band neither overflows nor hides its button at 390px.
+
+**Noted, not fixed here:** `scripts/test-project-nav-and-density.mjs` has 4 pre-existing failures in
+its Part B (`#sbBackLink` not found under its fully-mocked route table). Confirmed identical against
+the pre-#302 `sitebuilder.html`, so it is not a regression from the workspace route — it is a stale
+harness in an opt-in suite, and fixing it does not belong in a navigation change.
+
+**2026-09-26 (An email reply doesn't confirm — and every email says so):** Frank Mazzuca and
+Nishka Potter "confirmed" by replying to the appointment email; nothing reads the inbox, so they
+kept getting reminders. Patrick's rule: a customer confirms by pressing **Confirm on the link** or
+**replying YES to the text** — both already work (#308) — and never by replying to the email. So
+the four appointment emails now say "tap the button below and press Confirm — or reply YES to our
+text message" plus "replying to this email does not confirm your appointment"; the cadence emails'
+footer drops "or reply to this email" (`sendOutreachEmail({ invitesReply: false })`; seasonal
+outreach keeps it). Saved email wording from the original setup is retired once
+(`_migrations.confirmByTextEmails_2026_09_26`, backup under `_retired`), exactly as the texts were
+(#309). Also: "(this number is automated)" sat right after (905) 960-0181 and read as if Patrick's
+own number were automated — now "(please don't reply to this automated text/message)" in the 24h
+reminder and three self-booked texts. Pinned by `test-assignment-messages.mjs`.
+
+**2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
+(Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
+were replying YES to the automated text from the unmonitored 647 number. PRD/TRD:
+`docs/BOOKING_CONFIRMATION_PRD.md` / `_TRD.md`.
+
+**The page.** The confirm POST always saved; `appointment.css` lacked the `[hidden]` polyfill, so
+`.ap-btn`/`.ap-badge` never hid — the button stayed, the "Confirmed" badge rendered off-screen, and
+Cancel/Reschedule stayed on offer inside the 24 h cutoff. Fixed, plus a `#doneNote` success line
+scrolled into view after every action. `scripts/lint-hidden-polyfill.mjs` (build:check) fails any
+page that toggles `.hidden` without the rule. `scripts/test-appointment-page-ui.mjs` (Playwright,
+phone viewport, not in build:check — CI has no Chromium): 9 of 14 fail on the old page, 14/14 after.
+
+**The texts.** New `POST /api/twilio-sms-incoming` (same `allowTwilioWebhook` signature gate as the
+voice routes) → `lib/sms-inbound.js`. YES with exactly one live assignment appointment on that
+phone → `appointmentActions.confirm(token, { via: "sms_reply" })`, the page button's own function,
+so `respondedAt` is the one fact every reader already honours (cadence steps 2–5 stop, step 6 still
+goes, Season Plan and page read "confirmed"; `REPLY_STATES.sms_reply = "confirmed"`). Zero or
+several matches never guess. Anything else is forwarded to Patrick's cell (`NOTIFY_TO_PHONE`) with
+the customer's name/street/appointment, and the customer gets "automated texting system — call or
+text (905) 960-0181" at most once per 12 h. STOP turns off `commPrefs.seasonalRemindersSMS` (Twilio
+blocks and replies itself); CANCEL is a carrier opt-out and never cancels an appointment. Log:
+`server/data/sms-inbound.json`. Untouched: dates, route, capacity, work orders, invoices.
+`scripts/test-sms-inbound.mjs` (build:check, 56 assertions, real booking store + real confirm).
+Templates now say "Reply YES to confirm" and that the number is automated (still ≤ 2 segments).
+
+**Patrick's acceptance test — not yet walked:** (1) after deploy, open an assignment link on your
+phone, tap Confirm, see the green "You're confirmed" line where you tapped; (2) set the 647 number's
+Messaging webhook in Twilio to `https://www.pjllandservices.com/api/twilio-sms-incoming` (POST);
+(3) from your own phone text "hello" to the 647 number — get the automated reply, and the forward
+lands on your cell. Saved template overrides on the Assignment Messages page win over the new
+default wording — re-save them if any exist.
+
+**2026-09-25 (Attribution comes from the signed-in user; an archive is undoable):** Two follow-ups
+Patrick required before merging the Tasks tab.
+
+**The actor is derived, never fixed.** `actorLabel(req)` resolves `requireUser(req)` →
+`users.get(session.uid)` → `user.name || user.email || uid`, re-reading the user record on **every
+request**, so it is neither hard-coded nor a value cached in the session. The name in the earlier
+test fixture was invented test data and never existed in any production path; fixtures now use
+plainly fictional names that are nobody's. Pinned by two different authenticated admins writing
+**alternately** to one task — a hard-coded name, a name baked into the cookie, or any per-process
+cache would make the second user's write carry the first user's name, which checking each in
+isolation would miss — plus a rename of a user's profile mid-run, whose very next write carries the
+NEW name, and a source scan asserting no operator name appears in `server.js` or `lib/projects.js`.
+
+**Restore.** `POST /api/projects/:id/tasks/:taskId/restore` puts an archived task back. It
+reconstructs **nothing**, because archiving removed nothing: archiving only ADDS `archivedAt`,
+`archivedBy` and `archivedReason`, and the progress, the work orders' daily-log lines, their
+photos, the recorded hours and the WO's own history were untouched throughout. Restoring clears
+those three fields and the task returns at exactly the percentage it held. The audit trail **grows**
+— the archive entry stays and a restore entry joins it, each carrying its own actor — so the record
+reads as what happened rather than as though it never did. Restoring a live task is a 409, an
+unknown one a 404, and both doors work on a restored task again.
+
+`scripts/test-task-history-protected.mjs` is now **82 assertions**; `test-tasks-tab.mjs` **52**,
+including the Restore button, its confirm ("comes back exactly where it was"), and the row moving
+out of the Archived section.
+
+**2026-09-25 (Office corrections must not erase field history — tasks archive, they do not vanish):**
+Patrick, reviewing the Tasks tab before merge, named five rules. **Two did not hold.**
+`removeTask()` spliced the record out of the array and refused only when the task was DONE — so a
+task at 40%, with the crew's daily-log lines and task-anchored photos pointing at its id, could be
+erased from the office and leave those references dangling against an id that existed nowhere.
+
+**Archiving.** `removeTask()` now checks whether anything has ever referenced the task —
+work-order daily-log lines, task-anchored photos, progress logged, a completion, or a non-planning
+history entry — and **archives** when any of it is found (`archivedAt`, `archivedBy`,
+`archivedReason` naming the evidence), deleting outright only a task nothing ever touched. The
+reference check deliberately over-reports: a false positive costs one archived row, a false
+negative costs a dangling reference. **Planning is not a reference** — `task_added`,
+`task_updated`, `tasks_seeded`, `task_archived` and `task_removed` are excluded, because a task you
+typed wrong and renamed is still a typo and the list must stay clearable. That exclusion was a real
+flaw in the first cut, caught by the browser walk.
+
+**`activeTasks()` is the one rule for "still counts"**, and every reader calls it — the
+cancelled-booking slot leak's lesson applied (CLAUDE.md, `bookingHoldsItsSlot`): `canReseedTasks`,
+`seedTasksFromQuote`'s guard, `computeProjectMetrics` (totals, done count AND percentage), the
+status-update generator's recent/upcoming lists, `pendingTasks`, the `/tasks` endpoint (archived
+served only under `?includeArchived=1`), and the client's `live()` in `format.ts`, which both
+`taskProgress()` and `projectPercentComplete()` filter through. **`seedTasksFromQuote()` replaces
+the task array**, which would have quietly undone all of it — it now preserves archived tasks
+across a re-seed. Neither door may move an archived task: office and field both answer 409.
+
+**Attribution.** All four task writes now stamp `actorLabel(req)` rather than a raw uid or the
+literal "admin" — `by` lands in history and, for an archive, on the record the Tasks tab renders,
+where "usr_a1b2c3" in front of Patrick is not a record of who did it.
+
+**The other three rules already held, and are now executed rather than asserted:** a 40%→20%
+correction appends `-20% → 20% via manual` with the actor's name and a timestamp while leaving the
+crew's original `+40%` entry untouched; reopening clears `completedAt` and `completedByWoId`
+without touching the work order's daily-log lines, its history, or the recorded hours; and the
+office route sits behind the same `needsAuth() === "user"` gate as the work-order route — **there
+is no per-project ACL anywhere in this system**, it is single-tenant and staff-only, and the test
+says so rather than implying a permission model that does not exist.
+
+`scripts/test-task-history-protected.mjs` (52 assertions, **in `build:check`**) walks all five
+rules against real projects, real build work orders, real sessions and real photos — including
+that the daily-log line still resolves after archiving, that hours and days-logged are unmoved,
+and that a re-seed does not wipe the archive. Verified to FAIL on the pre-change tree, headline
+first: *"THE RECORD IS STILL THERE — the task was spliced out, references now dangle."*
+
+**2026-09-25 (One task record, two doors — the office gets a way in):** Patrick set the split:
+*"Field app: technicians clock in/out, update task progress, record daily work, photos, parts used,
+and issues. Project Workspace: you plan and assign tasks, review daily records and labour, approve
+change orders, manage required materials, and prepare billing. Both: task status should
+synchronize immediately, but there must be only one underlying task record."*
+
+**That split ran straight into a gap.** `POST /api/work-orders/:woId/tasks-done` writes the day's
+log line and *then* flips the project's master task — the right order, and the project record is
+already the single source of truth. But it needs a work order, so **a task could not be corrected
+or finished from the desk at all.** The screen alone could not deliver "available from both
+places".
+
+Added `POST /api/projects/:id/tasks/:taskId/progress`: the second door onto the **same record**,
+calling the same `projects.addTaskProgress()` the field path calls, so the status invariant
+(0 pending / 1–99 in_progress / 100 done) is enforced in one place for both. It takes an absolute
+`percent` (what a person means by "set it to 60") and converts it to the cumulative delta the
+mutator takes. It deliberately writes **no daily-log line and no session** — an office correction
+is not a day's work, and inventing a session would put hours on a job nobody worked.
+`completedByWoId` stays **null**, so the history says plainly that this one was not closed out on
+a visit; the Tasks tab prints that as "finished from the office" rather than leaving it blank. The
+response carries `metrics` so the screen never computes what the change did to the job's
+percentage.
+
+**The Tasks tab** (`admin-app/src/routes/Tasks.tsx`) is step 1 of Patrick's build order (Tasks →
+Daily Records → Materials → Change Orders → Financials → Overview last; Materials ahead of Change
+Orders because a change order is tied to tasks and materials). Every figure on it is the server's:
+the job's percentage, task counts, days logged and person-hours all come from `/metrics`. A
+finished task offers no Edit, because `updateTask()` locks it server-side and offering one would
+be offering a 409. Finishing, reopening and removing each confirm first — in the app's **own**
+dialog: the CRM spent PJL-61 replacing every native `alert`/`confirm`/`prompt`, and the rebuilt app
+had no dialog primitive, so `ConfirmDialog` in `ui/primitives.tsx` carries the Help Centre's
+lessons (Escape closes, focus enters and returns to the opener, backdrop cancels).
+
+`scripts/test-task-two-doors.mjs` (43 assertions, **in `build:check`**) drives both doors
+alternately against one task and re-checks after **every** write that exactly one record carries
+that id, that both doors report the same percentage, and that status follows it — plus that the
+office door invents no work session, that reopening clears `completedAt` **and**
+`completedByWoId`, and that an office completion credits no visit.
+`scripts/test-tasks-tab.mjs` (40 assertions, Playwright, opt-in) walks the real bundle: the crew
+logs 40% from the field and the office screen shows it, the job reads **13%** where a
+finished-task count would still say 0, Escape cancels without moving the record, and no native
+dialog is ever raised. It caught two real defects before merge — a step control that could not
+correct a task downward, and 91px of horizontal overflow at phone width.
+
+**2026-09-25 (The progress bar and the server disagreed on every partly-finished job):**
+`computeProjectMetrics()` averages each task's own `percentComplete`, and `percentComplete` leads
+while `status` follows it (`addTaskProgress()` sets the status FROM the percentage: 0 = pending,
+1–99 = in_progress, 100 = done). The rebuilt app drew its bar from `done / total`, which reports a
+task logged at 60% as **zero**. On a four-task job with every task three-quarters done the server
+said **75% complete** and the Projects list and Overview drew an **empty bar**. Same defect as
+`zoneCount: areas.length` (2026-09-21) in a different corner: a figure the server already computes
+properly, re-derived in the browser by a different rule, disagreeing in silence.
+
+Fixed: `projectPercentComplete()` in `admin-app/src/lib/format.ts` mirrors the server's rule and
+draws both bars. `taskProgress()` stays, and stays a COUNT — "1 of 4 tasks" and "38% complete" are
+two different questions, which is why the server keeps `doneTasks` beside `percentComplete`. The
+rule is mirrored rather than fetched because a 40-job list cannot make one `/metrics` request per
+row. `scripts/test-task-progress-agrees.mjs` (44 assertions, **in `build:check`**) lifts the real
+function out of `format.ts`, builds real projects through `lib/projects.js`, drives each task with
+the real `addTaskProgress()`, and asserts both implementations agree on every shape — with a final
+case pinning that the replaced rule really would have drawn an empty bar.
+
+Opened alongside it: `docs/PROJECT_WORKFLOW_PRD.md`, for the next phase (tasks, logs, time, parts,
+change orders, billing status). **The load-bearing finding there: all six already have working
+server routes** — tasks, journal, `/metrics`, material lists, `/scope-changes` with its six-status
+customer-approval lifecycle, and `/billing-preview`. So that phase is screens over endpoints that
+already work, and its risk is not losing behaviour but re-deriving figures the server owns. Also
+recorded there, before anything is designed: **hours are captured in the field on work-order daily
+logs and never typed into the workspace** — open sessions count toward the metrics figure and are
+deliberately excluded from the billing figure, and those two must not be "tidied up" into
+agreement.
 **2026-09-24 (The System Builder belongs to a job — hand-off, not embedding):** Patrick decided
 option B off `docs/PROJECT_WORKSPACE_BUILDER_PRD.md`: *"a full-screen project route with return to
 the same project... Hide the workspace sidebar while building. Keep a compact project name,
@@ -49,6 +921,141 @@ readouts, all four exits guarded, and — the one that closes 2026-09-21's *"it 
 zones"* — a ceiling change moving the same three areas from **five stations to seven**, saved, and
 **seven** being what the tab reads on return. Verified to FAIL on the pre-change tree. Deliberately
 **not** in `build:check`, same convention as the other Playwright suites.
+
+**2026-09-23 (PJL-96: the price is set before signing; Patrick sets custom and commercial prices) —
+FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, built on it. Branch
+`pjl-96-price-before-signing`, two commits.
+- **Price set before signing (ruling 1).** The seasonal fee is re-priced from the zones recorded at
+  the moment the work order freezes: `pricing.pricedQuoteForLock`, called once at each lock point.
+  - Customer signature: the fresh-signature branch of `PATCH /api/work-orders/:id` carries the priced
+    line in the SAME write as the signature, so the If-Match check is unchanged.
+  - Nobody home: `POST /api/work-orders/:id/signature-bypass`.
+  - The line is stamped `source.pricedAtLock`. `refreshSeasonalBaseline(..., { frozen })` then leaves a
+    stamped line on a locked WO exactly as signed.
+  - Result: the signed WO, the Service Report and the invoice carry one number, and zones edited after
+    the lock move nothing. The completion-time re-resolve stays as the safety net for WOs locked
+    before this change.
+  - The manual `POST /api/work-orders/:id/create-invoice` now re-prices the same way (it billed the
+    booked tier as seeded).
+  - The sign-off screen shows the fee the customer is signing for.
+- **Commercial priced per account (ruling 2).** A per-property `seasonalPricing` price is billed as
+  set. A commercial account without one gets a **price-pending** line. The commercial tier (or its
+  slope) is only the suggestion. There is no account-level price on the customer record yet;
+  Patrick's decision on multi-site accounts is open on PJL-96.
+- **Custom sizes (ruling 3).**
+  - 16+ residential and 9+ commercial are price-pending.
+  - A property known to be that size at booking is seeded a pending line. It used to be seeded none,
+    drafted no invoice and read "no charge".
+  - `pricing.suggestSeasonalPrice` extends the per-zone slope of the last two priced tiers in
+    pricing.json and rounds to the dollar (16 residential → $171, 10 commercial → $310 on today's
+    table). No typed prices.
+- **The customer never sees a suggested number** (coordinator default). The signed line reads
+  "Custom size / Commercial account — PJL confirms the price" with no amount. The same goes for the
+  completion email ("PJL will confirm the price"), the web tech page and the app's invoice screen.
+  The suggestion and its arithmetic appear only on the office invoice ("Price not confirmed" card +
+  **Confirm price**) and in Patrick's completion alert.
+- **Unconfirmed prices are never payable (ruling 4).**
+  - `invoices.createDraft` flags the invoice (`priceConfirm`) when the cascade bills a pending line
+    as a suggestion (`pricing.billableLines`).
+  - `invoices.isPriceUnconfirmed` is the one rule. It also covers drafts made under fix #7 round 2
+    that carry only the old placeholder note.
+  - It is folded into `isPayableOnline` via a new `payBlockReason` ("price_unconfirmed"), for SENT
+    invoices too.
+  - Refused while unconfirmed:
+    - `openForOnSitePayment` (409 `needs_pricing`);
+    - `/send` and `/resend` (409 `price_unconfirmed`);
+    - draft→sent through `update()`;
+    - the portal Pay link;
+    - the invoice-ready, reminder and junk-mail texts.
+  - `POST /api/invoices/:id/confirm-price` (admin only) confirms the suggestion or sets Patrick's
+    price, and clears the pending note. **Nothing goes to the customer by itself** (Patrick,
+    2026-09-26, replacing the earlier auto-release). Confirming and sending are separate actions.
+    `invoices.isPriceSetByPjl` means no automatic invoice-ready text is ever scheduled for a price PJL
+    sets, before or after confirming, including on a cascade re-run. The office uses **Send**.
+  - A commercial suggestion inside a priced tier is that tier's price, unconfirmed.
+- **FLOW-23 (PASS) hops touched, additively:**
+  - the pay page's `payable`, `sdk-config` and `payment-intent` now also refuse a price-unconfirmed
+    invoice, and `payment-intent` names the reason;
+  - the portal `payUrl` is only handed out when `isPayableOnline`.
+  - Untouched: `finalizeStripeInvoicePayment`, `stripe.js`, the method list, the webhook and the
+    charge amount. Every sent / part-paid invoice with a confirmed price behaves as before.
+  - Re-walk one real card payment.
+- **Tests (in build:check):**
+  - `scripts/test-price-confirm.mjs`: 47 assertions; on the parent `fcf506ae`, 6 passed and 23 failed.
+    Now 53 with the Tap to Pay pin and the no-auto-text rule. That rule fails 4 on the code before it
+    (the re-arm) and keeps a control: an ordinary priced Bill-later invoice still texts.
+  - `scripts/test-price-before-signing.mjs`: 18 assertions; on its parent, 8 passed and 10 failed.
+  - `scripts/test-closing-price.mjs` expectations updated where the rulings changed them (named in
+    the commits).
+- **Acceptance walk for Patrick (FLOW-31):**
+  1. Book a 4-zone closing and walk 6. The sign-off screen shows the 5–6 price. After signing, the
+     work order and the invoice both carry it.
+  2. Close a 16+ zone system. The customer sees "PJL confirms the price" and no number. The office
+     invoice shows the suggestion with its arithmetic. Send, Take payment and the text are all
+     refused until **Confirm price**. After confirming, nothing reaches the customer until you press
+     **Send**, and no automatic text goes out.
+  3. Repeat step 2 for a commercial account with no price set.
+**2026-09-23 (FLOW-31 — Fix #6b, PJL-98: the office's edits survive the tech's offline walk):** the
+PJL-77 audit of Fix #6 (`6332c076`, `78cff897`) found four gaps, each reproduced against the real
+queue before fixing, one commit each on `pjl-98-offline-merge`:
+1. **A second queued zone edit silently undid an office edit.** Tech marks Zones 4 and 1 done with no
+   signal, office renames Zone 2: the first sync merged correctly, the second put the old name back —
+   same for property fields (an office shut-off correction). `queue.acknowledge()` rebased the next
+   edit onto the server copy even when office changes had been merged into what was sent. It now
+   rebases only when what went out was exactly the tech's edit.
+2. **A draft on a zone the office removed blocked Finish forever.** Drafts are stamped with "its zone
+   was on the visit"; one rule (`queue.zoneDrafts`) lets only drafts whose zone is still there block.
+   At Finish a stale draft's text goes to the visit's `techNotes` and the draft is cleared, one commit.
+3. **A tech could not remove a zone.** `ZoneStage.confirmRemove` called the admin-only property DELETE
+   first; the 403 read as "Not signed in" and the zone stayed on the visit — which fix #7 bills for.
+   The visit removal is now saved first (queued, offline-safe); then the property is tried
+   (`field.removeZoneFromProperty`). `removePropertyZone`'s 403 is code `forbidden` ("needs the office
+   for now"), never sign-in; on any failure the office is told in `techNotes`. **No permission change —
+   the DELETE rule is PJL-86.**
+4. **PRD D4.** Keep mine now appends each overridden office value to `techNotes` in the same commit, and
+   the answer applies only to the clashes the tech was shown (it was stamped on every pending edit of
+   the record, deciding clashes nobody saw). Main's design is kept: one prompt per clash, Keep mine /
+   Use office's on the banner and at Finish.
+`techNotes` is office-only (not on the customer's report); it is copied to the draft invoice's
+internal notes, and its first line is the service record's summary when the tech wrote none. App-only,
+OTA (SDK 54, no native module, no server change). `scripts/test-field-merge-gaps.mjs` (13 cases, in
+`build:check`): gap 1 failed 3 of 4 on main, gap 2 1 of 2, gap 3 4 of 4, gap 4 3 of 3 — each on its
+parent commit. `test-field-conflicts` 15/15, `test-findings-report` 31/31, `test-field-offline` 16/16,
+`test-field-client` 6/6, `test-app-shell` 25/25 unchanged. **No PASS flow touched; FLOW-31 stays
+awaiting iPhone acceptance** — walk: mark two zones done in airplane mode while the office renames a
+third; remove a zone as a tech; clash one zone label and choose Keep mine, then read the WO notes.
+**2026-09-23 (FLOW-32 — a returning customer's fall booking is its own visit, PJL-97 + PJL-93):**
+Found auditing Fix #2 (#2 above covers Today's card and Open WO). Nothing closes a booking record
+when its work order completes, so a spring customer's April record stayed `confirmed`, and the fall
+re-booking (`bookings.upsertFromLead`) REUSED it: `scheduledFor` moved to October and the fall WO id
+was appended, one record reading `["WO-APRIL","WO-FALL"]`. Every reader of the record's work orders
+then acted on April's finished job: admin reschedule 409'd "Technician has already arrived" (April's
+`arrivedAt`) or, without it, re-dated April's completed WO onto the new day, where Today drew it as a
+ghost ✓ stop; the portal refused online reschedule AND cancel (`multi_wo_booking` / `wo_locked`); the
+iCal event linked April's WO; route re-timing froze or re-dated it; admin delete refused. Three
+commits. (1) **Readers:** one rule, `bookings.workOrdersForVisit(rec, wos)` (+ `workOrderIdsForVisit`),
+backed by `bookings.isPreviousVisitWo(wo, visitStart)` — a finished WO belongs to an earlier visit if
+it finished before the visit's local day, unless it is a COMPLETED WO scheduled for that day (the
+visit done ahead of time). Called from `rescheduleBooking`, portal booking-actions, portal cancel
+(guards + cascade), `retimeCustomerBooking`, the iCal link, Today's canonical pass and admin delete's
+`isActiveWo`; live data already holds merged records, so this is the half that repairs them.
+(2) **Writer:** `upsertFromLead(lead, { isFinishedWo })` closes a live record whose linked WOs are ALL
+finished as `completed` (history `closed_by_rebook`) when a NEW booking (unseen envelope id, different
+start) arrives, and makes a fresh record; `mirrorBookingOnly` passes the checker. Reschedules, open
+work, records with no WO yet and callers without a checker are unchanged. `workOrderForLeadBooking`
+step 1 now skips an envelope-named WO that `isPreviousVisitWo` refuses (an old April booking moved to
+October kept April's envelope and reopened April's job). (3) **PJL-93:** the CRM new-WO form attaches
+to `bookings.recordForLeadBooking()` only, not every record the lead has; Open WO links a WO it had to
+create under a fresh id to that record too. Left alone on purpose: `lib/assignments.js` (per-season
+assignment records, "has any WO" is right there), `bookings.remove` (the caller's `isActiveWo` carries
+the rule), and the CRM history views (`server/bookings.js` count badge, `server/booking.js` detail,
+`server/work-order.js` booking lookup) which show a record's whole history, including records merged
+before this shipped. Tests (in `build:check`): `test-merged-booking-readers.mjs` (35; parent: 26
+fail), `test-rebook-fresh-record.mjs` (19; parent: 8 fail), `test-crm-wo-attach.mjs` (17; parent: 5
+fail). **No PASS flow touched.** UNMAPPED — Patrick's walk: open a returning customer's fall booking,
+move it to another day (no "technician has arrived"), confirm April's job keeps its April date and no
+✓ ghost appears on the new day; from their portal, confirm Reschedule and Cancel are offered; check the
+calendar event opens the fall work order.
 **2026-09-23 (A station, a valve and an area are three different things):** Patrick, on Dundalk:
 *"Trees A and Trees B must appear separately, even though they share one controller station. They
 are still two physical valves with separate lateral piping."* Closes SB-01 and SB-02, both opened
@@ -273,6 +1280,55 @@ So the honest statement is: opening and saving changes no money-facing record ex
 own design blob and its material list, and correcting a split changes the station representation —
 plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
 not.
+
+**2026-09-23 (FLOW-31 — integrity gaps left after the pressure-test fixes, PJL-100, branch
+`pjl-100-integrity-gaps`):** an audit of main against the must-fix briefs found each fix meets its
+"done when" and left seven should-fix gaps, each reproduced on main through the real routes. One
+commit each; every test boots the real server from a temp copy (`scripts/lib/field-server.mjs`,
+email/SMS/Stripe stubbed) and failed on its parent first.
+- **#7 A no-charge stop is finished, not broken.** Fix #8 creates no invoice for a $0 closing, but the
+  work-order list's "Needs invoice" filter listed every one forever, the tech page offered "Generate
+  invoice now", that button (`POST …/create-invoice`) drafted a $0 invoice and `/send` then **emailed
+  the customer a $0 invoice**. Now: both work-order GETs carry a derived `noCharge` (from the service
+  record, via `isNoChargeServiceRecord`); create-invoice refuses 409 `no_charge`; send/resend refuse any
+  $0 invoice; the filter and the banner skip them (tech cache v52).
+  `scripts/test-no-charge-recovery.mjs`. Old code: 201 $0 draft, 2 $0 emails.
+  - **Reportable (Patrick, 2026-09-26):** a no-charge visit keeps a clear internal state. It has no
+    customer invoice, no payment prompt, no "invoice coming" wording, nothing sent to QuickBooks, and
+    no $0 invoice for bookkeeping. The Work Orders page has a **No charge** filter (completed and
+    `noCharge`, from the same rule) and a "No charge" tag on the row. Section G runs the page's own
+    filter on the server's list; the old page listed nothing.
+- **#1 Photos.** The build "mark task done" route (`POST …/tasks-done`) numbered and wrote back its
+  photos from a stale read outside the per-WO photo lock; racing an upload it lost one photo 10/10.
+  Now under `fieldPhotoUploads.run(woId)` like upload and delete. `scripts/test-photo-races.mjs`.
+  (The audit's upload-vs-delete finding was a lib-level simulation; main's delete is already locked.)
+- **#4 + #5 Findings copied once, nothing erased, failures retried.** Two overlapping copies (bulk ×2,
+  per-issue + bulk, emergency + bulk) put the finding on the property twice (6/6, 6/6, 4/4); the routes
+  wrote back zones read before the copy, erasing a zone edit saved meanwhile (6/6); a failed copy was
+  never retried. Now one rule, `lib/wo-findings.js` `copyFindingsForward` — serialized per WO, stamps
+  via the locked `workOrders.stampDeferredIds` on the fresh record — used by all three routes and by a
+  fall closing's completion cascade (which copies anything still unstamped).
+  `scripts/test-defer-races.mjs`.
+- **#2 Finish retry after a crashed completion.** If the first Finish completed the WO but its cascade
+  never ran (restart or throw) and the response was lost, the retry answered "done" with 0 invoices,
+  0 service records, 0 emails. It now runs the (idempotent) cascade under the same per-WO lock.
+  `scripts/test-finish-after-crash.mjs`.
+- **#3 Finish's first call can't hang.** `api.js` `getJson` (so `getWorkOrder`, Finish's re-read) goes
+  through `fetchWithTimeout` (30 s) — a stall is the app's `TimeoutError`, never "signed out". Ships
+  over the air. `scripts/test-api-timeouts.mjs`.
+- **#6 Nobody-home email.** The bypass email's "your invoice will follow separately" is included only
+  when there is an invoice. Section F of `test-no-charge-recovery.mjs`.
+- **Nits.** The desk's "Run completion cascade" takes the per-WO cascade lock (racing Finish it doubled
+  the invoice 5/5); a client-sent `deferredId` the server never wrote is dropped; a re-sent signature
+  is a no-op only if the signer matches too. `scripts/test-integrity-nits.mjs`.
+- **Left alone, deliberately:** the properties backfill writing from an unlocked read (1/40, only
+  while a legacy backfill is due — a fix needs re-entrant locking); no watchdog on
+  `atomic-json.serialize` (releasing a held store lock would reintroduce the lost-write race); a
+  corrupt store still surfaces as each route's 400/500 (nothing is overwritten).
+- **Acceptance walk (Patrick):** complete a no-charge closing with nobody home — the email doesn't
+  promise an invoice, the WO is not under "Needs invoice", the tech page shows no "Generate invoice
+  now". Flag a finding, tap Finish twice on poor signal — the property lists it once. FLOW-31 stays
+  UNMAPPED/awaiting device acceptance; this entry claims no walkthrough.
 
 **2026-09-22 (Fall-closing pressure-test fixes, branch `fix/fall-closing-pressure-test`):** the eight
 MUST-FIX items from the fall-closing pressure test, one commit each. No PASS flow's route or wording
@@ -5672,6 +6728,9 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
 | FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Changed 2026-09-21 (second pass) — what a supplier document says about the parts.** PO-2026-0012 went to Central Pro carrying two identity bugs. (1) The email's quick-paste block — the thing the branch pastes into their system — still listed OUR SKUs while the PDF and CSV carried theirs; `renderQuickPasteTable`/`renderQuickPasteText` now take an injected `skuForLine` (server.js passes `resolveSupplierSku` on all four send/resend paths) and print PART # then OUR SKU, falling back to ours when no resolver is given. (2) A catalog description still held an import-era tag naming the OTHER supplier — "… 500 ft (SiteOne 207CD500)" — so Central's own PO quoted SiteOne's number back at them; `stripSupplierTag` in `lib/format.js` now drops any parenthetical containing a part-number-shaped token (4+ chars, upper-case/digits/dashes, at least one digit) inside `resolveLineDescription`, so "(New)" and "(price per roll)" survive and a rival's code cannot ride out on any document. The one tagged catalog description was also cleaned at the source. `scripts/test-supplier-doc-identity.mjs` (11 assertions, in `build:check`) pins both, and fails against the pre-fix code. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. |
+| FLOW-48 | **The picker shows each real fitting once, with its suppliers — and adds the part you chose** — **UNMAPPED** (opened 2026-09-26, P-PJL-35 M2a) | Hop chain: **Suppliers page logo upload → `POST /api/suppliers/:id/logo` (resize only) → `/api/suppliers` → picker chip; Part photos "Same fitting as…" + "Make default for this fitting" → `POST /api/part-photo-groups/:id/default` → `fittingDefaultFor()` → `/api/parts` `photo.fittingDefaultSku` → `picker-rows.js` one row per verified fitting → main Add = default part; panel Add = that offer's part #; same-part # alternate supplier disabled.** Material-list lines and PO routing (FLOW-27) unchanged. Covered by `test-picker-rows.mjs`, `test-supplier-logos.mjs`, `test-part-photo-lifecycle.mjs`, `test-admin-gates.mjs`. **What still needs Patrick on production:** (1) upload the SiteOne and Central logos he approved on /admin/suppliers and set short names; (2) link the two Pro-Spray 12" part numbers as the same fitting and confirm ONE picker row; (3) choose "Make default for this fitting" on the other part and see the row's description, part #, price and chip switch; (4) open the chip, add from each supplier, and confirm each line is that supplier's part #; (5) on a single part # with two suppliers, confirm the alternate's Add is disabled with "Supplier selection coming next"; (6) generate POs from that list and confirm each line lands on its part's default supplier, as before. |
+| FLOW-49 | **The AI finds a catalog part's photo, proves it, and only a proven photo can go live** — **UNMAPPED** (opened 2026-09-27, P-PJL-35 M3a: engine only) | Hop chain: **`photo-backfill` run (calibration sample or chosen SKUs) → `photo-ai.find` (manufacturer site → SiteOne/Central → open web for generic only) → our server fetches each page (`fetchPageSafely`) and image (`fetchImageSafely`, resize only) → `photo-evidence.partNumberOnPage` (visible text only; branded distributor codes via `supplierCodeMapping`) / `pageMatchesSpec` → `photo-ai.verify` (image + spec only) → generic: second independent source + `photo-ai.compare` → `tierFor` → `part-photos.recordAiResult` (live only if Confident AND auto-approve on; never over a live photo) → `applyGrouping` (auto-link only same mfr + mfr part # on official pages, and never two different live photos; rest = proposals).** Covered by `test-photo-backfill.mjs` (mocked AI + web). Review tab (M3b): `GET /api/part-photo-review` → queues → `approveCandidate` (Patrick's APPROVED photo, shared by the fitting) / `rejectAiResult` (Not confident; rejected images never auto-approve again; an auto-approval's rejection sends back its same-run same-kind siblings) / `resolveFitting` (confirm = Patrick's link, dismiss = never asked again). Calibration (M3c): `POST /api/part-photo-backfill/calibration` → `startCalibration()` (15-part sample, auto-approve OFF, one run at a time) → real Claude + safe fetchers → results to the Review tab. First calibration run on production 2026-09-27: 15 parts, 0 errors, 6 to review, 9 no reliable photo; Patrick approved 7 and uploaded 1. Follow-up: our server extracts product images from the page HTML; known-brand recovery; size normalisation; usage counters; `rerun-unresolved` door. **Still to walk:** the re-run of the 7 unresolved parts (auto-approve OFF) and its recovery rate; then the full run (no route for it yet). **Changed 2026-09-28 — Fast Product Lookup + image-quality gate (Patrick).** Two findings drove this: the 50-part wave averaged 203k/153k input tokens per branded/generic part, almost all of it the web-search finder; and 53 of the 100 live photos were under 800px on the longest side — 30 of them 96×96 SiteOne og:image thumbnails saved while the same pages carried a 1200×1200 `__zoom` image. (1) `lib/photo-fast-lookup.js`: before any finder call, the supplier's own search + product page through `fetchPageSafely` (SiteOne works server-side: server-rendered `/en/search?text=` tiles, Product JSON-LD, `data-zoom-image`; SupplyHouse answers HTTP 403 to every non-browser request; Central Pro's site has no public catalog — both are reported per part as blocked/unavailable, never worked around). A result is chosen only when its slug's leading tokens or title equal one of OUR numbers, or (generic, description query) its title names the same type, every size as a whole token, the same set of ends and the same material; the page and its pictures then go through the UNCHANGED check → verify → cross → tier rules. A branded hit makes no finder call; a generic hit with one source gets exactly one finder pass (the last) for the second source; a miss runs the finder as before. (2) `lib/photo-quality.js`: `rankImageUrls` tries the largest member of a picture's family (SiteOne's zoom over its thumbnail) first; every download is measured (`part-photos.inspectImage`: source dimensions + edge-strength sharpness) BEFORE it is saved — under 300px or blurry (edge < 40) is never stored and is noted on the page line; under 800px or soft (edge < 90) is kept as "low quality — review needed" and can never back a Confident result (`qualityCap`, applied after `tierFor`); ≥800 sharp is ok, ≥1000 good; among same-tier candidates the highest grade / largest source wins. (3) The store keeps the original bytes (`orig.<ext>`) and a 2000 copy when the source is larger than 1200 (never upscaled; `photo.full` URL only then; the viewer's srcset uses it), 1200/2000 at WebP q85 (was 80: 46.5 → 48.8 dB PSNR, +25% bytes — the 1200 copy was not the crispness problem, the 96px sources were), source dims + grade on every candidate and photo, shown on the review card. (4) A dry-run **benchmark** door — `GET /api/part-photo-backfill/benchmark-plan`, `POST …/benchmark {skus}` (admin; exact canonical list; ≤10 parts every one of which an earlier run processed; live parts included for comparison; NOTHING written to the stores, no grouping) — with per-part rows (resolved by, verdict, chosen photo's source size + grade, calls, tokens, searches, seconds) against the last wave's per-part averages; per-part wall time and a fast-path split on every run's status. Local (no-model) benchmark on the 10 chosen parts from this machine: 5 exact SiteOne hits (HCPCM300, HC150FLOW, R12H, 1449-007, 439211), all with a 1200×1200 source, 7–9 s each including image downloads and 0 finder calls; 5 misses in 1.6–2.8 s (POPO150250, DS75C, SC8112, PP075X400 — SiteOne's is the NSF 125 PSI roll, correctly not matched — and 205020) that fall through to the finder unchanged. Covered by `scripts/test-photo-fast-lookup.mjs` (in `build:check`) plus the existing photo suites. **Still needs Patrick:** merge + Manual Deploy (hold until his calibration run `BF-202609280044-3e93` is done), then press "Run the fast-path benchmark" once for the vision/tier half of the numbers; decide whether the 53 under-800px live photos get re-fetched through the gate (no door for that yet). **Walked on production 2026-09-28 (#353 deployed as `a192356`; benchmark `BF-202609281051-75cc`, dry run, 10 parts, 0 errors, started by Patrick's session on his approval):** the fast path found the product page for 5 of 10 (HCPCM300, HC150FLOW, R12H alone; 1449-007 and 439211 with one finder pass for the second source); 5 misses (POPO150250, DS75C, SC8112, PP075X400, 205020) ran the finder as before. Pure fast-path parts cost 1–2 Claude calls, 3.5k–7k input tokens and 23–38 s against the wave's 3.4 calls / 203k / several minutes; every photo chosen from a fast-path page was a 1200×1200 "good" source. Overall 27 calls / 1.32M input tokens for 10 parts (131k per part against the wave's ~178k). Results: HCPCM300 and R12H Confident; HC150FLOW (the Hunter family-image watch-list part) TBD with a proper 1200px photo instead of "no reliable photo"; 1449-007, 439211, 205020, PP075X400 TBD; POPO150250, DS75C, SC8112 not confident. Nothing changed in the photo stores (verified: states, live count and review queues identical before and after). Open question for the cleanup pass: on 1449-007 and 439211 the tier step preferred a low-resolution second-source candidate over SiteOne's 1200px one (tier ranks before grade); the enriched benchmark rows (this PR) will show which check held the SiteOne candidate back. The Review tab's plan GET was broken on first use (`url is not defined`) — fixed here. **Changed 2026-09-28 — the budget gate and the finder switch (Patrick: "this should not cost me any more than $10").** The two days of runs cost about $150 (21.3M + 4.5M Opus 5 tokens, ~$1.50 a part), almost all of it the web-search finder feeding fetched pages back as input. Now: (1) every Claude response is priced from the model that answered (`photo-ai.costOf`: list prices + $0.01 a web search) and added to the run's `usage.usd` and to a standing ledger in the state file (`state.spend`); (2) `budgetUsd` (env `PHOTO_BUDGET_USD`, default $10) is a hard cap — a run pauses itself with `pausedReason: "budget"` when the ledger reaches it, and start/resume refuse until the cap is raised; (3) the finder is OFF unless a wave is started with `finder: true` (admin, `POST /wave {skus, finder}`): a fast-path miss makes no web search and ends "not confident — finder off: not found on the supplier sites", a generic single-source hit lands at TBD with its one 1200px source; (4) the vision and compare calls run on `PHOTO_VISION_MODEL` (default: the finder's model) so Patrick can move them to a cheaper model by env; (5) every wave plan carries dollars (`cost.finderOff` / `cost.finderOn` worst case, spent, remaining) and the run line shows this run's dollars, the budget and the finder state. `scripts/test-photo-budget.mjs` (in `build:check`). Worst case for the remaining 178 parts with the finder off: about $8 on Opus 5 for the vision calls, about $3 on Sonnet 5.5. **Final form (Patrick, Sep 28 2026, after the accounting: ~$155 for 126 part-runs, ~$1.23 each):** (a) bulk waves **cannot** invoke the finder — `start()` and `startWave()` take no finder option, the wave route reads only `skus`, and the only way the finder ever runs is the harness-only `finderDefault: true` (a future one-part manual research action, cost shown first, is not built); (b) a deterministic miss — no candidate image at all — is **`needs_research`**, a tier and catalog state of its own with its own Review-tab queue and progress count (`tierFor({hasCandidate:false})` returns it; `photoStateFor`, `recordAiResult`, `buildReviewQueues`, `catalogProgress` and the run summary all honour it), never "Not confident", which now means exactly "evidence was checked and found insufficient or wrong"; the run makes zero finder calls and zero web searches for it and moves straight to the next part; (c) the $10 cap and the dollar ledger stay as a failsafe; (d) the vision model stays Opus 5. `scripts/test-photo-budget.mjs` (35) proves: a `finder: true` argument to a wave changes nothing and the route has no such field; a miss makes zero finder calls/web searches, becomes Needs research, sits in that queue and the run continues; the cap still pauses spending; Confident / TBD / Not-confident semantics unchanged (a vision fail is still Not confident). quality upgrade of live photos (Patrick).** `lib/photo-quality-upgrade.js` + `part-photos.upgradePhotoQuality`: for every live photo under 800px, re-read the product page it came from, find a LARGER member of the same picture family (`photo-quality.familyKeyOf`), measure it, and prove it is the same picture (normalised correlation of 24×24 greyscale copies ≥ 0.85). Only a same-family, same-picture, ok/good copy is a "deterministic" upgrade; uploaded photos (no page), pages without a larger copy, a larger copy that is a different picture or still too small go to the **Quality** review queue on the Review tab ("Keep as is", or replace by hand through the existing upload door). Routes: `GET/POST /api/part-photo-quality/plan` (POST = admin, builds asynchronously, one page + 1–3 images per photo), `POST /api/part-photo-quality/upgrade {hashes}` (admin; the exact list shown, in order), `POST /api/part-photo-quality/review/:groupId`. Applying moves the group's photo hash to the larger copy and nothing else: tier, approvedBy/At, links, fitting membership and the AI result are untouched; the old hash goes to the history as `quality-upgrade`; `source` keeps its page and method and records `upgradedFrom`; a photo that changed since the plan is skipped, never overwritten; nothing is ever upscaled. `scripts/test-photo-quality-upgrade.mjs` (32, in `build:check`). **Still needs Patrick:** merge + deploy, build the plan on production, read the counts and before/after, and approve before anything is applied. **Changed 2026-10-01 — resolution restoration, one rule, and review candidates covered (Patrick).** The first production plan (`QU-202610012211-acf6`, nothing applied) showed two gaps: the review queue still held 96×96 candidates (111BC, 205120, TLCOUP) because the job only looked at live photos, and 12 SiteOne originals proven to be the same picture (match 0.995+) were kept at 96px only because the 1200px original graded "soft". Resolution restoration is now separated from photo/evidence approval. **The rule** (`photo-quality-upgrade.restorationDecision`, one place): a stored image under 800px is restored when the larger copy is on the SAME stored source page, in the same picture family, ≥ 800px, has strictly more native pixels, and correlates **≥ 0.98** with the stored image; on that path a soft or blurry grade does NOT block — it is measured and recorded on the restored image and shown on the card. The quality gate for new or different candidate images is unchanged. A larger same-family copy under 0.98 (the Rain Bird store's padded squares: VB7RND 0.94, 000001/ESPSM3 0.89) is HELD for Patrick's eye and shown beside the stored image, never restored automatically. **Scope:** live photos and the review candidates the Review tab shows (`photo-review.visibleCandidates` — one rule shared by the card and the plan). **Applying** a candidate row (`part-photos.restoreCandidateImage`) replaces that one candidate's image asset in place and nothing else: its tier, evidence checks, position, run, source page, the group's tier/reason/AI result/updatedAt, links and approvals are untouched — a TBD candidate stays TBD, a Not-confident one stays Not confident (111BC's dimension drawing is 1200px and still Not confident); a candidate that was rejected, approved (part went live), or whose larger copy is already a candidate is skipped. Review cards now receive each candidate's source size, grade and "restored from its 96×96 thumbnail". `scripts/test-photo-quality-upgrade.mjs` (55): the rule as a table, the seven audited candidates incl. the soft and the blurry one, < 0.98 held, different family / different page / < 800px / not-more-pixels refused, never enlarged, changed-since-plan skips, no model/finder/web-search code in the module; mutation-checked six ways. Local rebuild of the plan with the new code against production's current rows: 51 stored images → 39 deterministic (32 live: 18 sharp + 11 soft + 3 blurry SiteOne originals; 7 candidates), 12 review (3 held, 9 with no usable larger copy or uploaded). **Still needs Patrick:** review the PR; merge + one deploy; rebuild the plan on production; approve before anything is applied. |
+| FLOW-47 | **A verified part photo reaches the parts picker — and nothing unverified does** — **PASS — walked on production 2026-09-26 by Patrick** (opened 2026-09-26, P-PJL-35 M1; code #313, thumbnail follow-up #321) | Hop chain: **`/admin/part-photos` upload or https link → `POST /api/part-photos/:sku/photo` (requireAdmin) → `lib/part-photos.js` processImage (resize only) → content-addressed WebP on disk + group/link stores → `rebuildCatalogFromOverrides` → `photoStateFor()` → `/api/parts` `photo` (verified only) → Material List picker thumbnail → viewer.** Same-fitting: `POST …/link {sameAsSku}` shares the group. Edit safety: a part-number/description edit hides the photo until `POST …/reconfirm`. Covered by `scripts/test-part-photo-lifecycle.mjs` (63, build:check) and `test-admin-gates.mjs`. **What still needs Patrick:** on production, (1) open Materials → Part photos, set a real photo for one part by upload and one by pasting a manufacturer image link; (2) link a second SKU with "Same fitting as…"; (3) open a material list, search both, confirm the thumbnails and the viewer on desktop and phone, and that every other part shows "No photo"; (4) edit one part's description and confirm its photo hides until "Photo is still right". |
 | FLOW-46 | **Quote financing (Klarna) — offer → apply → approve/decline → sign → capture** — **UNMAPPED** (opened 2026-09-19) | **First-ever registration for this flow** — PJL-34 (admin enable, Stripe Payment Link, capture/void, the Pending Financing queue, the capture-deadline reminder sweep) shipped across several earlier PRs with no `FLOW_REGISTER.md` entry at all; this row covers that pre-existing behaviour AND the PJL-35 re-sequencing below in one place, since they're one flow. Hop chain: **admin "Enable financing" on a DRAFT quote (`enableFinancingForQuote`, grosses up pricing — draft-only, pricing frozen once sent, which is the actual mechanism behind "a customer who wants financing gets a completely different proposal," not a live toggle) → sent to the customer → `financing.stage` state machine (`not_offered → link_sent → authorized/declined/voided`, `authorized → captured/partially_captured/expired/voided`) → capture or void on the linked invoice**. **PJL-35 (2026-09-19): financing now starts BEFORE signature, not after.** A new customer-facing "Apply for financing" button/route (`POST /api/approve/:id/:token/apply-financing`) calls `klarna.onQuoteAccepted` directly — reused UNCHANGED, since it already no-ops (`{ alreadyRan: true }`) once `financing.stage` has moved past `not_offered`, which is also what makes the three PRE-EXISTING post-signature call sites (`server.js` — remote e-sign, portal accept, pdf-return admin attestation) safe to leave byte-for-byte untouched: whichever trigger fires first does the real work, the others are silent no-ops. Two new customer-facing hero/footer bands on the proposal page (serve-time injected in `injectProposalAcceptFooter`, never baked into the saved file) read `financing.stage` live and show the apply/waiting/approved/declined state; the footer band only shows the Accept & sign button once `authorized` (or after a `declined` customer chooses to pay another way) — **before that, there is deliberately nothing to sign**, which is the direct fix for the risk Patrick raised ("wouldn't the sequence make the customer sign... and then..."): under the old order a signature could exist before the financing outcome did, under this order it can't. **The correctness fix this re-sequencing required:** `financing.stage === "authorized"` alone stopped being a safe "clear to schedule" signal the moment authorization could happen pre-signature — `quotes.isAccepted(q)` is now the one shared rule (replacing at least three slightly different ad hoc inline checks) used by the proposal page's own footer, `listPendingFinancing`'s new `signed` field, and the authorized-alert email/SMS copy, which now says "clear to schedule" only when both are true and "still needs a signature" otherwise. New customer-facing decline email (`notify-customer.js`'s `sendFinancingDeclineEmail`) — PJL-34 only ever alerted Patrick internally on a decline; the customer heard nothing. Deliberately left alone: the financing state machine's transition rules (never referenced signature status to begin with, needed no change); Stripe integration, gross-up math, eligibility rules, capture/void — all untouched. **Badge asset (corrected 2026-09-19):** Patrick had already supplied the real Klarna badge (a self-contained pink-pill PNG, own background — used in every approved mockup against both the light hero band and the dark footer band) earlier in this same session; it was saved to the mockup scratchpad but not carried into the repo when the real bands were built, so the first version of this code referenced two placeholder files (`/klarna-badge-{black,white}.svg`) that never existed. Fixed same-day: the real asset now lives at `server/klarna-badge.png`, one file for both bands, sized to the same 78px-tall minimum-size math either way. **What still needs Patrick — not yet walked, and can't be walked from this sandbox** (`docs/HANDOFF_KLARNA_TEST_MODE.md`: outbound calls to `api.stripe.com` are blocked by this environment's egress policy): one full test-mode walk — open a financing-enabled proposal as a customer, click Apply for financing, complete Klarna's TEST checkout, confirm the hero/footer bands update through every state, confirm the decline email arrives on a declined test run, confirm the Pending Financing page reads "awaiting signature" before signing and "clear to schedule" after. |
 | FLOW-45 | **A failed send is either re-sent or waved off — never nagged about forever** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **Email health → "Never went out" → for `outreach` rows the health read names the season whose catch-up covers them (`catchUp: {season, year, count}`, from each row's booking) → **Send the N blast emails now** → `POST /api/assignments/:season/:year/catch-up` (rebuilt from each booking, inside the 9–8 window; a closed window is said, not thrown) → the ledger's later successes drop those rows on the next load. Anything else → **Dismiss** (row) or **Dismiss all** → `POST /api/admin/email-health/dismiss` → `mailerLog.dismissFailures()` writes `data/email-dismissed.json` (who, when) → `outstandingFailures()` excludes them; the ledger itself is untouched**. **LEDGER-01 (2026-09-12):** Patrick, on forty "outreach · send by hand" rows from the revoked-password morning (2026-09-11 9:03): "how do we get rid of all this garbage." The rows were true — those blast emails never went out and had not been re-sent — but the panel's only advice was "send by hand", forty times, because `outreach` is not rebuildable from the ledger. It IS rebuildable by the cadence (FLOW-3x catch-up), which the Season Plan already offers; the panel now offers the same press where the failures are read. And a failure Patrick has handled another way (phoned, stale) needed a way off the list that kept the record. **Deliberately left alone:** the ledger (append-only history; dismissals live beside it); `RESENDABLE_KINDS` (a magic link and a cadence step are still not rebuilt from the ledger); the send window. `scripts/test-email-dismiss.mjs` (20, in `build:check`) pins dismiss-takes-only-those-rows, idempotence, the record of who/when, the untouched ledger, the injectable Set, bad input, the admin-gated route, the catch-up pointer, and the panel's controls; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** open Email health: the box shows "Send the N blast emails now"; press it inside the window → "N sent"; reload → those rows are gone. Press Dismiss on any leftover row → it disappears; Dismiss all → the box empties; the Recent failures list below still shows the history. |
 | FLOW-44 | **An alert about a booking carries the booking's price** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **customer reschedules / cancels / picks the free bucket on their appointment page, or Patrick resends a failed lead alert → `bookingAlertLead(booking, { sourceLabel, notes, lead })` → `resolveSeasonalPrice(property, family)` (the appointment page's own rule: the property's override, else its zone-count tier, else "Custom quote") → `features: [{ service, price }]` + `totals.expectedTotal` → `sendNewLeadEmail` / `sendNewLeadSms` print the service and the price, and `appointmentWhenLabel()` prints the date as the customer was told it ("Thu, Oct 22, Afternoon (12 PM – 5 PM)")**. **ALERT-01 (found + fixed 2026-09-12):** Patrick, on "New PJL Lead — Customer rescheduled their appointment — ADAM SORRENTI": "Can you tell me why Adam's quoted closing cost is $0.00?" It wasn't. The lead-alert shell prints a lead's items and estimated total; all four booking alerts handed it a bare contact block, so it printed its empty state ("$0.00 · No specific items selected") and ISO timestamps ("Was: 2026-10-22T18:01:00.000Z"). One shape now, for all four. A missing zone count reads "(custom quote)" rather than a silent $0. **Deliberately left alone:** the shell itself (sendNewLeadEmail/Sms) — a lead's alert is unchanged; the SMS keeps its empty note. `scripts/test-booking-alert-price.mjs` (17, in `build:check`) pins the date label, the pricing by the page's rule (tier, override, custom, spring), the contact/portal from the lead, and every call site; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** the next reschedule/cancel alert shows the service line with its price and "Was Thu, Oct 22, Afternoon (12 PM – 5 PM). Now Mon, Oct 19, Morning (8 AM – 12 PM)."; a property with no zone count shows "(custom quote)". |
@@ -5803,6 +6862,727 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-01 — FIELD (FLOW-31): Customer Summary "Done" crashed the whole app — fixed (#361)
+
+**Regression from #360, found on Patrick's phone within minutes of update 01a0f8f4.** The app
+showed "PJL Field could not start — TypeError: Cannot read property 'source' of null … at
+CustomerSummary".
+
+**Cause:** tapping Done cleared the summary but left the page's state as `ready`. iOS keeps drawing
+a Modal's children while it slides away, so the ready view rendered with no summary and read
+`s.source` of null. The boot guard caught that error, and it took down the whole app.
+
+**Fix** (`pjl-field/src/screens/CustomerSummary.js`): closing resets the state to `loading` along
+with the summary, and the ready view draws only when a summary exists. App code only; the server
+route is unchanged.
+
+**Shipped:**
+- main: #361, merge `aae2936`. The server has been live since 2026-10-01 19:57 UTC; the
+  TestFlight / App Store runtime `4737af92` received it by OTA on merge.
+- Patrick's hand-built Tap to Pay app (runtime `41661c6f…`): hotfix commit `15be412`, update
+  **01a0f8fd**, published 2026-10-01 19:42 UTC.
+
+**Tests:** `scripts/test-customer-summary-close.mjs` (in build:check). It compiles the real
+component with the app's Babel and drives it through open → ready → Done, rendering the way iOS
+does during the dismiss. 7 checks; **the old code fails 4, with this exact error.** The test uses a
+minimal hooks runtime, not a real React Native renderer.
+
+**Status:** not field-verified. Real-device acceptance is open (PJL-106): Done closes without a
+crash; the summary with a paid or part-paid invoice. This entry does not mark FLOW-31 PASS.
+
+## 2026-10-01 — FIELD: which of today's changes are on Patrick's working phone
+
+Patrick's working phone runs the **hand-built Tap to Pay app**:
+- built from `claude/field-taptopay` (#305) at `0c638a8`, runtime
+  `41661c6ff465c4c52451347262fc9fc638271ed6`;
+- it **does not receive main's OTA updates** (runtime `4737af92`).
+
+Today's app changes reached it only as hand-ported hotfix commits, published by
+`field-app-hotfix-taptopay.yml` from branch `claude/eas-update-pjl-field-wgmjtt`:
+
+| Commit | Update | Ports |
+|---|---|---|
+| `3dda94f` | 01a0f7cc | #358's app files |
+| `b390bba` | 01a0f8f4 | #360's app files |
+| `15be412` | 01a0f8fd | #361's app file |
+
+**Not on that phone:**
+- #359's app wording: its confirm sheet still says "Texts and emails"; the sending is server-side,
+  so it does text only;
+- #298's app changes (merged 2026-09-26):
+  - PJL-98: per-field offline merge, zone drafts that no longer block sign-off, zone removal through
+    the outbox;
+  - PJL-100 #3: a timeout on Finish's first read;
+  - the phone side of re-signing on a revised scope.
+
+**Temporary state.** The release-lane design (approved 2026-10-02, not yet implemented) replaces
+hand ports with main merged into #305 and gated publishes. The first lane publish, which would carry
+the #298 changes, is a Field-app release that needs Patrick's approval and field acceptance.
+
+## 2026-10-01 — FIELD (FLOW-31): "What am I signing for?" and zone arrows you can hit
+
+From Patrick's first closings of the day:
+1. The zone pager's ‹ › arrows were "barely touchable".
+2. A customer at the card reader said: "I don't even know what I'm signing for." He wants to pull the
+   invoice up the moment someone says that.
+
+**Zone arrows.** The arrows were the closing's text `Button` with a one-character label and no
+width, so the tap target was the width of the glyph. They are now a fixed 64 × 56 pt `PagerArrow`:
+- a 40 pt chevron;
+- VoiceOver labels ("Previous zone" / "Next zone");
+- greyed, not hidden, at the first and last zone.
+
+**The customer's view of the visit.** `GET /api/work-orders/:id/customer-summary`
+(`lib/customer-summary.js`) is the visit as the customer reads it:
+- service, name, property and date;
+- every zone walked, with what was found and any repair noted for next season (not charged today);
+- the charges line by line, with subtotal, HST and total, plus paid and still owing.
+
+**One source of numbers:**
+- *Before Finish*, it previews the invoice from `billing.billingFor`, the call Finish drafts from.
+  The lines are converted by `invoices.draftLinesFrom` and totalled by `totalsForLines`, exactly as
+  `createDraft` does.
+- *After Finish*, it reads the invoice as stored.
+- So the summary shown before signing is the invoice billed after.
+- **A price PJL confirms after the visit (PJL-96) shows no number at all**: no line amount, no
+  subtotal or total, before or after Finish.
+- Tech notes and photos are left out.
+
+**App:** a full-screen `CustomerSummary` sheet, fetched fresh on every open. It opens from:
+- **sign-off**: "Show the customer what they're signing", at the top of the stage;
+- **the invoice screen**: "Show the customer the invoice", above Send / Take payment.
+
+**Walked:**
+| Who / what | Effect |
+|---|---|
+| Customer | Reads what they're signing and paying before they sign or tap |
+| Patrick | One tap from either screen; nothing to type |
+| Capacity, calendar, linked records | Unchanged |
+| Pricing | Unchanged: no new price path; every number is the invoice's own |
+| Audit trail | Unchanged: the summary is read-only |
+
+**Tests:**
+- `scripts/test-customer-summary.mjs`: 23 checks; **the old code fails 20**.
+- `scripts/test-zone-pager-arrows.mjs`: 6 checks; **the old code fails 6**.
+
+**Shipped with a regression:** Done on the summary crashed the app (update 01a0f8f4). It's fixed by
+#361 / hotfix `15be412` (update 01a0f8fd); see that entry. **Not field-verified:** the arrows on a
+real closing, and the summary with a paid or part-paid invoice, are open acceptance checks
+(PJL-106). This entry does not mark FLOW-31 PASS.
+
+## 2026-10-01 — FIELD: "Notify on route" is a text only (no email)
+
+Patrick, after the first season-plan notice went out: "I don't need an email, just a text message
+works."
+
+**The rule:** `on_route` is a text-only event (`isTextOnlyEvent` in `lib/notify-customer.js`, the
+one place `notifyCustomer` decides channels). Both routes, lead and season-plan, send the text and
+never the email. **No phone on file → 409**, nothing sent and nothing stamped, so the card stays
+un-notified and says to call instead. An email-only customer is no longer emailed as a fallback.
+Every other customer event still sends email and text as before.
+
+**Walked:**
+- Customer: one text, no email.
+- Patrick: Notify still marks the card; with no phone it says to call.
+- Audit: the stamp and history are unchanged.
+- Untouched: capacity, the calendar and linked records.
+- The app's confirm sheet now reads "Texts …" (main's OTA). The hand-built Tap to Pay app keeps the
+  old wording, because #359 was not ported to it. Its behaviour is server-side and already
+  text-only.
+- **Not field-verified:** "Notify sends text only" is an open acceptance check (PJL-108).
+
+**Tests:** `scripts/test-notify-season-plan.mjs` (20 checks; **the old code fails 6**).
+
+## 2026-10-01 — FIELD: "Notify on route" works for a season-plan visit (FLOW-31 touched — re-verified by tests)
+
+Patrick, on route: every card on his fall run had **Notify** greyed out. The Today screen disabled
+Notify on any card without a lead (`!b.leadId`), and the only send route was
+`/api/leads/:id/notify-on-route`. A season-plan (assignment) visit is a booking record with a
+property and the customer's own name, phone and email, but **no lead**, so it could never be
+notified.
+
+**Separately, the on-route stamp lived on the lead forever:** a returning customer's spring notice
+marked every later visit "Notified".
+
+**The rule:**
+- **Two routes, the same message:** a lead booking notifies through its lead. A season-plan visit
+  notifies through its booking: `POST /api/bookings/:id/notify-on-route` sends the same `on_route`
+  text and email to the booking's contact, with the property's portal link. It stamps
+  `onRouteNotifiedAt` / `onRouteNotifiedFor` and a history line.
+- **A stamp counts only for the visit it names** (`onRouteStampForVisit`). An older stamp without
+  that field counts only on the visit's day or the day before.
+- **A second tap for the same visit sends nothing.**
+- **Refusals:** no phone or email, a cancelled visit or an unknown one send nothing.
+
+**App:** Notify is enabled when a card has a lead *or* a booking, and posts to the matching route.
+Only the tapped card turns "Notified".
+- The main OTA went to runtime `4737af92` only.
+- Patrick's working phone (the hand-built Tap to Pay app) got it from hotfix `3dda94f`, update
+  01a0f7cc, 2026-10-01 14:09 UTC.
+- The behaviour change in #359 (text only) supersedes this entry's "text and email".
+
+**Tests:**
+- `scripts/test-notify-season-plan.mjs` (16 checks; **the old code fails 14**).
+- `test-day-order` stopped using a fixed date. `2026-09-30` went stale on 2026-10-01 and turned
+  main's CI red; it now picks a weekday 3 days out, with the right Toronto offset.
+
+## 2026-09-23 — FLOW-23/31: one active invoice per work order, enforced by the server
+
+Probe on main and PR #298: two simultaneous "Generate invoice now" taps made two
+invoices for one completed visit (5/5), and Generate racing the tech's Finish
+made two in 4 of 6 timings. The route checked, then drafted, outside the lock
+the completion cascade takes; `invoices.createDraft` had no per-WO rule.
+
+Now: "Generate invoice now" runs under `completion-cascade:<woId>` (the same
+lock as Finish and the desk re-run). `invoices.createDraft` (already under the
+store lock) refuses a second ACTIVE invoice for a work order with
+`wo_already_invoiced` and the existing id. The cascade, the project cascade
+and the route all treat that as "this is the visit's invoice". Active means
+any status but void (`invoices.activeInvoiceForWorkOrder`), so
+void-and-regenerate still works, now from the button too, which used to hand
+back the voided invoice. The explicit revision path, `invoices.revise`, edits
+the same invoice in place and is untouched. Invoices with no work order
+(deposits, balances) are untouched.
+
+Not changed: customer messaging, send, payment and QuickBooks. Existing
+duplicate invoices already on disk are not merged or voided. Test:
+`scripts/test-one-invoice-per-wo.mjs`, 7 of 10 fail on the parent, 10 of 10
+pass.
+
+## 2026-09-23 — FLOW-32: a visit is its work order (returning customers, Patrick's ruling)
+
+Ruling (Patrick, 2026-09-23): only a reschedule of the SAME work order may
+reuse a booking record. A new booking or work-order id always creates a new
+visit. An old visit is never re-dated or recycled because something on it was
+left open; unfinished old work is flagged for the office instead.
+
+Found against PR #298's first cut (PJL-97): `bookings.upsertFromLead` still
+moved April's record to October, with the fall WO appended, whenever an April
+WO was never closed out, another April WO was still open, or the booking
+arrived with no WO id. A stale envelope naming April's finished WO also moved
+it. The portal's booking-actions, reschedule-availability, reschedule and
+cancel routes acted on `listByLead(lead)[0]` (the first stored record), which
+can be the old visit. Reproduced: with April's open record stored first, the
+portal answered about April's record and refused to cancel the fall visit.
+
+Now `visitRecordForBooking` is the writer's one rule:
+- The record linking this WO is reused, unless the WO is finished and the
+  record is on another day (a stale envelope).
+- Otherwise, a live record at exactly this start is the same appointment slot.
+  It is reused without moving anything.
+- Otherwise, a not-yet-opened booking (no WO on either side) that is not in
+  the past is reused and moved.
+- Otherwise, the booking is a new record.
+
+On a new visit, every earlier live record stays where it is. One whose WOs
+are all finished is closed as completed (history `closed_by_rebook`).
+Anything else gets history `left_open_for_review`, and the new record
+carries `officeReview { reason: previous_visit_open, previousBookingId,
+openWorkOrderIds }`, shown on the Bookings page as "Review: earlier visit …
+still open". The portal routes use `bookings.currentRecordForLead` (a live
+record by `recordForLeadBooking`, else the record holding the booking's own
+WO on its day). The lone-live-record fallback no longer picks a record that
+links other work orders.
+
+**Capacity, deliberately:** an earlier visit left open keeps its own calendar
+slot until the office resolves it. That includes an upcoming booking
+superseded by a new one, which used to be moved (effectively rescheduled).
+Nothing is auto-cancelled, and no customer is messaged. Customer view, Patrick
+alerts, WOs, invoices and the season plan are unchanged.
+
+Tests: `scripts/test-visit-identity.mjs`, 13 of 19 fail on the parent and 19
+of 19 pass. `test-rebook-fresh-record` and `test-booking-lifecycle` controls
+that encoded the old reuse rule were updated to the ruling.
+
+## 2026-09-26 — FLOW-31/23: a priced-scope change after signing needs the customer's new signature
+
+Patrick's ruling. If an unlocked signed work order is changed in a way that affects priced scope, the
+customer must sign again. The original signed version and its history stay intact, and the revised
+work order is marked as requiring a new signature. When the revised scope is locked, its price is set
+and frozen, and the new signature is required before normal completion or payment. Changes that don't
+touch scope or price (tech notes, photos, zone labels) never need one.
+
+**What broke (verified on the parent):**
+- An unlocked signed WO could gain a zone and be re-locked with nothing asking the customer to sign
+  again. Its invoice stayed payable and sendable throughout.
+- A new signature on an unlocked WO silently **replaced** the customer's original, with no copy kept
+  and no history entry.
+
+**The rule, once (`server/lib/work-orders.js`):**
+- `pricedScopeKey(wo)` is what the customer pays for: builder, line-item and repair lines (key, qty,
+  price, pending), the zone count for seasonal types, the fee waiver and warranty.
+- `awaitsNewSignature(wo)` is `wo.resignature.required`. It is set in `update()`, the write every scope
+  edit goes through, when an accepted WO that isn't locked changes its `pricedScopeKey`. System writes
+  pass `{ systemWrite: true }`: the cascade's own correction, the GET self-heal and the bypass
+  pre-price. Returning the scope to what was signed clears the requirement.
+- A new signature or admin bypass satisfies it. The earlier acceptance moves to `priorAcceptances`,
+  never overwritten, and the history records `resignature_required`, `resignature_captured` or
+  `signature_replaced`.
+
+**Readers, all on that one rule:**
+- `PATCH` refuses completion without the new signature (409 `resign_required`). The new signature
+  alone, in the sign-and-complete shape, passes the lock.
+- `run-cascade` and `create-invoice` refuse (no bill for an unsigned revised scope).
+- **Re-lock** re-prices the fee from the revised scope (`seasonalQuoteAtLock`, PJL-96's lock-point
+  rule), freezes it, and keeps the requirement. A signature after re-lock does not re-price.
+- **The invoice (cascade to the linked record):** `invoices.scopeHold` is set and cleared through
+  `workOrders.events` "resignature", so every scope-editing route is covered. While it is held, the
+  following all refuse (`awaiting_signature`): `payBlockReason` (pay page, portal pay link),
+  `openForOnSitePayment` (Take payment now, Tap to Pay), `/send` and `/resend`, the invoice-ready text,
+  and the text reminder.
+- **Deliberately left alone:**
+  - An office-recorded cash or cheque payment is still accepted, because the money was already received.
+  - The invoice's lines are not re-cut. Re-billing a revised scope is still the explicit
+    void-and-regenerate after the new signature (unchanged since 2026-08-06).
+
+**Test:** `scripts/test-resign-scope.mjs` (build:check). It covers seven cases:
+- notes and a relabel need nothing;
+- an added zone marks the WO and holds every door;
+- reverting clears the mark;
+- re-lock freezes the revised price;
+- the new signature is accepted and the original is kept;
+- a bypass flow before completion;
+- a signature on an unlocked WO is archived, not overwritten.
+
+Parent: 26 of 40 fail. Now: 40 of 40 pass.
+
+**Patrick's walk:** unlock a finished signed closing, add a zone, and see "needs a new signature"
+with Take payment and Send refused. Re-lock, then have the customer sign. Check the original signature
+is still in the history and the invoice is released.
+
+## 2026-09-26 — FLOW-31/23: after re-signing, the invoice bills what the customer signed
+
+Found by the Phase 1 E2E journeys (journey 6, PR #322). This reverses the entry above, which said the
+invoice's lines were "deliberately left alone": the new signature released the hold, and the invoice
+still billed the OLD scope. The pay link and Send were open again at the old price:
+- signed for 4 zones, re-signed at 6: billed the 4-zone price;
+- signed for 6, re-signed at 4: billed the 6-zone price, an **overcharge**.
+
+Nothing forced the void-and-regenerate that entry relied on.
+
+**Now:** when the new acceptance (signature or bypass) lands, the "resignature" listener in server.js
+(`holdOrReconcileInvoice`) first brings the invoice to the signed scope:
+`billing.billingFor(wo).lines`, the re-locked, frozen price. Only then is the hold released. This is
+done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
+- **Already bills that scope:** the hold is released and nothing else is written.
+- **An unsent draft** (no `sentAt`, no money recorded, not in QuickBooks): re-priced **in place**. It
+  is the same invoice, so the one-active-invoice rule holds. The lines are converted exactly as
+  `createDraft` converts them (the extracted `draftLinesFrom`). The previous lines and total are
+  kept in `scopeReconciliations`, and the history records `repriced_to_signed_scope`.
+- **A custom-size price Patrick confirmed** (PJL-96) stands when the signed scope still carries the
+  same suggestion, for example a zone added and then removed. If the size really changed (16 → 18),
+  the invoice is re-priced to the new suggestion and must be confirmed again, so it is held as
+  `price_unconfirmed` and charged at neither number meanwhile.
+- **Anything else is NOT rewritten:** a sent, part-paid or paid invoice, one with money recorded, one
+  already in QuickBooks, or a revised scope that can't be priced or bills $0.
+  - It is flagged instead: `scopeHold.reason = "revision_required"`, carrying the signed total, and
+    the history records `revision_required_after_resignature`.
+  - It stays held. The pay page, portal pay link, Take payment now, Tap to Pay, Send, Resend and the
+    texts all refuse, with the code `revision_required`.
+  - `invoices.revise()` clears it. The history records `revision_resolved`, and says whether the
+    revision matches the signed total.
+  - A flagged invoice that isn't sent (a QuickBooks draft, or $0) is resolved by void and regenerate.
+- **Patrick's rulings on #325 (2026-09-26):**
+  1. **Revise and the signed amount.** A revision **at or below** the signed total releases the hold,
+     so a deliberate discount needs no new signature. A revision **above** it keeps the hold, because
+     the customer hasn't authorized the higher amount; it needs their approval (a re-sign). The
+     history always records the signed amount, the revised amount, and whether it matched or was
+     discounted (`revision_resolved`, `revision_above_signed`). A signed scope that is $0 or couldn't
+     be priced is never released by a revision.
+  2. **Flagged drafts keep Void → Generate invoice**, including a part-paid draft: reverse the
+     deposit, void, generate, then record the deposit again. The test proves this path isn't a dead
+     end. An unsent, **unpaid**, non-QuickBooks draft still re-prices by itself.
+  3. **$0 signed scope → No Charge, never a $0 invoice.** An untouched draft is voided
+     (`voided_no_charge`). A sent one is flagged, and voiding it completes the path. Either way the
+     visit's service record is settled as no charge (`properties.settleServiceRecordAsNoCharge`), so
+     the visit reads **No charge**, not "Needs invoice".
+  4. **A hold blocks every way of taking or recording money.** `invoices.paymentHoldFor` is the one
+     rule. It covers:
+     - the pay page, pay link, Take payment and Tap to Pay;
+     - cash, cheque, e-transfer, card recorded by hand, and other (POST `…/payments`, checked under
+       the store lock through `refuseWhileHeld`);
+     - correcting a payment;
+     - Klarna capture;
+     - a manual Paid, Partially paid or Sent.
+
+     A card intent opened **before** the hold (a pay page left open, a reader armed) is cancelled at
+     Stripe when the hold goes on. Two things stay allowed:
+     - reversing a payment, because it takes no money and is what makes Void possible;
+     - the Stripe and Klarna finalizers recording money that has **already moved** at the processor
+       (FLOW-23, untouched), since refusing it would hide a real charge.
+
+     A static check fails if a new payment-recording call skips the rule.
+- **Idempotent.** A retried signature doesn't flip the resignature state, so the listener doesn't run.
+  A repeated reconcile finds "matches", or the same flag already set, and writes nothing.
+- `setScopeHold(false)` can no longer release a revision-required hold.
+
+**The whole workflow:**
+- **Customer:** nothing is sent by the re-price or the flag. The pay page's held wording is unchanged
+  ("This invoice is being updated").
+- **Patrick:** the office invoice page shows a "Revision required" card with what clears it. Send
+  explains the refusal.
+- **Capacity and calendar:** untouched.
+- **Linked records:** only the WO's active invoice. The WO, its priorAcceptances and the service
+  record are untouched.
+- **Audit:** the original signature is kept (priorAcceptances), and so are the original invoice
+  lines (scopeReconciliations, history, revisions).
+- **Deliberately left alone:**
+  - FLOW-23's finalizer, `stripe.js`, `pay.js` and the webhook are unchanged.
+  - An office-recorded cash or cheque payment is still accepted while held, as before.
+  - An open Stripe intent for the old amount is cancelled by the existing amount-mismatch rule on the
+    next tap or pay-page visit.
+
+**Tests:**
+- `scripts/test-resign-reprice.mjs` (build:check): 80 of 126 fail on the parent, 51 of 126 fail on
+  #325's first version, and 126 of 126 pass now. It covers:
+  - the draft re-priced in both directions;
+  - a sent invoice flagged, every door blocked, then Revise clears it;
+  - money recorded means flagged, not rewritten;
+  - a confirmed custom price kept, and a real size change re-confirmed;
+  - Revise below, at and above the signed amount;
+  - every payment door under both kinds of hold, each reopened only after a legitimate reconcile;
+  - open intents cancelled;
+  - $0 leading to No Charge;
+  - the static every-caller check;
+  - a retry is a no-op;
+  - nothing is sent;
+  - the office card.
+- `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
+  `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
+
+## 2026-09-28 — FLOW-23: QuickBooks gets what the ledger applied (FLOW-23 touched — re-verified by tests, awaiting a real QuickBooks payment)
+
+After #332 the ledger applies a Stripe charge only up to what the invoice owes; any excess is a
+payment exception. The finalizer's QuickBooks call was left on its old rule: post the amount the
+intent was created for, and only when the charge equalled the invoice's total or balance.
+
+**What main did (reproduced, `scripts/test-qbo-payment-amount.mjs`, against a stubbed sandbox QuickBooks):**
+- **Part cash, then the open pay page's card for the full total (S3):** QuickBooks was posted the
+  **full $101.70 charge** while the ledger applied $61.02. The $40.68 excess became a payment of
+  that invoice in QuickBooks.
+- **Revised down (S7) or up while the pay page was open:** the charge equalled neither the new
+  total nor the balance, so QuickBooks was posted **nothing** even though the ledger applied a
+  payment.
+- **Everything else already agreed:** exact, part cash + card for the balance, Tap to Pay, a
+  duplicate delivery, a wholly excess charge, a reversal, and an invoice never pushed to
+  QuickBooks.
+
+**The paths:** there is exactly one QuickBooks payment call, `quickbooks.recordPaymentForInvoice`,
+and it is made only by `finalizeStripeInvoicePayment`. The pay page, the confirm, the webhook,
+Tap to Pay and its retry all go through it. Staff cash/cheque and Klarna capture never post a
+QuickBooks payment.
+
+**The rule:** post `decided.applied` (`invoices.recordProcessorPayment`'s decision), linked to the
+invoice's `quickbooksInvoiceId`, when it is above zero.
+- An excess stays a PJL payment exception and is posted nowhere.
+- Nothing applied posts nothing.
+- A duplicate or reversed (#348) payment returns before the call, so each decided Stripe payment
+  posts at most once.
+
+**Exact QuickBooks behavior (unchanged apart from the amount):**
+- **The request:** `GET /invoice/<id>` (for its CustomerRef), then `POST /payment` with `TotalAmt` =
+  the applied amount, one `Line` of that amount linked to the invoice, and
+  `PrivateNote: "Auto-recorded from QB Payments charge <ch_…>"`. The returned id is stored as
+  `quickbooksPaymentId`.
+- **Idempotency is ours, not QuickBooks':** no `requestid` is sent, and QuickBooks does not dedupe
+  on the note. The code comment that said otherwise is corrected.
+- **If QuickBooks fails after the ledger took the payment:** the payment stands, the invoice reads
+  Paid, the failure is logged and returned as `warning`, and `quickbooksPaymentId` stays empty.
+  **It is never retried automatically:** every redelivery is a duplicate. Recovering it is a
+  manual QuickBooks entry.
+
+**Deliberately left alone (QuickBooks follow-ups, not this fix):**
+- **A reversal (#348) does not remove the payment from QuickBooks.** After a refund plus a new
+  payment, QuickBooks holds both payments against one invoice.
+- **A failed QuickBooks post** leaves no invoice-history line and has no retry queue.
+- **After a revision,** the invoice push to QuickBooks is still best-effort, as before.
+
+**Tests:**
+- `scripts/test-qbo-payment-amount.mjs` (39 checks; **the old code fails 7**) covers:
+  - Q1 exact;
+  - Q2 duplicate delivery;
+  - Q3 partial;
+  - Q4 overpayment;
+  - Q5 wholly excess;
+  - Q6/Q7 revised down/up;
+  - Q8 Tap to Pay;
+  - Q9 QuickBooks fails;
+  - Q10 reversal then a new payment;
+  - Q11 no QuickBooks invoice.
+- **The test stub gains a sandbox-only QuickBooks:** invoice read and payment post, with a "fail"
+  mode. The production Intuit host stays refused.
+
+## 2026-09-27 — FLOW-23: a reversed Stripe payment stays reversed (S6) (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
+
+A Stripe payment is recorded, refunded in the Stripe dashboard, and Patrick reverses it in the ledger
+(`DELETE /api/invoices/:id/payments/:pid`). `invoices.removePayment` **deleted the ledger line**, and
+that line was the only lasting record that the Stripe payment had been decided. A refund does not
+change the intent: it stays `succeeded` at Stripe. So every path that finalizes it again asked
+`processorPaymentSeen` "decided?" and could get **no**.
+
+**The paths that re-ingest a Stripe payment** are the five callers of
+`finalizeStripeInvoicePayment`. There is no reconciliation sweep.
+- the reopened pay page (`/api/pay/invoice/:id/payment-intent` reads the stored intent);
+- the pay page's confirm (`/api/pay/invoice/:id/charge`);
+- the `payment_intent.succeeded` webhook;
+- the Tap to Pay retry (`/terminal-intent`, the stored terminal intent);
+- Tap to Pay finalize (`/terminal-intent/finalize`).
+
+**What main did (reproduced, `scripts/test-payment-reversal.mjs`):**
+- **The simplest case was masked by coincidence:** `inv.stripeChargeId` still named the refunded
+  charge, so it read as a duplicate. The side effects were still wrong:
+  - the customer reopening the pay page was told **"This invoice has already been paid"** while the
+    whole balance was owing, and couldn't pay;
+  - a stale confirm of the refunded payment returned **200**, so the pay page would say "Payment
+    received".
+- **Once a later card had moved `stripeChargeId` on,** there was nothing left to match:
+  - **Another card settled the invoice, then the refunded one reappeared:** it opened a false
+    payment exception, alerted the office, and sent a second receipt.
+  - **Two cards were each refunded and reversed, then the older one reappeared:** it went back on
+    the ledger, the invoice read **Paid** again, and a receipt went out.
+
+**The rule, once — `processorPaymentSeen` in `invoices.js`:**
+- `removePayment` keeps a reversed processor payment's ids for good in
+  **`reversedProcessorPayments[]`**. It records `processorRef`, and the `pi_`/`ch_` ids from the
+  notes of a line from before `processorRef`. It also keeps the payment id, amount, method, when it
+  was recorded and reversed, by whom, and why. Cash and cheque carry no processor id and record
+  nothing.
+- `processorPaymentSeen` answers `"reversed"` first, then `"decided"`, then `null`.
+  `recordProcessorPayment` on a reversed payment changes nothing on the ledger, sends nothing, and
+  opens no exception. It appends one `processor_payment_after_reversal` history line per arrival,
+  naming the payment.
+- The field is excluded from `update()`'s allowlist, so nothing else can overwrite it.
+
+**Each path:**
+- **Webhook:** no-op, audit line only.
+- **Confirm:** 409 `payment_reversed` ("refunded, no longer counts, refresh"), never "Payment
+  received".
+- **Tap to Pay finalize:** 409 `payment_reversed`.
+- **Reopened pay page:** a **new** intent for what is owed. Its idempotency key adds
+  `-after-<refunded intent>`, because the plain `pjl-<invoice>-<amount>` key would make real Stripe
+  (keys live 24 hours) hand back the refunded intent.
+- **Tap to Pay retry:** unchanged. Its key already names the stored intent, so it starts a new
+  payment for the balance.
+- **A genuinely new Stripe payment** (a different id) is decided exactly as before.
+
+**The whole workflow:**
+- **Customer:** after a refund, can pay again; is never told a refunded payment was received; gets
+  no second receipt.
+- **Patrick:** no false exception or alert; the invoice history shows the original payment, the
+  reversal and every later arrival.
+- **Linked records:** the ledger, status, `paidAt`, deposits and QuickBooks are untouched by a
+  redelivery, because the finalizer returns before any of them.
+
+**Deliberately left alone:**
+- **Refunds:** `charge.refunded` is still not handled (PAY-03). Reversing in the ledger stays
+  Patrick's step.
+- **Klarna capture:** records through its own path, not the Stripe finalizer.
+- **QuickBooks.**
+
+**Tests:**
+- `scripts/test-payment-reversal.mjs` (47 checks; **the old code fails 20**) covers:
+  - A: reopen, webhook ×2, confirm retry, then a new payment and the refunded one again;
+  - B: another card settles it;
+  - C: Tap to Pay finalize retry and next tap;
+  - D: the retry key;
+  - F: two refunded cards;
+  - E: cash.
+- Journey 4 gains step E2. **The old code fails 5**; the new code passes 71/71.
+- The test Stripe stub now logs each call's Idempotency-Key.
+
+## 2026-09-27 — FLOW-23 / TAPTOPAY-01: a second tap never starts a second charge (FLOW-23 touched — re-verified by tests)
+
+This was E2E journey 5's finding, item 4. `POST /api/invoices/:id/terminal-intent` read the invoice's
+stored Tap to Pay intent but recognised only two states:
+- "collectable": reuse it (or cancel and replace it if the balance changed);
+- "succeeded": finalize it.
+
+Everything else fell through and **created a new intent**. That included `processing`, where the
+reader dropped mid-charge. The idempotency key includes the stored intent's id, so Stripe saw a new
+key and made a real second charge, while the first was still processing and couldn't be cancelled.
+Three more ways to reach a second intent:
+- If Stripe couldn't be read, the route also fell through and created one.
+- A finalize error on a succeeded intent was caught as a "lookup failure" and fell through the same
+  way.
+- A failed cancel of a stale open intent fell through to create, even though the intent might have
+  started moving money in the meantime.
+
+**The rule, once — `stripe.intentPhase(intent)`:**
+- **collectable** (`requires_payment_method` / `_confirmation` / `_action`): reuse it for the same
+  amount, or cancel it and replace it if the balance changed. It can't have taken money. If Stripe
+  refuses the cancel, start nothing.
+- **in flight** (`processing`, `requires_capture`, or any state Stripe adds later): **refuse**, with
+  409 `payment_in_progress`, the intent's id and its state. Create nothing and cancel nothing; the
+  reader's own outcome decides.
+- **succeeded:** finalize it through #332's rule. If it paid in full, 409 `already_paid`. If it paid
+  less than is now owed (the invoice was revised up), a new intent for the rest. If finalizing fails,
+  409 `payment_not_finalized`: never charge again.
+- **canceled** (or no longer at Stripe, 404): a fresh intent.
+- **unreadable** (a network error): 502 `stripe_unreadable`. Never charge beside a payment we can't
+  see.
+
+**One tap at a time per invoice:** `withTerminalIntentLock` queues simultaneous starts, so the second
+sees the first's intent. It's in-process, and the server runs as one instance.
+
+**Deliberately left alone:**
+- **Pay page:** its intent route (`/api/pay/invoice/:id/payment-intent`) has the same "processing
+  falls through" shape. There, the idempotency key doesn't include the stored intent, so Stripe
+  returns the original intent instead of minting a second. Noted, not changed.
+- **Field app (#305, on hold):** its InvoiceScreen should show `payment_in_progress` as "already
+  processing, check the invoice" when that branch is next updated.
+- **Unchanged:** eligibility (held, unconfirmed, Bill later, paid, void), finalize, and #332's
+  accounting.
+
+**Tests:**
+- `scripts/test-taptopay-second-tap.mjs` (38 checks; **the old code fails 17**, 7 of them the new
+  structure/rule checks) covers:
+  - a second tap while processing;
+  - simultaneous first taps, and simultaneous taps while processing;
+  - a stored intent that already succeeded;
+  - declined → same intent, cancelled → fresh intent;
+  - a balance change while open (replaced) and while processing (refused);
+  - Stripe unreadable;
+  - #332 interplay (cash in full while processing, then the charge completes → one exception);
+  - a Bill-later draft and an unconfirmed price still refused.
+- Journey 5's finding is now an assertion. **The old code fails 3**; the new code passes 52/52.
+- The test Stripe stub gains a `canceled` outcome.
+
+## 2026-09-27 — FLOW-23: a second card payment is a payment exception, never a log line (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
+
+Found by E2E journey 4, reproduced as eight scenarios. Money that reached Stripe but not the invoice
+was hidden:
+- **S1:** the pay page and Tap to Pay were both approved. The second payment was only a server log.
+- **S2:** cash in full, then the open pay page's card. **Silent**: the pay page had stored its intent
+  id, so the charge looked like a repeat.
+- **S3:** part cash, then the card for the full total. The ledger refused the card, so the invoice
+  said $61.02 owing on a $40.68 overpayment.
+- **S4:** cash, then an open Tap to Pay intent. A warning on the phone only.
+- **S7:** the invoice was revised down while the pay page was open. The "wrong amount" check refused
+  the charge: $0 paid.
+- **Controls:** S5 (the same webhook twice) and S8 (two confirms and the webhook at once) were
+  idempotent in the ledger. S8 sent three receipts.
+
+**The rule, once — Patrick's rulings:** `invoices.recordProcessorPayment`, inside the invoice store
+lock, keyed on the Stripe payment id, makes ONE accounting decision per distinct payment.
+- **Already decided** (a ledger line with that `processorRef`, a pre-rule ledger line naming the
+  charge in its notes, an exception with that payment, or the invoice's own `stripeChargeId`): no
+  change, no receipt, no alert.
+- **Otherwise:** apply up to the balance owed. Any excess becomes ONE open **payment exception**
+  (`paymentExceptions[]`, off the ledger). It keeps the total charge, the amount applied, the excess,
+  method/card, the Stripe payment and charge ids, the arrival path and time, the reason, the alert
+  status, the resolution, and its own history.
+- **Void invoices:** a void invoice owes nothing, so the whole charge is excess.
+- **The balance:** the ledger never exceeds the total, so the balance never goes negative.
+
+**The whole workflow:**
+- **Customer:**
+  - **Normal payment:** unchanged.
+  - **Overpayment:** the pay page, the thanks page and the receipt say *"Payment received. We
+    received more than the remaining invoice balance. PJL will review the extra amount and contact
+    you if any action is required."* No refund is promised. The receipt is for what was charged.
+  - **Customer views:** the pay and portal views stay whitelisted, so no exception or Stripe id
+    reaches them.
+- **Patrick:**
+  - one admin alert per new exception: invoice, work order, customer, charge, applied, excess,
+    card, Stripe id, and a link to the invoice;
+  - a red **Needs refund / reconciliation** card at the top of the invoice, with **Mark refunded** /
+    **Mark reconciled** (admin, note required, nothing deleted);
+  - a **Needs refund** list filter and row badge (`invoices.needsReconciliation`, the one rule).
+- **Linked records:** a partly applied charge settles the invoice as before (deposits hook, stored
+  Stripe ids). A wholly excess charge leaves them alone. Capacity and the calendar are untouched.
+- **Audit:** the exception and its history, plus `payment_exception_opened` and `..._resolved` on
+  the invoice history. The success attempt is written once per decided payment.
+
+**Deliberately left alone:**
+- **QuickBooks:** the finalizer's QBO payment call is byte-for-byte the same, in the same cases, at
+  the same amount. S3 still sends QuickBooks the full intent amount; that is for the QuickBooks work.
+  (Fixed since: see "QuickBooks gets what the ledger applied" above.)
+- **Nothing is refunded automatically** (PAY-03 unchanged).
+- **Staff cash/cheque over the balance** is still refused on screen.
+- **S6**, a reversed payment re-recorded by a reopened pay page, is its own PR. This change only
+  guarantees a reversal raises no false exception. (Fixed since: see "a reversed Stripe payment
+  stays reversed" above.)
+- **Stopping stale/open intents and Tap to Pay's second tap** is item 4.
+- **Invariant 4** of `HANDOFF_STRIPE_PAYMENTS.md` §6 is amended accordingly.
+
+**Re-verification of FLOW-23 (PASS):**
+- The suites all pass: `test-stripe` 74, `test-taptopay-server` 33, `test-onsite-payment` 34,
+  `test-resign-reprice` 126 (its structural "every recording call asks the hold" check now counts
+  `recordProcessorPayment`), and journey 4 (64).
+- `test-payment-exceptions.mjs` (63; **the old code fails 44**) covers S1–S8, resolving, the list
+  filter, and the customer views.
+- **Awaiting a walked acceptance:** the next real payment must still receipt normally; the exception
+  path can only be walked with a real double payment.
+## 2026-09-27 — FLOW-22/31: the invoice text never says "emailed" before it is
+
+Found by E2E journey 1 (a FINDING until now). Five minutes after a **Bill later** Finish the
+customer was texted *"PJL Land Services: Your invoice for <street> has been emailed to you. If you
+don't see it, please check spam/junk. View or pay it here: …"*. Nothing had been emailed: a Bill-later
+invoice is a draft until the office reviews and Sends it, and the texted portal page showed the draft
+with no Pay button. The customer's completion email, meanwhile, correctly said "An invoice will
+follow".
+
+**The rule, once:** `notify-customer.sendInvoiceReadySMS` sends only for an invoice that has been
+emailed (`sentAt`). Both fire paths go through it: the cascade's timer and the 2-minute
+`sweepPendingInvoiceSMS`. An unsent invoice is skipped, `customerSmsScheduledAt` is cleared (so the
+sweep doesn't retry), and `customer_sms_skipped_not_emailed` goes on the invoice history once. The
+invoice page's text status reads "Not sent — the invoice hadn't been emailed; Send texts the
+customer".
+
+**The whole workflow:**
+- **Customer:** gets the completion email at Finish ("An invoice will follow") and no text. When the
+  office Sends, they get the invoice email and, 30s later, the existing "we just emailed your invoice…
+  check Junk/Spam" text. That text is true, and it is unchanged.
+- **Patrick:** gets the same alerts as before. The invoice page shows why no text went.
+- **Capacity/calendar:** untouched.
+- **Linked records:** no work order, property or season-plan change; the invoice changes only its
+  SMS fields and history.
+- **Audit:** the skip is on the invoice history. `customer_sms_scheduled` stays, so it shows that the
+  timer was set and then held back.
+
+**Deliberately left alone:**
+- The cascade still schedules the timer for Bill-later invoices, so an invoice Sent inside those five
+  minutes is texted as before.
+- In that case the customer can get both the timer's text and Send's junk-mail text. This is
+  pre-existing, not new.
+- The body's wording is unchanged.
+- Paid-on-site invoices are not scheduled, as before.
+- Manual reminders (`sendInvoiceReminderSMS`) are separate and unchanged.
+
+**Tests:**
+- `scripts/test-invoice-text-truthful.mjs` (12; the old code fails 5).
+- Journey 1 now asserts no text at Finish (the old code fails 3).
+- The control in `test-price-confirm.mjs` D now reads "scheduled" from history, because the timer
+  clears the schedule once it fires.
+
+## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
+
+Patrick: "I don't want separate pricing logic patched independently in Finish,
+Generate Invoice, payment, etc."
+
+Before, Finish (the completion cascade), "Generate invoice now" and the
+technician's pre-Finish preview each assembled the price themselves. Each
+loaded the property, checked for a commercial account, re-resolved the
+seasonal fee (frozen once signed) and turned a price-pending line into its
+suggestion. The three agreed only because the copies matched.
+
+Now `server/lib/billing.js` `billingFor(wo)` returns the lines an invoice
+bills, the total, no-charge, the fee decision, and the corrected quote for
+an unlocked WO. All three call it. It is a pure read, and the cascade alone
+decides whether to store the correction on an unlocked WO. The duplicated
+preparation is gone from server.js and completion-cascade.js;
+`lineItemsFromWo` moved there too, re-exported by the cascade. The lock
+points still PRICE the fee through `pricing.pricedQuoteForLock`, but load
+their inputs through the same `billing.billingInputs`. Payment reads the
+invoice; it never priced anything. WO creation still seeds the baseline line
+through `seasonalFeeDecision`; that is seeding, not billing.
+
+No price or rule changed. Test: `scripts/test-billing-one-path.mjs`, 20 of
+32 fail on the parent. The failures are the single-path requirement; the
+three already agreed on numbers, which the test now locks in. With the
+change, 32 of 32 pass across five states: walked more than booked, a custom
+size, a commercial account, a per-property rate and a $0 rate.
+
 ## 2026-09-23 — FIELD-VERSION-01: the phone says which commit it runs (FLOW-31/32 release check, awaiting iPhone acceptance)
 
 On 2026-09-23 the server ran main while every phone still ran JavaScript from
@@ -5882,3 +7662,121 @@ Verified:
 **Needs a real tap:** one small live Tap to Pay payment from the Mac build,
 refunded in Stripe, with the invoice reading Paid and the ledger line
 reading "Tap to Pay on iPhone".
+
+## 2026-09-26 — HOURS-01: an office correction keeps the field's original, and one calculation bills it
+
+First of Patrick's four Daily Records backend-safety items: "1. Preserve
+original labourer counts when corrected. 2. Add audited clock-time
+corrections. 3. Make billing and project metrics use one shared
+effective-hours calculation." (Item 4, the Daily Records tab itself, is
+the next release.) His rule for the whole class of change, verbatim:
+
+> "Preserve the original value. Record the corrected value, who changed
+> it, when and why. Calculate billing from the effective corrected value.
+> Never represent an office correction as a new field work session."
+
+**What was wrong.** Three separate defects, all on the money path:
+
+1. `setLabourersForSession()` did `sess.labourersOnSite = safeCount` — a
+   straight overwrite — and its history line recorded only the NEW count.
+   The number the technician entered on site was gone, unrecoverably.
+2. **There was no route to correct a clock time at all.** A technician who
+   forgot to clock out at 3pm and noticed at 7pm left four phantom
+   person-hours on a T&M invoice, and the only remedy was hand-editing
+   `work-orders.json`.
+3. `(out − in) × labourers` existed in **three** places: `computeProjectMetrics()`,
+   `computeTAndMBilling()`, and the classic project page's day list in
+   `server/project.js`. Three copies of a money calculation is three
+   chances to drift, and the one that drifts silently is the one that bills.
+
+**The storage shape.** `session.inAt / outAt / labourersOnSite` always
+carry the **effective** value; `session.original = { inAt, outAt,
+labourersOnSite }` is stamped **once**, on the first correction, and
+`session.corrections[]` is append-only `{ at, by, reason, field, from, to }`.
+The live fields hold the effective value deliberately. The alternative —
+freeze the live field as the original and route every reader through a
+function — reads more elegantly and **fails silently**: any reader you miss
+quietly bills the uncorrected number and nothing looks wrong. This way a
+missed reader shows the *correct* figure and only loses audit detail. When
+one shape fails loudly and the other fails silently, and the subject is
+hours you invoice, take the one that fails loudly.
+
+`original` is stamped once rather than per-correction because "the
+original value" means what the crew recorded, not what the previous
+correction happened to leave behind — correcting a count twice still
+shows the technician's own number.
+
+**One calculation.** `server/lib/session-hours.js` (new, pure, no I/O) is
+now the only person-hours loop. Both `computeProjectMetrics()` and
+`computeTAndMBilling()` call `sumPersonHours()`; the classic page no
+longer calculates at all and reads a server-computed `personHours` served
+on `GET /api/work-orders/:id` (Patrick's standing rule from the Tasks
+release: "display server-calculated totals instead of independently
+recalculating them"). The **one** legitimate difference between metrics
+and billing is now a single argument — `openSessions: "toNow"` for
+metrics (a crew still clocked in shows hours so far) versus `"skip"` for
+billing (you cannot invoice a session that has not ended). They can no
+longer answer differently for any other reason.
+
+**The new route.** `PATCH /api/work-orders/:id/sessions/:sid/times`,
+body `{ inAt?, outAt?, reason }`. Refusals, each one an invoice that would
+otherwise be wrong in a way nobody notices: no reason (422), clock-out
+before clock-in (422), either time in the future (422), a result over 24h
+(422 — the classic year typo, which would otherwise bill thousands of
+hours), nothing supplied (422), a locked/invoiced work order (409).
+Re-sending an unchanged value writes **no** correction entry — an audit log
+full of `3 → 3` is how a real correction gets lost.
+
+**Gating.** The route is `"admin"` in `needsAuth()`. This is the **third**
+admin-only work-order route (after unlock/relock and the fee waiver) and
+`test-warranty-claims.mjs`'s canary was updated from two to three with the
+reasoning rather than the gate being weakened: all three change what the
+customer is charged. Setting the crew **count** stays at `"user"` — that is
+a live field action. Per Patrick's field/office split, "technicians clock
+in/out" but "review daily records and labour" is desk work.
+
+**Two defects found and fixed during the work, both mine, both caught by
+the repo's own guards rather than by me:**
+
+- The first cut of both routes called `await requireAdmin(req)` and threw
+  the result away. `requireAdmin` **returns null on failure rather than
+  throwing**, so that call gated nothing — a no-op wearing the shape of a
+  gate. `scripts/test-admin-gates.mjs` exists for exactly this and caught
+  it. The gate now lives in `needsAuth()` with the rest of them.
+- The classic page was rewired to read the server's figure, but
+  `personHours` is a **sibling** of `workOrder` in the response and the
+  page's loader does `.map((d) => d.workOrder)` — the field was dropped on
+  the floor. Every server-side assertion passed (the API really did serve
+  9.00) while the page would have drawn **0.00 person-hrs on every day of
+  every build job**. A total served correctly and displayed wrongly is
+  worse than one simply wrong, because everything upstream looks healthy.
+  This is why `test-corrected-hours-on-screen.mjs` reads rendered text.
+
+**Verified:**
+- `scripts/test-session-hours-protected.mjs` (44 assertions, in
+  `build:check`) — **run against the unfixed code first: 12 passed, 29
+  failed.** On old code the T&M invoice billed **12 hrs / $1,140** where
+  the corrected figure is **9 hrs / $855**, and the correction route
+  answered 404.
+- `scripts/test-corrected-hours-on-screen.mjs` (10 assertions, Playwright,
+  its own npm script) — the day list reads 12.00, the office corrects,
+  the day list reads 9.00. **Run against the dropped-field bug: 3 fail,
+  showing `0.00 person-hrs`.**
+- Four sandbox test harnesses that copy `work-orders.js` / `projects.js`
+  into a temp dir needed `session-hours.js` added to their dependency
+  lists (`test-wo-completedat`, `test-store-concurrency`, `test-wo-unlock`,
+  `test-siteplan-calibration`) — each verified green afterwards.
+- The rest of `build:check` is green; the only failures in this sandbox are
+  the pre-existing pjl-field ones (`npm ci` not run in `pjl-field/`; CI
+  installs them).
+
+**No flow marked PASS was touched.** FLOW-23 (payments) is untouched: this
+changes what `computeTAndMBilling` totals, not how an invoice is charged.
+
+**Patrick's acceptance test — not yet walked:** (1) open a build job with a
+logged day and note its person-hours on the classic project page; (2)
+correct that session's clock-out to an earlier time with a reason; (3)
+confirm the day list now shows fewer hours, and that the original time is
+still on the record; (4) confirm a technician signed in on the phone
+cannot reach the correction; (5) on a T&M job, confirm the labour line
+bills the corrected hours.

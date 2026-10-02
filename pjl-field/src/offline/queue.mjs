@@ -82,9 +82,16 @@ function merge3(base, mine, theirs, prefer, path, conflicts) {
   // The office's only change was the server's stamp: the phone's edit
   // (including removing the row) stands.
   if (equal(withoutStamp(theirs), withoutStamp(base))) return mine;
-  if (prefer === 'mine') return mine;
-  if (prefer === 'theirs') return theirs;
-  conflicts.push(path.join(' › '));
+  // `prefer` is the tech's answer for the clashes they were SHOWN, by path
+  // (PJL-98 gap 4). A plain string is the older, whole-record answer that
+  // a phone may still carry from the previous release.
+  const where = path.join(' › ');
+  const choice = typeof prefer === 'string' ? prefer : prefer?.[where];
+  if (choice === 'mine') return mine;
+  if (choice === 'theirs') return theirs;
+  // Both values travel with the clash, so "Keep mine" can keep the office's
+  // in the visit notes instead of throwing it away.
+  conflicts.push({ path: where, mine: mine ?? null, theirs: theirs ?? null });
   return mine;
 }
 
@@ -101,9 +108,22 @@ export function createQueue({ store, transport }) {
     state = next;
     emit();
   };
+  // Which zone drafts still count as unrecorded work (PJL-98 gap 2). A
+  // draft written against a zone that has since left the visit — the phone
+  // removed it, or the OFFICE did — can never be opened again, so it must
+  // not hold sign-off; it is kept for the Finish note instead. "Written
+  // against" is stamped when the draft is saved (`draftZones`), so a draft
+  // for a zone this phone never listed still blocks, as it always did.
+  const zoneDrafts = key => {
+    const names = Object.keys(state.drafts[key] || {}).filter(name => name.startsWith('zone:'));
+    const onVisit = new Set((view(key)?.zones || []).map(z => String(z?.number)));
+    const seen = state.draftZones?.[key] || {};
+    const stale = names.filter(name => seen[name] && !onVisit.has(name.slice(5)));
+    return { live: names.filter(name => !stale.includes(name)), stale };
+  };
   const status = key => ({
     pending: state.pending.filter(p => p.key === key).length,
-    drafts: Object.keys(state.drafts[key] || {}).filter(name => name.startsWith('zone:')).length,
+    drafts: zoneDrafts(key).live.length,
     error: state.errors[key] || null,
     syncing: !!draining,
   });
@@ -126,7 +146,9 @@ export function createQueue({ store, transport }) {
     if (!value) throw new Error('Open this record while connected before editing it offline.');
     return value;
   };
-  const patch = (key, values) => {
+  // `clearDrafts`: drafts to drop in the SAME commit (a note that carries a
+  // draft's text must not be written without the draft going, or twice).
+  const patch = (key, values, { clearDrafts = [] } = {}) => {
     const before = requireRecord(key);
     const changed = Object.fromEntries(Object.entries(values).filter(([k, v]) => !equal(before[k], v)));
     if (!Object.keys(changed).length) return view(key);
@@ -139,7 +161,10 @@ export function createQueue({ store, transport }) {
     commit(s => {
       s.pending.push({ id: `edit-${++s.sequence}`, key, kind: 'patch', patch: copy(changed),
         before: Object.fromEntries(Object.keys(changed).map(k => [k, before[k] ?? null])) });
-      for (const n of removedZones) if (s.drafts[key]) delete s.drafts[key][`zone:${n}`];
+      for (const name of [...removedZones.map(n => `zone:${n}`), ...clearDrafts]) {
+        if (s.drafts[key]) delete s.drafts[key][name];
+        if (s.draftZones?.[key]) delete s.draftZones[key][name];
+      }
     });
     return view(key);
   };
@@ -152,16 +177,25 @@ export function createQueue({ store, transport }) {
     commit(s => { s.sequence++; s.pending.push({ id, key, kind: 'photo', preview }); });
     return view(key);
   };
-  const acknowledge = (entry, remote) => {
+  // `sent`: what actually went to the server for each field (a merge of the
+  // tech's edit and the office's changes), when anything was sent.
+  const acknowledge = (entry, remote, sent = {}) => {
     commit(s => {
       s.records[entry.key] = copy(remote);
       s.pending = s.pending.filter(p => p.id !== entry.id);
       // Rebase the next edit's comparison onto the acknowledged normalized
-      // record, but only where it was based on this exact submitted value.
+      // record, but only where it was based on this exact submitted value —
+      // and only when the server's copy IS that value (plus its own ids and
+      // defaults). If office changes were merged in, the next edit was made
+      // without them; rebasing onto them would make its stale copy look like
+      // a deliberate undo, and the office's edit would be reverted in
+      // silence (PJL-98 gap 1). Left un-rebased, the next edit merges
+      // against the office's change like any other.
       if (entry.kind === 'patch') {
         for (const [field, submitted] of Object.entries(entry.patch)) {
           const next = s.pending.find(p => p.key === entry.key && p.kind === 'patch' && field in p.patch);
-          if (next && equal(next.before[field], submitted)) next.before[field] = copy(remote[field] ?? null);
+          const onlyMine = (!(field in sent) || equal(sent[field], submitted)) && includesSubmitted(remote[field], submitted);
+          if (next && onlyMine && equal(next.before[field], submitted)) next.before[field] = copy(remote[field] ?? null);
         }
       }
       delete s.errors[entry.key];
@@ -185,7 +219,7 @@ export function createQueue({ store, transport }) {
             if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
             const remote = await transport.read(entry.key);
             if (!remote) throw issue('The server no longer has this record. Your local copy is retained.', 'missing');
-            let result;
+            let result, sent;
             if (entry.kind === 'photo') {
               if ((remote.photos || []).some(p => p.clientUploadId === entry.id)) result = remote;
               else {
@@ -204,21 +238,24 @@ export function createQueue({ store, transport }) {
                 if (!equal(merged, remote[field])) changes[field] = merged;
               }
               if (conflicts.length) {
+                const paths = conflicts.map(c => c.path);
                 throw Object.assign(issue(
-                  `The office also changed ${conflicts.slice(0, 2).join(' and ')}${conflicts.length > 2 ? ` (+${conflicts.length - 2} more)` : ''}. Choose which version to keep.`,
-                  'conflict'), { paths: conflicts });
+                  `The office also changed ${paths.slice(0, 2).join(' and ')}${paths.length > 2 ? ` (+${paths.length - 2} more)` : ''}. Choose which version to keep.`,
+                  'conflict'), { paths, clashes: conflicts, entryId: entry.id });
               }
               if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
                 throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
               }
+              sent = changes;
               result = Object.keys(changes).length
                 ? await transport.patch(entry.key, changes, remote.updatedAt)
                 : remote;
             }
-            acknowledge(entry, result);
+            acknowledge(entry, result, sent);
           } catch (err) {
             blocked.add(entry.key);
-            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network', ...(err.paths ? { paths: err.paths } : {}) }; });
+            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network',
+              ...(err.paths ? { paths: err.paths, clashes: err.clashes, entryId: err.entryId } : {}) }; });
           }
         }
       } catch (err) {
@@ -232,11 +269,33 @@ export function createQueue({ store, transport }) {
   // The tech's answer to a true conflict: keep the phone's version of the
   // contested parts, or take the office's. Everything that did not
   // conflict merges either way. The next flush applies it.
-  const resolveConflict = (key, prefer) => {
+  //
+  // The answer covers exactly what the tech was shown: the paths of the
+  // edit that raised the clash. It used to be stamped on EVERY pending edit
+  // of the record, deciding clashes nobody had seen (PJL-98 gap 4); a later
+  // clash is now asked for like the first. `note` ({ key, field, text }) is
+  // appended in the same commit — the office's overridden values.
+  const resolveConflict = (key, prefer, { note } = {}) => {
     if (!['mine', 'theirs'].includes(prefer)) throw new Error('Choose mine or theirs.');
+    const shown = state.errors[key]?.code === 'conflict' && state.errors[key].entryId && Array.isArray(state.errors[key].paths)
+      ? state.errors[key] : null;
+    const noted = note?.text ? view(note.key) : null;
     commit(s => {
-      for (const p of s.pending) if (p.key === key && p.kind === 'patch') p.prefer = prefer;
+      for (const p of s.pending) {
+        if (p.key !== key || p.kind !== 'patch') continue;
+        if (!shown) { p.prefer = prefer; continue; } // An error recorded by the previous release.
+        if (p.id !== shown.entryId) continue;
+        const answers = typeof p.prefer === 'string' || !p.prefer ? {} : { ...p.prefer };
+        for (const path of shown.paths) answers[path] = prefer;
+        p.prefer = answers;
+      }
       delete s.errors[key];
+      if (noted) {
+        const current = noted[note.field] || '';
+        s.pending.push({ id: `edit-${++s.sequence}`, key: note.key, kind: 'patch',
+          patch: { [note.field]: current ? `${current}\n\n${note.text}` : note.text },
+          before: { [note.field]: noted[note.field] ?? null } });
+      }
     });
   };
   return {
@@ -251,9 +310,18 @@ export function createQueue({ store, transport }) {
     },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     keys: () => Object.keys(state.records),
-    draft(key, name, value) { commit(s => { s.drafts[key] ||= {}; s.drafts[key][name] = copy(value); }); },
+    draft(key, name, value) {
+      const onVisit = name.startsWith('zone:') && (view(key)?.zones || []).some(z => String(z?.number) === name.slice(5));
+      commit(s => {
+        s.drafts[key] ||= {}; s.drafts[key][name] = copy(value);
+        if (onVisit) { s.draftZones ||= {}; (s.draftZones[key] ||= {})[name] = true; }
+      });
+    },
     getDraft: (key, name) => copy(state.drafts[key]?.[name] ?? null),
-    clearDraft(key, name) { commit(s => { if (s.drafts[key]) delete s.drafts[key][name]; }); },
+    clearDraft(key, name) {
+      commit(s => { if (s.drafts[key]) delete s.drafts[key][name]; if (s.draftZones?.[key]) delete s.draftZones[key][name]; });
+    },
+    zoneDrafts,
     photoPayload: id => store.getBlob(id),
   };
 }

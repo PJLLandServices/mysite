@@ -117,7 +117,10 @@ function normalizePayment(raw) {
     method,
     receivedAt: raw.receivedAt || new Date().toISOString(),
     receivedBy: String(raw.receivedBy || "admin").slice(0, 80),
-    notes: String(raw.notes || "").slice(0, 500)
+    notes: String(raw.notes || "").slice(0, 500),
+    // The Stripe payment (pi_…) this line came from, when it came from one:
+    // the key recordProcessorPayment() decides "already recorded?" by.
+    ...(raw.processorRef ? { processorRef: String(raw.processorRef).slice(0, 100) } : {})
   };
 }
 
@@ -158,6 +161,99 @@ function statusForPayments(inv, currentStatus) {
   if (paid <= 0) return currentStatus === "partially_paid" ? "sent" : currentStatus;
   if (paid >= round2(total - 0.01)) return "paid";
   return "partially_paid";
+}
+
+// After a payment is reversed or corrected, the MONEY decides the status
+// (Financials Fix A, 2026-09-28). statusForPayments keeps a "paid" with
+// nothing on the ledger, so a person's "Mark paid" survives. But once the
+// ledger itself has changed, "paid" is what the payments said — and when
+// they no longer cover the invoice it falls back to where it stood before
+// it was paid: "sent" if it went to the customer, "draft" if it never did.
+// Without this, reversing the only payment on an emailed invoice (a
+// refunded card, #348) left it Paid with $0 received, and its pay link
+// refused the customer's next payment.
+// ---- Payment reconciliation (Patrick, 2026-09-28) ----------------------
+//
+// The payment LEDGER is the source of truth for money received: the net
+// valid payments on it (amountPaidOf — a reversed payment is off it, a
+// processor excess never went on it). An invoice's status is a claim, not
+// proof: "paid" only proves money when the ledger covers the total.
+//
+// An invoice marked Paid whose ledger falls short (a manual "Mark paid"
+// from before this rule, which refused it going forward) is in
+// RECONCILIATION: the gap is unresolved — neither received nor collectible
+// — and stays so until the office records the missing payment or corrects
+// the status (to Partially paid). Every reader asks these, never the status:
+//   ledgerCovers(inv)      — the recorded payments cover the total
+//   isSettled(inv)         — paid AND covered: money actually in
+//   reconciliationFor(inv) — { required, total, recorded, unresolved }
+const fmtMoneyCa = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function ledgerCovers(inv) {
+  const totalC = Math.round((Number(inv?.total) || 0) * 100);
+  return Math.round(amountPaidOf(inv) * 100) >= totalC - 1;
+}
+function isSettled(inv) {
+  return Boolean(inv) && inv.status === "paid" && ledgerCovers(inv);
+}
+function reconciliationFor(inv) {
+  const total = round2(Number(inv?.total) || 0);
+  const recorded = amountPaidOf(inv);
+  const required = Boolean(inv) && inv.status === "paid" && !ledgerCovers(inv);
+  return { required, total, recorded, unresolved: required ? round2(Math.max(0, total - recorded)) : 0 };
+}
+
+// The status after the money on an invoice changes. An invoice in
+// reconciliation KEEPS its "paid" claim through any ledger change — a
+// partial payment toward the gap, or a reversal that widens it — so the
+// discrepancy is preserved, not silently turned into an ordinary balance
+// the system would then collect. Only a ledger that covers it (resolved:
+// the missing payment was recorded) or an explicit status correction ends
+// it. Everything else follows the ledger as before.
+function statusAfterMoneyChange(next, current, { ledgerEdit = false } = {}) {
+  if (reconciliationFor(current).required) return "paid";
+  return ledgerEdit ? statusAfterLedgerChange(next, current) : statusForPayments(next, current.status);
+}
+
+// The audit when an invoice leaves reconciliation: who, when, how (the
+// missing payment recorded, the status corrected, or voided), and what was
+// unresolved. Kept on the invoice (reconciliations[]) and in its history.
+function noteReconciliation(current, next, { by = "admin", via = "", paymentId = null } = {}) {
+  const before = reconciliationFor(current);
+  if (!before.required) return;
+  const after = reconciliationFor(next);
+  const at = next.updatedAt || new Date().toISOString();
+  if (after.required) {
+    if (after.unresolved !== before.unresolved) {
+      next.history = [...(next.history || []), {
+        ts: at, action: "payment_reconciliation_changed", by,
+        note: `Still marked Paid with payments short: unresolved ${fmtMoneyCa(before.unresolved)} → ${fmtMoneyCa(after.unresolved)}${via ? ` (${via})` : ""}.`
+      }];
+    }
+    return;
+  }
+  const resolution = next.status === "paid" ? "recorded_payment" : next.status === "void" ? "voided" : "status_corrected";
+  const entry = {
+    at, by, resolution,
+    unresolvedBefore: before.unresolved,
+    recordedBefore: before.recorded,
+    total: before.total,
+    statusAfter: next.status,
+    paymentId: paymentId || null,
+    via: via || null
+  };
+  next.reconciliations = [...(current.reconciliations || []), entry];
+  const how = resolution === "recorded_payment"
+    ? `the missing payment was recorded${paymentId ? ` (${paymentId})` : ""}`
+    : resolution === "voided" ? "the invoice was voided" : `the status was corrected to ${next.status.replace(/_/g, " ")}`;
+  next.history = [...(next.history || []), {
+    ts: at, action: "payment_reconciled", by,
+    note: `Payment reconciliation resolved — ${how}. It was marked Paid with ${fmtMoneyCa(before.recorded)} of ${fmtMoneyCa(before.total)} recorded (${fmtMoneyCa(before.unresolved)} unresolved).`
+  }];
+}
+
+function statusAfterLedgerChange(next, current) {
+  const base = current.status === "paid" ? (current.sentAt ? "sent" : "draft") : current.status;
+  return statusForPayments(next, base);
 }
 
 // Invoice disclaimers — keyed by stable slug, rendered verbatim below
@@ -211,9 +307,72 @@ async function readAll() {
 // serializes each read-modify-write so neither save erases the other.
 async function writeAll(records) {
   await ensureFile();
+  if (pendingPaidStateChanges) await notePaidStateChanges(records);
   await writeJsonAtomic(FILE, records);
 }
-const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Paid-state changes, observed at the store (Financials Fix A, 2026-09-28).
+//
+// An invoice becoming paid, stopping being paid, or being voided means
+// something beyond the invoice: a paid deposit counts toward the job and
+// makes the held balance invoice; a reversed one stops counting. That used
+// to be told by two routes (the manual "Mark paid" and the Stripe
+// finalizer) and missed by every other way money is recorded or reversed
+// — "Record payment", a corrected or reversed payment, Klarna — while the
+// Stripe path told it on a part payment too.
+//
+// So the store itself notices: every locked write compares each record's
+// status with what is on disk, and after the lock is released hands each
+// change to deposits.onInvoiceStatusChange — the one place that decides
+// what it means. After the lock, because that hook writes invoices too.
+let pendingPaidStateChanges = null;
+
+async function notePaidStateChanges(records) {
+  let onDisk = [];
+  try { onDisk = parseJsonArrayStore(await fs.readFile(FILE, "utf8"), FILE); } catch (_) { return; }
+  const before = new Map(onDisk.map((r) => [r?.id, r]));
+  for (const rec of records) {
+    const prev = before.get(rec?.id) || null;
+    const b = prev ? hydrate(prev) : null;
+    const a = hydrate(rec);
+    // Settled = paid AND covered by the ledger: a status alone never
+    // proves money (payment reconciliation, 2026-09-28).
+    const settledChanged = isSettled(b) !== isSettled(a);
+    const voided = a.status === "void" && (!b || b.status !== "void");
+    if (settledChanged || voided) pendingPaidStateChanges.push({ before: b, after: a });
+  }
+}
+
+async function reportPaidStateChanges(changes) {
+  let deposits;
+  try { deposits = require("./deposits"); } catch (err) {
+    console.warn(`[invoices] deposit lifecycle unavailable: ${err.message}`);
+    return;
+  }
+  for (const change of changes) {
+    try {
+      await deposits.onInvoiceStatusChange(change.before, change.after);
+    } catch (err) {
+      // Best-effort, as the route-level hooks were: the invoice write stands.
+      console.warn(`[invoices] deposit lifecycle failed for ${change.after?.id}: ${err.message}`);
+    }
+  }
+}
+
+const withStoreLock = (fn) => async (...args) => {
+  let changes = [];
+  try {
+    return await serialize(FILE, async () => {
+      pendingPaidStateChanges = [];
+      try { return await fn(...args); } finally {
+        changes = pendingPaidStateChanges || [];
+        pendingPaidStateChanges = null;
+      }
+    });
+  } finally {
+    if (changes.length) await reportPaidStateChanges(changes);
+  }
+};
 
 // Append one entry to the tombstone log, atomically. Read-modify-write
 // under the same flat-file model as the rest of the module; the log is
@@ -249,7 +408,7 @@ function hydrate(inv) {
     ? inv.payments.map(normalizePayment).filter(Boolean)
     : [];
   const paidSoFar = round2(normalizedPayments.reduce((a, p) => a + p.amount, 0));
-  return {
+  const out = {
     id: inv?.id || "",
     woId: inv?.woId || null,
     quoteId: inv?.quoteId || null,
@@ -412,10 +571,138 @@ function hydrate(inv) {
     // appendPaymentAttempt(); update()'s allowlist deliberately excludes
     // it so no ordinary patch can rewrite the log.
     paymentAttempts: Array.isArray(inv?.paymentAttempts) ? inv.paymentAttempts : [],
+    // PJL-96: a price PJL has not set yet. Written by createDraft when the
+    // seasonal fee line arrives as a SUGGESTION (a custom size, or a
+    // commercial account with no price of its own); confirmed by
+    // confirmPrice(). null for every other invoice.
+    priceConfirm: normalizePriceConfirm(inv?.priceConfirm),
+    // The work order behind this invoice changed in price after the
+    // customer accepted it and awaits their new signature (Patrick,
+    // 2026-09-26). While set, nothing is payable, sent or texted. Written
+    // only by setScopeHold(), driven by workOrders.awaitsNewSignature.
+    //
+    // reason "revision_required" (2026-09-26): the customer HAS signed the
+    // revised scope, but this invoice could not be re-priced to it without
+    // silently changing something the customer already has (it was sent,
+    // money is recorded against it, or it is in QuickBooks). Still held —
+    // payment and Send stay blocked — until Patrick revises it (revise()
+    // clears it). Written only by reconcileToSignedScope().
+    scopeHold: inv?.scopeHold && inv.scopeHold.since ? {
+      woId: inv.scopeHold.woId || null,
+      since: inv.scopeHold.since,
+      reason: inv.scopeHold.reason === "revision_required" ? "revision_required" : "awaiting_signature",
+      requiredTotal: Number.isFinite(Number(inv.scopeHold.requiredTotal)) && inv.scopeHold.requiredTotal !== null ? Number(inv.scopeHold.requiredTotal) : null,
+      requiredLineItems: Array.isArray(inv.scopeHold.requiredLineItems) ? inv.scopeHold.requiredLineItems : null,
+      flaggedAt: inv.scopeHold.flaggedAt || null
+    } : null,
+    // What each re-signed scope did to this invoice, append-only: the lines
+    // and total it had before a re-price, or why it was flagged instead.
+    // The audit trail for reconcileToSignedScope().
+    scopeReconciliations: Array.isArray(inv?.scopeReconciliations) ? inv.scopeReconciliations : [],
+    // Money a processor took that this invoice did not owe (a second card
+    // payment, or more than the balance), kept OFF the ledger so the
+    // balance can never go negative, and never deleted: resolving one
+    // (refunded / reconciled, with a note) only closes it. Written only by
+    // recordProcessorPayment() and resolvePaymentException(); update()'s
+    // allowlist excludes it.
+    paymentExceptions: Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : [],
+    // Processor payments reversed off the ledger (refunded in Stripe), kept
+    // for good so the same Stripe payment is never recorded again (S6).
+    // Written only by removePayment(); update()'s allowlist excludes it.
+    reversedProcessorPayments: Array.isArray(inv?.reversedProcessorPayments) ? inv.reversedProcessorPayments : [],
+    // Each time an invoice left payment reconciliation: who, when, how.
+    // Written only by noteReconciliation(); update()'s allowlist excludes it.
+    reconciliations: Array.isArray(inv?.reconciliations) ? inv.reconciliations : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
   };
+  // Derived, never stored: the one answer every surface reads.
+  out.priceUnconfirmed = isPriceUnconfirmed(out);
+  out.needsReconciliation = needsReconciliation(out);
+  out.paymentReconciliation = reconciliationFor(out);
+  return out;
+}
+
+// "Needs refund / reconciliation": a payment exception still open. The one
+// rule the invoice page, the list filter and the badge all read.
+function openPaymentExceptions(inv) {
+  return (Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : []).filter((e) => e && e.status === "open");
+}
+function needsReconciliation(inv) {
+  return openPaymentExceptions(inv).length > 0;
+}
+
+// ---- Price confirmation (PJL-96) --------------------------------------
+//
+// Patrick's rulings: a custom size (16+ residential, 9+ commercial) and a
+// commercial account without its own price are priced BY PATRICK. The
+// invoice drafts with a suggested amount prefilled (pricing.
+// suggestSeasonalPrice) and flagged; until he confirms it the invoice is
+// never payable, never sent and never texted.
+function normalizePriceConfirm(raw) {
+  if (!raw || typeof raw !== "object" || raw.required !== true) return null;
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : round2(Number(v)));
+  return {
+    required: true,
+    reason: raw.reason === "commercial_unpriced" ? "commercial_unpriced" : "custom_size",
+    suggestedAmount: num(raw.suggestedAmount),
+    basis: String(raw.basis || "").slice(0, 300),
+    lineIndex: Number.isInteger(raw.lineIndex) ? raw.lineIndex : null,
+    lineKey: raw.lineKey || null,
+    confirmedAt: raw.confirmedAt || null,
+    confirmedBy: raw.confirmedBy || null,
+    confirmedAmount: num(raw.confirmedAmount)
+  };
+}
+
+// THE rule for "is this invoice's price still Patrick's to set?". Also
+// honours drafts made before PJL-96, whose custom line carried only the
+// "Custom quote — Patrick to price" note (and the booked tier's price).
+function isPriceUnconfirmed(inv) {
+  if (!inv || inv.status === "void") return false;
+  if (inv.priceConfirm?.confirmedAt) return false;
+  if (inv.priceConfirm?.required === true) return true;
+  if (inv.status === "paid") return false;
+  const noted = (inv.lineItems || []).filter((l) => l && l.note);
+  if (!noted.length) return false;
+  const prefix = legacyCustomNotePrefix();
+  return Boolean(prefix) && noted.some((l) => String(l.note).startsWith(prefix));
+}
+
+// THE rule for "does this invoice's customer text go out by itself?" — no,
+// when PJL sets the price (PJL-96: a custom size, a commercial account
+// without its own price, or a pre-PJL-96 placeholder draft). Before
+// Confirm price the number is not his yet; after, confirming and telling
+// the customer are separate actions (Patrick, 2026-09-26): he uses Send
+// when he is ready. The automatic "invoice ready" text never fires for
+// such an invoice, and nothing re-arms it. Read by the completion
+// cascade (scheduling), sendInvoiceReadySMS (sending) and confirmPrice.
+function isPriceSetByPjl(inv) {
+  if (!inv) return false;
+  return inv.priceConfirm?.required === true || isPriceUnconfirmed(inv);
+}
+
+// Read lazily and tolerantly: hydrate() runs on every read, and suites
+// that sandbox this module alone (without pricing.js) must still load it.
+function legacyCustomNotePrefix() {
+  try { return require("./pricing").CUSTOM_QUOTE_NOTE_PREFIX || null; } catch { return null; }
+}
+
+// The index of the line Patrick is confirming: the one createDraft
+// recorded (checked against its key), or a pre-PJL-96 placeholder line.
+function priceConfirmLineIndex(inv) {
+  const lines = inv?.lineItems || [];
+  const pc = inv?.priceConfirm;
+  if (pc && Number.isInteger(pc.lineIndex) && lines[pc.lineIndex] && (!pc.lineKey || lines[pc.lineIndex].key === pc.lineKey)) return pc.lineIndex;
+  if (pc?.lineKey) {
+    const byKey = lines.findIndex((l) => l?.key === pc.lineKey);
+    if (byKey !== -1) return byKey;
+  }
+  const prefix = legacyCustomNotePrefix();
+  let pendingNotes = [];
+  try { pendingNotes = Object.values(require("./pricing").PRICE_PENDING_NOTES || {}); } catch { /* sandboxed */ }
+  return lines.findIndex((l) => (prefix && String(l?.note || "").startsWith(prefix)) || pendingNotes.includes(l?.note));
 }
 
 async function nextInvoiceId(year) {
@@ -462,6 +749,12 @@ async function get(id) {
   return records.find((r) => r.id === id) || null;
 }
 
+// The invoice that currently bills a work order: any status but void.
+function activeInvoiceForWorkOrder(records, woId) {
+  if (!woId) return null;
+  return (Array.isArray(records) ? records : []).find((r) => r && r.woId === woId && r.status !== "void") || null;
+}
+
 async function listByWorkOrder(woId) {
   const records = await readAll();
   return records.filter((r) => r.woId === woId);
@@ -481,6 +774,43 @@ async function listByQuote(quoteIdOrIds) {
 async function listByProperty(propertyId) {
   const records = await readAll();
   return records.filter((r) => r.propertyId === propertyId);
+}
+
+// The invoice lines a WO's billable lines become (builder shape in:
+// key/label/qty/originalPrice/overridePrice). ONE conversion, used by
+// createDraft and by reconcileToSignedScope, so a re-priced draft carries
+// exactly the lines a fresh draft of the same scope would.
+function draftLinesFrom(lineItems) {
+  return (lineItems || []).map((l) => {
+    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice)))
+      ? Number(l.overridePrice)
+      : Number(l.originalPrice || l.price) || 0;
+    const qty = Number(l.qty) || 1;
+    return {
+      key: l.key || null,
+      label: l.label || (l.key ? l.key : "Line"),
+      qty,
+      unitPrice: Math.round(price * 100) / 100,
+      lineTotal: Math.round(price * qty * 100) / 100,
+      note: l.note || ""
+    };
+  });
+}
+
+// PJL-96: a SUGGESTED seasonal fee line (pricing.billableLines) — the
+// price is Patrick's to confirm. The suggestion is prefilled; the invoice
+// is flagged, and stays unpayable / unsent / untexted until he does.
+function priceConfirmForLines(lineItems, normalized) {
+  const suggestedIdx = (lineItems || []).findIndex((l) => l && l.priceStatus === "suggested");
+  return suggestedIdx === -1 ? null : {
+    required: true,
+    reason: lineItems[suggestedIdx].priceReason,
+    suggestedAmount: normalized[suggestedIdx].unitPrice,
+    basis: lineItems[suggestedIdx].suggestion?.basis || "",
+    lineIndex: suggestedIdx,
+    lineKey: normalized[suggestedIdx].key,
+    confirmedAt: null, confirmedBy: null, confirmedAmount: null
+  };
 }
 
 // Create a draft invoice from a WO's accepted quote line items. The
@@ -562,27 +892,31 @@ async function createDraft({
   };
 
   const records = await readAll();
+  // ONE ACTIVE INVOICE PER WORK ORDER, decided here because this runs under
+  // the store lock (createDraft is exported as withStoreLock(createDraft)):
+  // no caller's timing can slip a second one past it. Two taps of
+  // "Generate invoice now", or one racing the completion cascade, made two
+  // invoices for one visit (probe 2026-09-23, 5/5). A VOIDED invoice doesn't
+  // count, so void-and-regenerate works; the explicit revision path,
+  // revise(), edits the same invoice in place and never comes here.
+  // Callers treat wo_already_invoiced as "use existingInvoiceId".
+  if (woId) {
+    const existing = activeInvoiceForWorkOrder(records, woId);
+    if (existing) {
+      throw Object.assign(new Error(`Work order ${woId} already has invoice ${existing.id}.`),
+        { code: "wo_already_invoiced", existingInvoiceId: existing.id });
+    }
+  }
   const now = new Date().toISOString();
   const year = new Date().getUTCFullYear();
   const id = await nextInvoiceId(year);
   // Normalize line items into a consistent shape so the invoice page
   // doesn't have to know about builder vs accepted-quote variants.
-  const normalized = (lineItems || []).map((l) => {
-    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice)))
-      ? Number(l.overridePrice)
-      : Number(l.originalPrice || l.price) || 0;
-    const qty = Number(l.qty) || 1;
-    return {
-      key: l.key || null,
-      label: l.label || (l.key ? l.key : "Line"),
-      qty,
-      unitPrice: Math.round(price * 100) / 100,
-      lineTotal: Math.round(price * qty * 100) / 100,
-      note: l.note || ""
-    };
-  });
+  const normalized = draftLinesFrom(lineItems);
   const totals = totalsForLines(normalized);
+  const priceConfirm = priceConfirmForLines(lineItems, normalized);
   const inv = hydrate({
+    priceConfirm,
     id,
     woId,
     quoteId,
@@ -634,6 +968,13 @@ async function update(id, patch) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  // PJL-96: an invoice whose price Patrick has not confirmed is never
+  // issued — not by /send, a bulk "mark sent", or a manual status patch.
+  if (patch && patch.status === "sent" && current.status === "draft" && isPriceUnconfirmed(current)) {
+    const err = new Error("Confirm this invoice's price before it goes to the customer.");
+    err.code = "price_unconfirmed";
+    throw err;
+  }
   const next = { ...current };
   const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "stripePaymentIntentId", "stripeTerminalIntentId", "stripeChargeId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
   for (const key of allowed) {
@@ -706,6 +1047,31 @@ async function update(id, patch) {
     ]);
     next.disclaimers = Array.from(merged);
   }
+  // "Mark paid" never stands in for a payment (Patrick, 2026-09-28): an
+  // invoice becomes Paid only when its recorded payments cover it. The
+  // office records the payment (method, date, reference, amount) instead.
+  if (patch && patch.status === "paid" && current.status !== "paid" && !ledgerCovers(next)) {
+    const recorded = amountPaidOf(next);
+    const err = new Error(
+      `An invoice can only be marked Paid when its recorded payments cover it — ${fmtMoneyCa(recorded)} of ${fmtMoneyCa(next.total)} is recorded. ` +
+      `Use Record payment (method, date, reference and amount) for the ${fmtMoneyCa(round2((Number(next.total) || 0) - recorded))} outstanding; it becomes Paid when that payment is recorded.`
+    );
+    err.code = "record_payment_required";
+    err.status = 409;
+    throw err;
+  }
+  // Partially paid is what the ledger says, not a label: only for money
+  // recorded that does not cover the invoice — the correction for an
+  // invoice marked Paid with its payments short.
+  if (patch && patch.status === "partially_paid" && current.status !== "partially_paid") {
+    const recorded = amountPaidOf(next);
+    if (!(recorded > 0) || ledgerCovers(next)) {
+      const err = new Error(`Partially paid needs recorded payments that don't cover the invoice — ${fmtMoneyCa(recorded)} of ${fmtMoneyCa(next.total)} is recorded.`);
+      err.code = "status_mismatch";
+      err.status = 409;
+      throw err;
+    }
+  }
   if (patch && patch.status === "sent" && !current.sentAt) next.sentAt = new Date().toISOString();
   if (patch && patch.status === "paid" && !current.paidAt) next.paidAt = new Date().toISOString();
   if (patch && patch.status === "void" && !current.voidedAt) next.voidedAt = new Date().toISOString();
@@ -717,9 +1083,10 @@ async function update(id, patch) {
   // balance owing. It should read partially_paid (or paid, if the
   // on-site payment covered the whole thing).
   //
-  // Deliberately scoped to the sent transition: re-deriving on EVERY
-  // update would fight a manual "paid" that an admin set on an invoice
-  // with no payment records, which is a legitimate thing to do.
+  // Scoped to the sent transition. (A manual "paid" the ledger does not
+  // cover is refused above since 2026-09-28; setting "sent" on an invoice
+  // in payment reconciliation is one way to correct it — the ledger then
+  // decides: Partially paid.)
   if (patch && patch.status === "sent") {
     next.status = statusForPayments(next, "sent");
     if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
@@ -729,10 +1096,13 @@ async function update(id, patch) {
     next.history = [...(next.history || []), {
       ts: next.updatedAt, action: `status:${patch.status}`, by: patch.by || "admin", note: patch.note || ""
     }];
+    if (next.status !== "paid") next.paidAt = null;
   }
+  noteReconciliation(current, next, { by: patch?.by || "admin", via: patch?.status ? `status set to ${next.status}` : "" });
   records[idx] = next;
   await writeAll(records);
-  return next;
+  // Hydrated, so the caller sees the derived answers (paymentReconciliation).
+  return hydrate(next);
 }
 
 // Generate (and persist) a paymentToken for the public /pay/invoice/:id?t=
@@ -746,10 +1116,54 @@ const cryptoMod = require("node:crypto");
 // routes, so the page never shows a card form the server would refuse
 // (fall-closing fix #3). Sent / part-paid invoices, as always — plus a
 // DRAFT that signed-in staff opened for payment on site.
+//
+// payBlockReason is the same rule with its reason: null when payable,
+// otherwise "void" | "paid" | "price_unconfirmed" | "not_issued".
+// PJL-96 added "price_unconfirmed" — a price Patrick has not confirmed is
+// never payable, sent invoice or not. (A no-charge reason, if one is ever
+// needed, slots in beside it; today a $0 visit drafts no invoice at all.)
+function payBlockReason(inv) {
+  if (!inv) return "not_issued";
+  if (inv.status === "void") return "void";
+  // Marked Paid with its payments short: the gap is not collectible until
+  // the office reconciles it — taking it online could charge the customer
+  // twice (payment reconciliation, 2026-09-28).
+  if (reconciliationFor(inv).required) return "reconciliation_required";
+  if (inv.status === "paid") return "paid";
+  if (inv.scopeHold?.since) return scopeHoldCode(inv);
+  if (isPriceUnconfirmed(inv)) return "price_unconfirmed";
+  if (inv.status === "sent" || inv.status === "partially_paid") return null;
+  if (inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt)) return null;
+  return "not_issued";
+}
+
+// Why a held invoice is held: the revised scope still needs the customer's
+// signature ("awaiting_signature"), or they signed it and this invoice
+// must be revised to match first ("revision_required"). null if not held.
+function scopeHoldCode(inv) {
+  if (!inv?.scopeHold?.since) return null;
+  return inv.scopeHold.reason === "revision_required" ? "revision_required" : "awaiting_signature";
+}
+
+// Every route that collects or records money on an invoice asks this ONE
+// question (Patrick, 2026-09-26): while the invoice is held for a revised
+// scope — awaiting the customer's new signature, or awaiting a revision
+// to what they signed — no money is taken or recorded against it by ANY
+// method (card, Tap to Pay, cash, cheque, e-transfer, a manual "paid").
+// null when payment may proceed; otherwise the refusal to send.
+function paymentHoldFor(inv) {
+  const code = scopeHoldCode(inv);
+  if (!code) return null;
+  return {
+    ok: false, status: 409, code,
+    errors: [code === "revision_required"
+      ? "The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope first — no payment can be taken or recorded until then."
+      : "The work order's scope changed after the customer signed. They need to sign the revised work order first — no payment can be taken or recorded until then."]
+  };
+}
+
 function isPayableOnline(inv) {
-  if (!inv) return false;
-  if (inv.status === "sent" || inv.status === "partially_paid") return true;
-  return inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt);
+  return payBlockReason(inv) === null;
 }
 
 // The tech taps "Take payment now" with the customer beside them.
@@ -766,15 +1180,26 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
   const inv = records[idx];
+  if (reconciliationFor(inv).required) {
+    const r = reconciliationFor(inv);
+    return { ok: false, status: 409, code: "reconciliation_required", errors: [`This invoice is marked Paid, but only ${fmtMoneyCa(r.recorded)} of ${fmtMoneyCa(r.total)} is recorded — ${fmtMoneyCa(r.unresolved)} unresolved. The office reconciles it before anything is charged. Nothing was charged.`] };
+  }
   if (inv.status === "paid") return { ok: false, status: 409, code: "already_paid", errors: ["This invoice is already paid."] };
   if (inv.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
   // Nothing to pay on a $0 invoice — no link, no card form (fall-closing #8).
   if (!(Number(inv.total) > 0)) return { ok: false, status: 409, code: "no_charge", errors: ["This visit is no charge — there is nothing to pay."] };
   // A custom-quote tier line still carries a placeholder price until
   // Patrick prices it (fall-closing #7 round 2): never charge that.
-  const { CUSTOM_QUOTE_NOTE_PREFIX } = require("./pricing");
-  if (inv.status === "draft" && (inv.lineItems || []).some((l) => String(l.note || "").startsWith(CUSTOM_QUOTE_NOTE_PREFIX))) {
-    return { ok: false, status: 409, code: "needs_pricing", errors: ["This closing is a custom-quote size — Patrick prices it before the customer pays. Nothing was charged."] };
+  // PJL-96: the same for any price not yet confirmed (a custom size, or a
+  // commercial account without its own price) — one rule, isPriceUnconfirmed.
+  if (scopeHoldCode(inv) === "revision_required") {
+    return { ok: false, status: 409, code: "revision_required", errors: ["The customer signed a revised work order, and this invoice still bills the old one. Patrick revises it before anything is charged. Nothing was charged."] };
+  }
+  if (inv.scopeHold?.since) {
+    return { ok: false, status: 409, code: "awaiting_signature", errors: ["The work order's scope changed after the customer signed. They need to sign the revised work order before anything is charged. Nothing was charged."] };
+  }
+  if (isPriceUnconfirmed(inv)) {
+    return { ok: false, status: 409, code: "needs_pricing", errors: ["PJL confirms this visit's price before the customer pays — the office sends the invoice once it's set. Nothing was charged."] };
   }
   if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
     if (inv.paidOnSiteAtCompletion !== true) {
@@ -792,6 +1217,235 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   records[idx] = inv;
   await writeAll(records);
   return { ok: true, invoice: hydrate(inv) };
+}
+
+// Patrick confirms the price (PJL-96) — the suggested amount as it stands,
+// or his own (`amount`, dollars). The line takes the confirmed price and
+// loses its "PJL confirms the price" note (the customer's invoice must
+// not say it is pending), the totals are recomputed, and the status is
+// re-derived from any money already recorded. From here the invoice is an
+// ordinary one: payable on the usual rules, sendable, textable.
+//
+// The "invoice ready" text is NOT released by confirming (Patrick,
+// 2026-09-26, replacing the 2026-09-23 auto-release): confirming the
+// price and telling the customer are separate actions. A pending
+// automatic text is cancelled here, and isPriceSetByPjl keeps it from
+// ever being scheduled again. The office sends the invoice with Send.
+//
+// A different amount is accepted only on a DRAFT; a price already issued
+// to the customer (an invoice sent before PJL-96) changes through Revise.
+async function confirmPrice(id, { amount = null, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
+  if (!isPriceUnconfirmed(current)) {
+    return current.priceConfirm?.confirmedAt
+      ? { ok: true, invoice: current, alreadyConfirmed: true }
+      : { ok: false, status: 409, code: "not_required", errors: ["This invoice has no price waiting to be confirmed."] };
+  }
+  const lineIdx = priceConfirmLineIndex(current);
+  if (lineIdx === -1) {
+    return { ok: false, status: 409, code: "line_missing", errors: ["Couldn't find the line to price — edit the lines, then confirm."] };
+  }
+  const lines = (current.lineItems || []).map((l) => ({ ...l }));
+  const line = lines[lineIdx];
+  const qty = Number(line.qty) || 1;
+  let unit = Number(line.unitPrice) || 0;
+  if (amount !== null && amount !== undefined && amount !== "") {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return { ok: false, status: 422, code: "bad_amount", errors: ["The price must be a positive amount."] };
+    if (current.status !== "draft" && round2(n) !== round2(unit)) {
+      return { ok: false, status: 409, code: "use_revise", errors: ["This invoice has already gone to the customer — change its price with Revise."] };
+    }
+    unit = round2(n);
+  }
+  if (!(unit > 0)) return { ok: false, status: 422, code: "bad_amount", errors: ["Enter the price for this visit."] };
+  lines[lineIdx] = { ...line, unitPrice: unit, lineTotal: round2(unit * qty), note: "" };
+  const now = new Date().toISOString();
+  const totals = totalsForLines(lines);
+  const next = { ...current, lineItems: lines, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusAfterMoneyChange(next, current);
+  if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+  const pc = current.priceConfirm || { required: true, reason: "custom_size", suggestedAmount: Number(line.unitPrice) || null, basis: "", lineIndex: lineIdx, lineKey: line.key || null };
+  next.priceConfirm = { ...pc, required: true, lineIndex: lineIdx, lineKey: line.key || null, confirmedAt: now, confirmedBy: String(by || "admin"), confirmedAmount: unit };
+  const cancelledText = Boolean(current.customerSmsScheduledAt && !current.customerSmsSentAt);
+  if (cancelledText) next.customerSmsScheduledAt = null;
+  next.updatedAt = now;
+  const suggested = pc.suggestedAmount != null ? ` (suggested $${Number(pc.suggestedAmount).toFixed(2)})` : "";
+  next.history = [...(current.history || []), {
+    ts: now, action: "price_confirmed", by: String(by || "admin"),
+    note: `Price confirmed at $${unit.toFixed(2)}${suggested} · nothing sent to the customer — use Send when ready`
+  }];
+  if (cancelledText) {
+    next.history.push({ ts: now, action: "customer_sms_cancelled_price_set_by_pjl", by: "system",
+      note: "Automatic invoice text cancelled — PJL set this price; the office sends the invoice." });
+  }
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next) };
+}
+
+// Hold or release the work order's active invoice while the WO awaits the
+// customer's new signature on a revised scope. `hold` true/false; returns
+// the invoice, or null when the WO has none. Idempotent.
+async function setScopeHold(woId, hold, { by = "system" } = {}) {
+  const records = await readAll();
+  const inv = activeInvoiceForWorkOrder(records, woId);
+  if (!inv) return null;
+  const idx = records.indexOf(inv);
+  const on = Boolean(inv.scopeHold && inv.scopeHold.since);
+  const code = scopeHoldCode(inv);
+  // Releasing is reconcileToSignedScope's job once the new acceptance lands
+  // (it re-prices or flags first). A "revision required" hold is cleared
+  // only by revise(), never by a release here.
+  if (!hold && code === "revision_required") return hydrate(inv);
+  // Already held for the signature: nothing to do. Held for a revision and
+  // the scope changes AGAIN: the new signature comes first.
+  if (on === Boolean(hold) && !(hold && code === "revision_required")) return hydrate(inv);
+  const now = new Date().toISOString();
+  const next = { ...inv, scopeHold: hold ? { woId, since: now, reason: "awaiting_signature" } : null, updatedAt: now };
+  next.history = [...(inv.history || []), {
+    ts: now, action: hold ? "scope_hold_on" : "scope_hold_off", by,
+    note: hold
+      ? "Held: the work order's price changed after the customer signed — nothing is charged or sent until they sign the revised work order"
+      : "Released: the revised work order is accepted"
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return hydrate(next);
+}
+
+// The customer's new acceptance has landed on a revised scope: make the
+// work order's invoice bill what they signed BEFORE its hold is released
+// (Patrick, 2026-09-26). `lineItems` are the billable lines of the scope as
+// signed (billing.billingFor(wo).lines, the re-locked price); null when
+// they could not be priced.
+//
+//   no active invoice          → { action: "no_invoice" } — nothing to do
+//   already bills that scope   → { action: "matches" } — hold released,
+//                                nothing else written
+//   an unsent DRAFT with no    → { action: "repriced" } — the SAME invoice
+//   money and no QuickBooks id   takes the new lines (the one-per-WO rule
+//                                holds); what it billed before is kept in
+//                                scopeReconciliations; hold released
+//   anything else (sent, part  → { action: "revision_required" } — NOT
+//   paid, paid, in QuickBooks,   rewritten; flagged, still held, until
+//   or a scope that can't be     Patrick revises it (revise() clears it)
+//   priced / is now $0)
+//
+// Idempotent: a retry finds "matches", or the same flag already set, and
+// writes nothing. Never sends anything to anyone.
+async function reconcileToSignedScope(woId, { lineItems = null, by = "system" } = {}) {
+  const records = await readAll();
+  const inv = activeInvoiceForWorkOrder(records, woId);
+  if (!inv) return { action: "no_invoice", invoice: null };
+  const idx = records.indexOf(inv);
+  const now = new Date().toISOString();
+  const target = Array.isArray(lineItems) ? draftLinesFrom(lineItems) : null;
+  // A price Patrick CONFIRMED (PJL-96) stands when the signed scope still
+  // prices the same: the work order only ever carries the SUGGESTION for a
+  // custom size, so without this a scope that returns to what was signed —
+  // or changes something else — would put his price back to the suggestion
+  // and ask him to confirm it again. A different suggestion means the size
+  // really changed: then it is re-priced to the new suggestion and must be
+  // confirmed again (held as price_unconfirmed until he does).
+  let keptConfirm = null;
+  const pc = inv.priceConfirm;
+  if (target && pc?.confirmedAt) {
+    const i = target.findIndex((t, k) => t.key === pc.lineKey && lineItems[k]?.priceStatus === "suggested");
+    if (i !== -1 && pc.suggestedAmount !== null && round2(target[i].unitPrice) === round2(pc.suggestedAmount)) {
+      const unit = round2(pc.confirmedAmount ?? inv.lineItems?.[priceConfirmLineIndex(inv)]?.unitPrice ?? target[i].unitPrice);
+      target[i] = { ...target[i], unitPrice: unit, lineTotal: round2(unit * target[i].qty), note: "" };
+      keptConfirm = { ...pc, lineIndex: i };
+    }
+  }
+  const totals = target ? totalsForLines(target) : null;
+  const sameLines = target && (inv.lineItems || []).length === target.length
+    && target.every((t, i) => {
+      const have = inv.lineItems[i] || {};
+      return (have.key || null) === t.key && Number(have.qty) === t.qty && round2(have.unitPrice) === t.unitPrice;
+    })
+    && round2(inv.total) === totals.total;
+  const pushHistory = (next, entries) => { next.history = [...(inv.history || []), ...entries]; };
+
+  if (sameLines) {
+    if (!inv.scopeHold?.since) return { action: "matches", invoice: inv };
+    const next = { ...inv, scopeHold: null, updatedAt: now };
+    pushHistory(next, [{ ts: now, action: scopeHoldCode(inv) === "revision_required" ? "revision_resolved" : "scope_hold_off", by,
+      note: "Released: the invoice already bills the revised work order the customer accepted" }]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "matches", invoice: hydrate(next) };
+  }
+
+  const money = amountPaidOf(inv) > 0 || (inv.payments || []).length > 0;
+  const untouched = inv.status === "draft" && !inv.sentAt && !money && !inv.quickbooksInvoiceId;
+  // The signed scope bills NOTHING (fall-closing fix #8, No Charge): no $0
+  // invoice. An untouched draft is voided; the caller then records the
+  // visit's service record as no charge, so it reads "No charge" — never
+  // "Needs invoice".
+  if (target && !(totals.total > 0) && untouched) {
+    const next = { ...inv, status: "void", voidedAt: now, scopeHold: null, updatedAt: now };
+    next.scopeReconciliations = [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "voided_no_charge",
+      previousLineItems: inv.lineItems || [], previousSubtotal: inv.subtotal, previousHst: inv.hst, previousTotal: inv.total,
+      newTotal: 0
+    }];
+    pushHistory(next, [{ ts: now, action: "voided_no_charge_after_resignature", by,
+      note: `Voided: the revised work order the customer signed is no charge (was ${fmtMoneyPlain(inv.total)}) · nothing sent to the customer` }]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "voided_no_charge", invoice: hydrate(next), lineItems: target, totals };
+  }
+  const repriceable = target && totals.total > 0 && untouched;
+  if (repriceable) {
+    const next = { ...inv, lineItems: target, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
+    next.amountPaid = amountPaidOf(next);
+    next.balanceDue = balanceDueOf(next);
+    next.priceConfirm = keptConfirm || priceConfirmForLines(lineItems, target);
+    next.scopeHold = null;
+    next.scopeReconciliations = [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "repriced",
+      previousLineItems: inv.lineItems || [], previousSubtotal: inv.subtotal, previousHst: inv.hst, previousTotal: inv.total,
+      newTotal: totals.total
+    }];
+    next.updatedAt = now;
+    pushHistory(next, [
+      { ts: now, action: "repriced_to_signed_scope", by,
+        note: `Re-priced to the revised work order the customer signed: ${fmtMoneyPlain(inv.total)} → ${fmtMoneyPlain(totals.total)} (the previous lines are kept) · nothing sent to the customer` },
+      { ts: now, action: "scope_hold_off", by, note: "Released: the revised work order is accepted and this invoice now bills it" }
+    ]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "repriced", invoice: hydrate(next) };
+  }
+
+  const requiredTotal = totals ? totals.total : null;
+  if (scopeHoldCode(inv) === "revision_required" && inv.scopeHold.requiredTotal === requiredTotal) {
+    return { action: "revision_required", invoice: inv, already: true };
+  }
+  const why = !target ? "the revised work order couldn't be priced"
+    : !(totals.total > 0) ? "the revised work order bills nothing"
+    : inv.status !== "draft" || inv.sentAt ? `it was already ${inv.status === "draft" ? "sent" : inv.status.replace("_", " ")}`
+    : money ? "money is already recorded against it"
+    : "it is already in QuickBooks";
+  const next = {
+    ...inv,
+    scopeHold: { woId, since: inv.scopeHold?.since || now, reason: "revision_required", requiredTotal, requiredLineItems: target, flaggedAt: now },
+    scopeReconciliations: [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "revision_required", reason: why, currentTotal: inv.total, requiredTotal
+    }],
+    updatedAt: now
+  };
+  pushHistory(next, [{ ts: now, action: "revision_required_after_resignature", by,
+    note: `The customer signed a revised work order${requiredTotal !== null ? ` billing ${fmtMoneyPlain(requiredTotal)}` : ""}; this invoice (${fmtMoneyPlain(inv.total)}) was not changed because ${why}. Revise it (or void and regenerate) before it can be paid or sent.` }]);
+  records[idx] = next;
+  await writeAll(records);
+  return { action: "revision_required", invoice: hydrate(next) };
 }
 
 async function ensurePaymentToken(id) {
@@ -1074,7 +1728,7 @@ async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
   next.total = totals.total;
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current);
   if (next.status === "paid" && !next.paidAt) next.paidAt = now;
   next.updatedAt = now;
   next.history = [...(next.history || []), {
@@ -1086,9 +1740,39 @@ async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
   if (next.status !== current.status) {
     next.history.push({ ts: now, action: `status:${next.status}`, by: "system", note: "Re-derived from payments after revision." });
   }
+  // A revision is how a "revision required" hold (the customer signed a
+  // revised scope after this invoice went out) is resolved — Patrick's
+  // explicit, reasoned change. The history says whether it now matches
+  // the total the customer signed.
+  //
+  // Patrick's rule (2026-09-26): a revision at or BELOW the amount the
+  // customer signed for clears the hold — he may discount without another
+  // signature. ABOVE it, the customer has not authorized that amount: the
+  // hold stays until they approve it (re-sign the revised work order). A
+  // signed scope that is no charge, or couldn't be priced, is never cleared
+  // here (no $0 invoice): void it instead.
+  let holdNote = null;
+  if (scopeHoldCode(current) === "revision_required") {
+    const want = current.scopeHold.requiredTotal;
+    const signed = want === null || want === undefined ? null : round2(want);
+    if (signed !== null && signed > 0 && totals.total <= signed) {
+      next.scopeHold = null;
+      const how = totals.total === signed ? "matches the signed amount" : `discounted ${fmtMoneyPlain(round2(signed - totals.total))} below the signed amount`;
+      next.history.push({ ts: now, action: "revision_resolved", by,
+        note: `Revision required after re-signing — resolved: revised ${fmtMoneyPlain(totals.total)}, signed ${fmtMoneyPlain(signed)} (${how})` });
+    } else {
+      holdNote = signed === null
+        ? "The signed work order's amount couldn't be determined, so this revision can't release the invoice. Void it and generate a new invoice from the work order."
+        : signed === 0
+          ? "The signed work order is no charge, so there is nothing to bill. Void this invoice — the visit then reads No Charge."
+          : `Revised to ${fmtMoneyPlain(totals.total)}, which is MORE than the ${fmtMoneyPlain(signed)} the customer signed for. It stays held until the customer approves the higher amount (have them sign the revised work order).`;
+      next.history.push({ ts: now, action: signed !== null && signed > 0 ? "revision_above_signed" : "revision_not_releasable", by,
+        note: `Still held: ${holdNote} (revised ${fmtMoneyPlain(totals.total)}${signed !== null ? `, signed ${fmtMoneyPlain(signed)}` : ""})` });
+    }
+  }
   records[idx] = next;
   await writeAll(records);
-  return { ok: true, invoice: next };
+  return { ok: true, invoice: next, holdNote };
 }
 
 // Stamp notifiedAt on the latest revision after the revised-invoice
@@ -1287,11 +1971,19 @@ async function remove(id, { reason = "", by = "admin", qbVoidConfirmed = false }
 // reconstructed even if a payment is later corrected or reversed.
 const PAYABLE_STATUSES = new Set(["draft", "sent", "partially_paid", "paid"]);
 
-async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" } = {}) {
+// `refuseWhileHeld` — set by every staff route that RECORDS money (cash,
+// cheque, e-transfer, a card taken outside the pay page): the hold is
+// checked here, under the store lock, so it can't be slipped past between
+// a route's check and the write. Not set by the Stripe finalizer, which
+// records money that has ALREADY moved at the processor — refusing that
+// would hide a real charge from the ledger (charges are refused upstream,
+// and open intents are cancelled when the hold goes on).
+async function addPayment(id, { amount, method, receivedAt, notes, by = "admin", refuseWhileHeld = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
   const current = records[idx];
+  if (refuseWhileHeld && paymentHoldFor(current)) return paymentHoldFor(current);
   if (current.status === "void") {
     return { ok: false, status: 409, code: "invoice_void", errors: ["Can't record a payment against a void invoice."] };
   }
@@ -1319,7 +2011,7 @@ async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" 
   const next = { ...current, payments: [...(current.payments || []), payment] };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current);
   if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
@@ -1328,16 +2020,18 @@ async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" 
     by,
     note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
   }];
+  noteReconciliation(current, next, { by, via: "payment recorded", paymentId: payment.id });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), payment };
 }
 
-async function updatePayment(id, paymentId, patch = {}, { by = "admin" } = {}) {
+async function updatePayment(id, paymentId, patch = {}, { by = "admin", refuseWhileHeld = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
   const current = records[idx];
+  if (refuseWhileHeld && paymentHoldFor(current)) return paymentHoldFor(current);
   if (current.status === "void") {
     return { ok: false, status: 409, code: "invoice_void", errors: ["Can't edit payments on a void invoice."] };
   }
@@ -1366,7 +2060,7 @@ async function updatePayment(id, paymentId, patch = {}, { by = "admin" } = {}) {
   const next = { ...current, payments: nextPayments };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current, { ledgerEdit: true });
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
@@ -1375,6 +2069,7 @@ async function updatePayment(id, paymentId, patch = {}, { by = "admin" } = {}) {
     by,
     note: `$${before.amount.toFixed(2)} → $${merged.amount.toFixed(2)} (${PAYMENT_METHOD_LABELS[merged.method] || merged.method}) — balance now $${next.balanceDue.toFixed(2)}`
   }];
+  noteReconciliation(current, next, { by, via: "payment corrected", paymentId: merged.id });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), payment: merged };
@@ -1395,25 +2090,265 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
   const next = { ...current, payments: list.filter((p) => p.id !== paymentId) };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
-  // Reversing the payment that settled the invoice un-settles it.
+  next.status = statusAfterMoneyChange(next, current, { ledgerEdit: true });
+  // Reversing the payment that settled the invoice un-settles it — unless
+  // it is in payment reconciliation, whose Paid claim (and now wider gap)
+  // stands until the office resolves it.
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
+  // A processor payment's line is the record that it was decided. Its ids
+  // outlive the line, so the same Stripe payment arriving again (the
+  // reopened pay page, a webhook or confirm retry, Tap to Pay) is known as
+  // reversed, never recorded as new money (S6).
+  const refs = processorRefsOfPayment(gone);
+  if (refs.length) {
+    next.reversedProcessorPayments = [...(current.reversedProcessorPayments || []), {
+      paymentIntentId: refs.find((r) => r.startsWith("pi_")) || null,
+      refs,
+      paymentId: gone.id,
+      amount: gone.amount,
+      method: gone.method,
+      recordedAt: gone.receivedAt || null,
+      reversedAt: next.updatedAt,
+      by,
+      reason: String(reason || "").slice(0, 300)
+    }];
+  }
   next.history = [...(current.history || []), {
     ts: next.updatedAt,
     action: "payment_reversed",
     by,
     note: `Reversed ${PAYMENT_METHOD_LABELS[gone.method] || gone.method} $${gone.amount.toFixed(2)}${reason ? ` — ${reason}` : ""} — balance now $${next.balanceDue.toFixed(2)}`
   }];
+  noteReconciliation(current, next, { by, via: "payment reversed" });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), removed: gone };
+}
+
+// ---- Processor payments and payment exceptions ----------------------------
+//
+// ONE accounting decision per distinct processor payment (Patrick,
+// 2026-09-27). The Stripe finalizer (pay page, webhook, Tap to Pay, the
+// reopened pay page) calls this for money that has ALREADY moved. Under the
+// store lock, keyed on the Stripe payment id:
+//   - already decided (a ledger line or an exception carries this payment)
+//     → nothing changes: a webhook retry, the confirm and the webhook racing
+//   - otherwise apply up to what is owed to the ledger; any excess becomes
+//     ONE open payment exception. The ledger never takes more than the
+//     invoice owes, so the balance can never go negative, and the excess is
+//     never discarded.
+// A void invoice owes nothing: all of it is excess.
+const OVERPAYMENT_CUSTOMER_MESSAGE = "Payment received. We received more than the remaining invoice balance. PJL will review the extra amount and contact you if any action is required.";
+const PAYMENT_EXCEPTION_RESOLUTIONS = ["refunded", "reconciled"];
+const PAYMENT_EXCEPTION_REASONS = {
+  already_covered: "The invoice was already paid in full when this payment arrived.",
+  over_balance: "This payment was more than the balance left owing.",
+  invoice_void: "The invoice was void when this payment arrived."
+};
+
+// The Stripe ids a ledger line came from: processorRef (pi_…), and the
+// charge or intent id its notes carry (all a line written before
+// processorRef existed has).
+function processorRefsOfPayment(p) {
+  const refs = new Set();
+  if (p?.processorRef) refs.add(String(p.processorRef));
+  for (const tok of String(p?.notes || "").split(/[\s·]+/)) {
+    if (/^(pi|ch|py)_[A-Za-z0-9_]+$/.test(tok)) refs.add(tok);
+  }
+  return [...refs];
+}
+
+// Has this processor payment already been decided on this invoice?
+//   "reversed" — it was recorded and then reversed off the ledger (refunded
+//                in Stripe). It stays decided for good: never new money.
+//   "decided"  — a ledger line carries it (processorRef, or its id in the
+//                notes of a line from before processorRef), an exception
+//                does, or the invoice's stripeChargeId names its charge.
+//   null       — never seen: a new payment.
+function processorPaymentSeen(inv, paymentIntentId, chargeId) {
+  const refs = [paymentIntentId, chargeId].filter(Boolean);
+  if (!refs.length) return null;
+  if ((inv.reversedProcessorPayments || []).some((r) => r && (r.refs || [r.paymentIntentId]).some((x) => refs.includes(x)))) return "reversed";
+  const inNotes = (notes) => String(notes || "").split(/[\s·]+/).some((tok) => refs.includes(tok));
+  if ((inv.payments || []).some((p) => p && (refs.includes(p.processorRef) || (!p.processorRef && inNotes(p.notes))))) return "decided";
+  if ((inv.paymentExceptions || []).some((e) => e && refs.includes(e.paymentIntentId))) return "decided";
+  return chargeId && inv.stripeChargeId === chargeId ? "decided" : null;
+}
+
+async function recordProcessorPayment(id, {
+  paymentIntentId, chargeId = null, amount, currency = "CAD", method = "card_qb",
+  methodLabel = "Card", cardBrand = null, cardLast4 = null, via = "", by = "customer", notes = "", attempt = null
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  const pi = String(paymentIntentId || "").trim();
+  if (!pi) return { ok: false, status: 422, code: "no_processor_ref", errors: ["A processor payment needs its payment id."] };
+  const seen = processorPaymentSeen(current, pi, chargeId);
+  if (seen === "reversed") {
+    // Refunded and reversed: changes nothing on the ledger and sends
+    // nothing, but the delivery is kept in the audit trail.
+    const now = new Date().toISOString();
+    const next = { ...current, history: [...(current.history || []), {
+      ts: now, action: "processor_payment_after_reversal", by: "system",
+      note: `Stripe payment ${pi}${chargeId ? ` (${chargeId})` : ""} arrived again${via ? ` via ${via}` : ""} after it was reversed; not recorded again.`
+    }] };
+    records[idx] = next;
+    await writeAll(records);
+    return { ok: true, duplicate: true, reversed: true, invoice: hydrate(next) };
+  }
+  if (seen) return { ok: true, duplicate: true, invoice: current };
+  const charged = round2(amount);
+  if (!(charged > 0)) return { ok: false, status: 422, code: "bad_amount", errors: ["Payment amount must be a positive number."] };
+
+  const now = new Date().toISOString();
+  const statusBefore = current.status;
+  const owing = statusBefore === "void" ? 0 : balanceDueOf(current);
+  // Within a cent of the balance is the balance (the ledger's tolerance).
+  const applied = charged <= round2(owing + 0.01) ? charged : owing;
+  const excess = round2(charged - applied);
+  const next = { ...current, history: [...(current.history || [])], updatedAt: now };
+
+  if (attempt) {
+    // The success attempt, once per decided payment.
+    const last4 = String(attempt.cardLast4 || "");
+    const cap = (v, n) => (v == null ? null : String(v).slice(0, n));
+    next.paymentAttempts = [...(current.paymentAttempts || []), {
+      ts: now, outcome: "success", processor: "stripe", amount: charged, currency,
+      chargeId: cap(chargeId, 100), chargeStatus: cap(attempt.chargeStatus, 40), httpStatus: 200,
+      errorCode: null, declineCode: null, errorMessage: null,
+      processorRef: cap(attempt.processorRef, 100), paymentIntentId: cap(pi, 100),
+      customerMessage: cap(excess > 0 ? OVERPAYMENT_CUSTOMER_MESSAGE : "Payment received.", 300),
+      cardBrand: cap(attempt.cardBrand, 40), cardLast4: /^\d{4}$/.test(last4) ? last4 : null,
+      avsStreet: cap(attempt.avsStreet, 20), avsZip: cap(attempt.avsZip, 20), cvcMatch: cap(attempt.cvcMatch, 20)
+    }];
+    next.history.push({ ts: now, action: "payment_attempt:success", by: "customer", note: `Card charge approved${chargeId ? ` (${chargeId})` : ""}.` });
+  }
+
+  let payment = null;
+  if (applied > 0) {
+    payment = normalizePayment({ amount: applied, method, receivedAt: now, notes, receivedBy: by, processorRef: pi });
+    next.payments = [...(current.payments || []), payment];
+    next.amountPaid = amountPaidOf(next);
+    next.balanceDue = balanceDueOf(next);
+    next.status = statusAfterMoneyChange(next, current);
+    if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+    noteReconciliation(current, next, { by, via: "card payment", paymentId: payment.id });
+    next.history.push({
+      ts: now, action: "payment_recorded", by,
+      note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
+    });
+  }
+
+  let exception = null;
+  if (excess > 0) {
+    const reason = statusBefore === "void" ? "invoice_void" : applied === 0 ? "already_covered" : "over_balance";
+    const card = [cardBrand ? String(cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : null, cardLast4 ? `••${cardLast4}` : null].filter(Boolean).join(" ");
+    exception = {
+      id: "pex_" + crypto.randomBytes(5).toString("hex"),
+      status: "open",
+      processor: "stripe",
+      paymentIntentId: pi,
+      chargeId: chargeId || null,
+      method,
+      methodLabel,
+      cardBrand: cardBrand || null,
+      cardLast4: /^\d{4}$/.test(String(cardLast4 || "")) ? String(cardLast4) : null,
+      currency,
+      chargedTotal: charged,
+      applied,
+      excess,
+      balanceBefore: owing,
+      invoiceStatusBefore: statusBefore,
+      reason,
+      reasonNote: PAYMENT_EXCEPTION_REASONS[reason],
+      via: String(via || ""),
+      detectedAt: now,
+      alert: null,
+      resolution: null,
+      history: [{ ts: now, action: "opened", by: "system", note: `${methodLabel}${card ? ` ${card}` : ""} charged $${charged.toFixed(2)}; $${applied.toFixed(2)} applied; $${excess.toFixed(2)} needs refund or reconciliation. ${PAYMENT_EXCEPTION_REASONS[reason]}` }]
+    };
+    next.paymentExceptions = [...(current.paymentExceptions || []), exception];
+    next.history.push({ ts: now, action: "payment_exception_opened", by: "system", note: `Needs refund / reconciliation: $${excess.toFixed(2)} extra (${methodLabel}${card ? ` ${card}` : ""}, ${pi}). ${PAYMENT_EXCEPTION_REASONS[reason]}` });
+  }
+
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, duplicate: false, invoice: hydrate(next), statusBefore, charged, applied, excess, payment, exception };
+}
+
+// Close an open exception: refunded (the excess went back) or reconciled
+// (settled some other way). A note is required; nothing is deleted.
+async function resolvePaymentException(id, exceptionId, { resolution, note, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  const list = Array.isArray(current.paymentExceptions) ? current.paymentExceptions : [];
+  const eIdx = list.findIndex((e) => e && e.id === exceptionId);
+  if (eIdx === -1) return { ok: false, status: 404, errors: ["Payment exception not found."] };
+  if (!PAYMENT_EXCEPTION_RESOLUTIONS.includes(resolution)) {
+    return { ok: false, status: 422, code: "bad_resolution", errors: ["Mark it refunded or reconciled."] };
+  }
+  const text = String(note || "").trim().slice(0, 1000);
+  if (text.length < 3) return { ok: false, status: 422, code: "note_required", errors: ["Add a note saying how it was settled."] };
+  const before = list[eIdx];
+  if (before.status !== "open") {
+    return { ok: false, status: 409, code: "already_resolved", errors: [`This was already marked ${before.status}.`] };
+  }
+  const now = new Date().toISOString();
+  const who = String(by || "admin").slice(0, 80);
+  const after = {
+    ...before,
+    status: resolution,
+    resolution: { status: resolution, note: text, by: who, at: now },
+    history: [...(before.history || []), { ts: now, action: resolution, by: who, note: text }]
+  };
+  const nextList = [...list];
+  nextList[eIdx] = after;
+  const next = { ...current, paymentExceptions: nextList, updatedAt: now };
+  next.history = [...(current.history || []), {
+    ts: now, action: "payment_exception_resolved", by: who,
+    note: `$${Number(before.excess).toFixed(2)} extra (${before.paymentIntentId}) marked ${resolution}: ${text}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next), exception: after };
+}
+
+// Record whether the admin alert for an exception went out (audit only).
+async function markPaymentExceptionAlert(id, exceptionId, { ok, to = "", error = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const list = Array.isArray(records[idx].paymentExceptions) ? records[idx].paymentExceptions : [];
+  const eIdx = list.findIndex((e) => e && e.id === exceptionId);
+  if (eIdx === -1) return null;
+  const now = new Date().toISOString();
+  const nextList = [...list];
+  nextList[eIdx] = {
+    ...list[eIdx],
+    alert: ok ? { sentAt: now, to: String(to || "") } : { failedAt: now, error: String(error || "").slice(0, 300) },
+    history: [...(list[eIdx].history || []), { ts: now, action: ok ? "alert_sent" : "alert_failed", by: "system", note: ok ? `Alert emailed to ${to}` : String(error || "").slice(0, 300) }]
+  };
+  records[idx] = { ...records[idx], paymentExceptions: nextList };
+  await writeAll(records);
+  return hydrate(records[idx]);
 }
 
 module.exports = {
   STATUSES,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
+  OVERPAYMENT_CUSTOMER_MESSAGE,
+  PAYMENT_EXCEPTION_REASONS,
+  recordProcessorPayment: withStoreLock(recordProcessorPayment),
+  resolvePaymentException: withStoreLock(resolvePaymentException),
+  markPaymentExceptionAlert: withStoreLock(markPaymentExceptionAlert),
+  openPaymentExceptions,
+  needsReconciliation,
   addPayment: withStoreLock(addPayment),
   updatePayment: withStoreLock(updatePayment),
   removePayment: withStoreLock(removePayment),
@@ -1423,6 +2358,10 @@ module.exports = {
   // re-derive is the rule that decides whether a customer who paid a
   // deposit on site sees "partially paid" or a stale "sent".
   statusForPayments,
+  statusAfterLedgerChange,
+  ledgerCovers,
+  isSettled,
+  reconciliationFor,
   HST_RATE,
   INVOICE_DISCLAIMERS,
   PAYMENT_ATTEMPT_OUTCOMES,
@@ -1431,9 +2370,14 @@ module.exports = {
   get,
   listByWorkOrder,
   totalsForLines,
+  // The conversion and price-confirm rule createDraft applies, so a preview of
+  // the invoice to come (lib/customer-summary.js) is built the same way.
+  draftLinesFrom,
+  priceConfirmForLines,
   listByQuote,
   listByProperty,
   createDraft: withStoreLock(createDraft),
+  activeInvoiceForWorkOrder,
   update: withStoreLock(update),
   appendHistory: withStoreLock(appendHistory),
   appendPaymentAttempt: withStoreLock(appendPaymentAttempt),
@@ -1445,6 +2389,15 @@ module.exports = {
   ensurePaymentToken: withStoreLock(ensurePaymentToken),
   openForOnSitePayment: withStoreLock(openForOnSitePayment),
   isPayableOnline,
+  // PJL-96
+  payBlockReason,
+  isPriceUnconfirmed,
+  isPriceSetByPjl,
+  confirmPrice: withStoreLock(confirmPrice),
+  setScopeHold: withStoreLock(setScopeHold),
+  reconcileToSignedScope: withStoreLock(reconcileToSignedScope),
+  scopeHoldCode,
+  paymentHoldFor,
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken

@@ -37,13 +37,16 @@ const sharp = require("sharp");
 })();
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
-const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
+const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendInboundTextAlertSms } = require("./lib/notify-sms");
+const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendPaymentExceptionAlert, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
+const photoLinks = require("./lib/photo-links");
 const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
@@ -128,6 +131,12 @@ const { createLock } = require("./lib/booking-lock");
 const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
+const sessionHours = require("./lib/session-hours");
+const atomicJson = require("./lib/atomic-json");
+const dailyRecords = require("./lib/daily-records");
+const changeOrdersView = require("./lib/change-orders-view");
+const financialsView = require("./lib/financials-view");
+const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
@@ -146,6 +155,7 @@ function publicRevisionSummary(inv) {
 }
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
+const woFindings = require("./lib/wo-findings");   // PJL-100 #4/#5
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
 const outreach = require("./lib/outreach");
@@ -170,6 +180,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
+const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
@@ -251,6 +262,69 @@ const HOST = process.env.HOST || "0.0.0.0";
 const SITE_DIR = path.resolve(__dirname, "..");
 const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
+// Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
+const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
+// AI photo backfill (P-PJL-35 M3c). The engine is wired to the real Claude
+// client and to our own safe fetchers (https only, never a private address,
+// images/HTML only, size-capped). NOTHING runs on its own: the client is
+// created only when an admin starts the calibration run, no run starts at
+// boot, and a run interrupted by a deploy waits for Resume. The only start
+// door is startCalibration(): the approved 15-part sample, auto-approve OFF.
+const photoAiLib = require("./lib/photo-ai");
+const photoAi = (() => {
+  let real = null;
+  const get = () => (real ||= photoAiLib.createPhotoAI({ client: photoAiLib.createAnthropicClient() }));
+  return {
+    passesFor: photoAiLib.passesFor,
+    find: (...a) => get().find(...a),
+    verify: (...a) => get().verify(...a),
+    compare: (...a) => get().compare(...a),
+    models: { finder: photoAiLib.MODEL, vision: photoAiLib.MODEL_VISION }
+  };
+})();
+// Fast Product Lookup (Patrick, Sep 28 2026): the supplier's own search
+// and product page through the same safe page fetcher, before any finder
+// call. No model, no key needed.
+const photoFastLookup = require("./lib/photo-fast-lookup").createFastLookup({
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  log: (entry) => console.log("[photo-fast-lookup]", JSON.stringify(entry))
+});
+const photoBackfill = require("./lib/photo-backfill").createBackfill({
+  dataDir: DATA_DIR,
+  store: partPhotos,
+  getParts: () => (PARTS && PARTS.parts) || {},
+  manufacturers: () => (PARTS && PARTS.manufacturers) || [],
+  ai: photoAi,
+  fastLookup: photoFastLookup,
+  // The standing model-spend cap across runs, in dollars (Patrick, Sep 28
+  // 2026: "this should not cost me any more than $10"), and the web-search
+  // finder off unless a wave is started with it on.
+  budgetUsd: Number.isFinite(Number(process.env.PHOTO_BUDGET_USD)) && process.env.PHOTO_BUDGET_USD !== "" ? Number(process.env.PHOTO_BUDGET_USD) : 10,
+  finderDefault: false,
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
+  log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
+  afterRun: async () => {
+    // Same-fitting grouping (auto-link only same mfr + mfr part # on
+    // official pages; the rest → Fittings to confirm), then the catalog
+    // reflects every result's state.
+    await photoBackfill.applyGrouping();
+    rebuildCatalogFromOverrides();
+  }
+});
+const { buildReviewQueues } = require("./lib/photo-review");
+// Quality upgrade of live photos (Patrick, Sep 28 2026): the same picture at
+// a larger size, from the page it came from — a plan first, applied only
+// for the exact list shown; everything unprovable goes to a review queue.
+const photoQuality = require("./lib/photo-quality-upgrade").createQualityUpgrade({
+  dataDir: DATA_DIR, store: partPhotos, sharp,
+  getParts: () => (PARTS && PARTS.parts) || {},
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
+  log: (entry) => console.log("[photo-quality]", JSON.stringify(entry))
+});
+// Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
+const supplierLogos = require("./lib/supplier-logos").createSupplierLogos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 // All AI chat transcripts (booked AND abandoned). Patrick uses this to see
@@ -503,6 +577,19 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   partSupplierPrices.mergeIntoCatalog(PARTS.parts, supplierPriceMap, {
     editedMap: (catalogOverrides && catalogOverrides.edited) || {}
   });
+  // Then verified photos. photoStateFor() is the only rule for whether a
+  // photo may show; a part that is not "verified" gets photo: null, so a
+  // To-be-determined candidate can never reach the picker. If the photo
+  // stores can't be read, every part shows "no photo" rather than
+  // failing the whole catalog.
+  try {
+    // isBaseline: a fitting's canonical default is the part from the
+    // original catalog (lib/part-photos.js fittingDefaultFor).
+    partPhotos.mergeInto(PARTS.parts, { isBaseline: (sku) => !!(BASELINE_PARTS && BASELINE_PARTS[sku]) });
+  } catch (err) {
+    console.warn("[parts] could not merge part photos:", err?.message);
+    for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
+  }
   if (!initial) CATALOG_VERSION++;
 }
 
@@ -1374,6 +1461,11 @@ function needsAuth(method, pathname) {
   // The routes also call requireAdmin directly — the gate is the fence,
   // the route check is the lock.
   if (/^\/api\/work-orders\/[^/]+\/(unlock|relock)$/.test(pathname)) return "admin";
+  // Correcting a session's clock times rewrites billable hours after the
+  // fact. Techs clock in and out (that stays "user", below) but only the
+  // office corrects the record afterwards — a technician quietly editing
+  // their own hours is exactly what the audit trail exists to prevent.
+  if (/^\/api\/work-orders\/[^/]+\/sessions\/[^/]+\/times$/.test(pathname)) return "admin";
   // Klarna financing enable/disable (PJL-34) — ADMIN ONLY, deliberately
   // stricter than the generic quote-folder "user" (admin-or-tech) rule
   // below. Enabling is the one action that can gross up a real quote's
@@ -1482,6 +1574,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/sitebuilder-help.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
   // Quote Requests (RFQ — the "ask for a price" sibling of the PO).
@@ -1538,12 +1631,18 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
   if (pathname === "/api/parts" || pathname.startsWith("/api/parts/")) return "user";
+  // Part photos: images, groups, links. Reads are staff; every write
+  // additionally requires requireAdmin() in its handler.
+  if (pathname.startsWith("/api/part-photo")) return "user";
   if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
   // Portal-messages inbox (two-way thread with customers).
   if (pathname === "/api/admin/portal-messages" || pathname.startsWith("/api/admin/portal-messages/")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
   if (pathname.startsWith("/api/suppliers")) return "user";
+  // Supplier logo images; uploads go through /api/suppliers/:id/logo
+  // (requireAdmin in the handler).
+  if (pathname.startsWith("/api/supplier-logos")) return "user";
   if (pathname.startsWith("/api/material-lists")) return "user";
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
@@ -1581,6 +1680,13 @@ function needsAuth(method, pathname) {
   // this needed both.
   if (pathname === "/api/terminal/connection-token") return "admin";
   if (pathname === "/api/outreach/unsubscribe") return null;
+  // Signed single-photo links (lib/photo-links.js). PUBLIC on purpose:
+  // the signature in ?s= IS the credential, scoped to one photo on one
+  // work order and expiring — the same model as the unsubscribe link
+  // above. Named here rather than left to the default so the intent is
+  // on the page. It lives OUTSIDE /api/work-orders/ so the admin rule for
+  // that prefix is untouched.
+  if (pathname.startsWith("/api/photo-link/")) return null;
   if (pathname.startsWith("/api/outreach/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
   return null;
@@ -1654,6 +1760,20 @@ function normalizePostalCode(value) {
     return `${compact.slice(0, 3)} ${compact.slice(3)}`;
   }
   return normalizeString(value, 20).toUpperCase();
+}
+
+// An on-route stamp counts only for the visit it was sent for. Leads and
+// season-plan booking records both outlive a visit, so an older stamp must
+// not mark a later visit as notified. A stamp names its visit
+// (onRouteNotifiedFor = that visit's start); one from before that field
+// counts only on the visit's day or the day before (Toronto).
+function onRouteStampForVisit(stamp, visitStart, notifiedFor = null) {
+  if (!stamp || !visitStart) return null;
+  const iso = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toISOString(); };
+  if (notifiedFor) return iso(notifiedFor) === iso(visitStart) ? stamp : null;
+  const day = (v) => new Date(v).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const before = new Date(new Date(visitStart).getTime() - 864e5);
+  return day(stamp) === day(visitStart) || day(stamp) === day(before) ? stamp : null;
 }
 
 function portalTokenForId(id) {
@@ -2052,7 +2172,15 @@ const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking 
 // re-stamp through syncBookingFromLead would recurse, because that is what
 // schedules the re-stamp.
 async function mirrorBookingOnly(lead) {
-  return bookings.upsertFromLead(lead);
+  // isFinishedWo lets the mirror see that a live record's visit is already
+  // done, so a returning customer's new booking gets its own record rather
+  // than being merged into last season's (PJL-97).
+  return bookings.upsertFromLead(lead, {
+    isFinishedWo: async (woId) => {
+      const wo = await workOrders.get(woId);
+      return Boolean(wo) && ["completed", "cancelled", "no_show"].includes(wo.status);
+    }
+  });
 }
 
 async function syncBookingFromLead(lead) {
@@ -2213,9 +2341,15 @@ function moneyCad(n) {
 
 // Brief 2 — render the project status-update email HTML. Pure
 // function — input is the snapshot stored on project.statusUpdates[],
-// output is the HTML string for the email body. Used at send time AND
-// by the "View snapshot" UI on the project page.
-function renderStatusUpdateHtml(snap) {
+// output is the HTML string for the email body. Used at send time only —
+// the project page's "View snapshot" modal renders the plain snapshot data
+// itself (server/project.js openStatusUpdateSnapshot) and shows no photos.
+// `photoUrlFor(photo)` returns the <img src> for one recent photo, or
+// null. It is passed in rather than built here because the only safe URL
+// for a customer's inbox is a signed one, and signing needs the secret —
+// which a pure renderer should not go and fetch. No function (or null for
+// every photo) means no photo strip, never a strip of broken images.
+function renderStatusUpdateHtml(snap, { photoUrlFor = null } = {}) {
   const esc = escapeHtmlServer;
   const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
   const greeting = snap.recipientFirstName ? `Hi ${esc(snap.recipientFirstName)},` : "Hi,";
@@ -2227,7 +2361,11 @@ function renderStatusUpdateHtml(snap) {
     `<li style="margin-bottom:4px;">${esc(t.description)}</li>`
   ).join("");
   const scrRows = (snap.pendingScopeChanges || []).map((s) =>
-    `<li style="margin-bottom:4px;">${esc(s.description)} — ${esc(s.status === "pending_customer_approval" ? "awaiting your approval" : "in review")}${s.sentAt ? " (sent " + esc(fmtDate(s.sentAt)) + ")" : ""}</li>`
+    `<li style="margin-bottom:4px;">${esc(s.description)} — ${esc(
+      // stage: projects.scopeChangeStage (older snapshots carry only status)
+      (s.stage || (s.status === "pending_customer_approval" ? "awaiting_customer" : "in_review")) === "awaiting_customer" ? "awaiting your approval"
+        : (s.stage === "awaiting_revision" ? "approved — revised quote to follow" : "in review")
+    )}${s.sentAt ? " (sent " + esc(fmtDate(s.sentAt)) + ")" : ""}</li>`
   ).join("");
 
   return `
@@ -2255,15 +2393,28 @@ function renderStatusUpdateHtml(snap) {
     ${scrRows ? `
     <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#8A4A12;font-size:14px;border-bottom:2px solid #F5C691;padding-bottom:4px;">Pending scope additions</h3>
     <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${scrRows}</ul>` : ""}
-    ${(snap.recentPhotos || []).length ? (() => {
-      const baseUrl = process.env.PUBLIC_BASE_URL || "";
-      const strip = snap.recentPhotos.map((p) =>
-        `<img src="${baseUrl}/api/work-orders/${esc(p.woId)}/photos/${esc(p.n)}" alt="" style="width:120px;height:120px;object-fit:cover;border:1px solid #E5E5DD;border-radius:4px;margin-right:6px;margin-bottom:6px;">`
+    ${(() => {
+      // These URLs land in a CUSTOMER'S INBOX. The old strip pointed at
+      // /api/work-orders/:id/photos/:n — the DELETE route's path, and an
+      // admin-gated prefix besides — so it was broken twice over: a 404
+      // for staff, a refusal for everyone else.
+      //
+      // Each image is now a signed link to that ONE photo
+      // (lib/photo-links.js). Not the admin route (no session in an
+      // inbox), not the customer's portal token (that unlocks their whole
+      // portal, and the recipient here is whoever the office typed), and
+      // not a public photo (never).
+      const urls = typeof photoUrlFor === "function"
+        ? (snap.recentPhotos || []).map((p) => ({ p, src: photoUrlFor(p) })).filter((x) => x.src)
+        : [];
+      if (!urls.length) return "";
+      const strip = urls.map(({ src }) =>
+        `<img src="${esc(src)}" alt="" style="width:120px;height:120px;object-fit:cover;border:1px solid #E5E5DD;border-radius:4px;margin-right:6px;margin-bottom:6px;">`
       ).join("");
       return `
     <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Recent on-site photos</h3>
     <div style="margin:6px 0 14px;">${strip}</div>`;
-    })() : ""}
+    })()}
     <p style="margin:18px 0 0;font-size:13px;">Let me know if you need anything else.</p>
     <p style="margin:6px 0 0;font-size:13px;">Patrick<br/>PJL Land Services<br/><a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a></p>
   </div>
@@ -3342,17 +3493,172 @@ function isNoChargeServiceRecord(record) {
     && !(invoices.totalsForLines(record.lineItems).total > 0);
 }
 
+// The seasonal fee priced at the moment a work order is signed or bypassed
+// (PJL-96, ruling 1): pricing.pricedQuoteForLock with the WO's property and
+// the owner's account type. Called from both lock points; never throws —
+// a failure leaves the line as it was and the completion-time re-resolve
+// (the safety net for unstamped lines) prices it instead.
+async function seasonalQuoteAtLock(wo, zones) {
+  if (!wo || (wo.type !== "fall_closing" && wo.type !== "spring_opening")) return null;
+  try {
+    // The same inputs billingFor reads (lib/billing.js), so the price set
+    // at the lock and the price billed later come from one source.
+    const { property, commercial } = await billing.billingInputs(wo);
+    return pricingLib.pricedQuoteForLock(wo, property, { commercial, zones });
+  } catch (err) {
+    console.warn(`[wo-lock] seasonal fee pricing failed for ${wo.id}: ${err?.message}`);
+    return null;
+  }
+}
+
+// Re-signing (Patrick, 2026-09-26): while a work order awaits the
+// customer's new signature on a revised scope, its invoice (if it has one)
+// is held — nothing payable, sent or texted (invoices.scopeHold). Called
+// after every write that can start or end the wait.
+//
+// It used to say "Never throws" here, and that was the problem rather
+// than a feature: it never threw because it never waited.
+// RETURNS the promise. announceResignature() awaits whatever its
+// listeners return, so returning here is what makes the work order's
+// write wait for the invoice hold. Dropping the return would restore
+// the original race silently — the emit would still be awaited, and
+// there would still be nothing to await.
+//
+// No .catch() either: a failure belongs to the caller now. Swallowing
+// it here would report a hold that was never written, which is the
+// defect this exists to prevent.
+//
+// RELEASING reconciles first (2026-09-26). The hold used to be lifted the
+// moment the new acceptance landed, with the invoice still billing the OLD
+// scope — so the pay link and Send then charged the customer the old price
+// for a scope they had re-signed at a different one (signed 4 zones and
+// re-signed at 6: billed 4; the reverse: overcharged). Now the invoice is
+// brought to the price the customer just accepted (billing.billingFor —
+// the re-locked, frozen scope) BEFORE the hold goes: an unsent draft is
+// re-priced in place; anything the customer may already have seen is left
+// as it is and flagged "revision required", still held, until Patrick
+// revises it (invoices.reconcileToSignedScope). Idempotent — a retried
+// signature finds the invoice already matching and writes nothing.
+//
+// While held, no card can complete either: an intent opened BEFORE the hold
+// (a pay page left open, a Tap to Pay reader armed) is cancelled at Stripe
+// when the hold goes on, so it can't be confirmed for the unresolved amount
+// (cancelOpenIntentsWhileHeld). And a signed scope that bills nothing
+// follows the No Charge rules: the untouched draft is voided and the
+// visit's service record reads no charge (settleNoCharge).
+async function holdOrReconcileInvoice(wo) {
+  if (workOrders.awaitsNewSignature(wo)) {
+    const held = await invoices.setScopeHold(wo.id, true);
+    await cancelOpenIntentsWhileHeld(held);
+    return held;
+  }
+  const bill = await billing.billingFor(wo);
+  const result = await invoices.reconcileToSignedScope(wo.id, { lineItems: bill.error ? null : bill.lines, by: "system" });
+  if (result?.action === "voided_no_charge") {
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: result.invoice?.id || null });
+  }
+  if (result?.action === "revision_required") await cancelOpenIntentsWhileHeld(result.invoice);
+  return result;
+}
+async function cancelOpenIntentsWhileHeld(inv) {
+  if (!inv?.scopeHold?.since || inv.status === "paid" || inv.status === "void") return;
+  const ids = [...new Set([inv.stripePaymentIntentId, inv.stripeTerminalIntentId].filter(Boolean))];
+  for (const id of ids) {
+    try {
+      const { intent } = await stripe.retrievePaymentIntent(id);
+      if (["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status)) {
+        await stripe.cancelPaymentIntent(id);
+        await invoices.appendHistory(inv.id, { action: "payment_intent_cancelled_while_held", by: "system",
+          note: `Open card payment ${id} cancelled: the invoice is held for a revised work order` });
+      }
+    } catch (err) {
+      // Best effort: a charge that completes anyway is still recorded by
+      // the finalizer (the money moved) and the invoice stays held.
+      console.warn(`[resign] couldn't cancel open intent ${id} on ${inv.id}: ${err?.message}`);
+    }
+  }
+}
+// The visit's service record, when its signed scope bills nothing.
+async function settleNoCharge(propertyId, woId, { lineItems = [], voidedInvoiceId = null } = {}) {
+  if (!propertyId || !woId) return null;
+  const t = invoices.totalsForLines(lineItems);
+  return properties.settleServiceRecordAsNoCharge(propertyId, woId, { lineItems, subtotal: t.subtotal, hst: t.hst, total: t.total, voidedInvoiceId });
+}
+// Voiding an invoice flagged "revision required" whose signed scope is no
+// charge completes the No Charge path (no $0 invoice, the visit reads No
+// charge). Any other void is untouched.
+async function settleNoChargeOnVoid(before) {
+  try {
+    if (invoices.scopeHoldCode(before) !== "revision_required" || before.scopeHold.requiredTotal !== 0 || !before.woId) return;
+    const wo = await workOrders.get(before.woId);
+    if (!wo) return;
+    const bill = await billing.billingFor(wo);
+    if (!bill.noCharge) return;
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: before.id });
+  } catch (err) {
+    console.warn(`[resign] no-charge settle after void failed for ${before?.id}: ${err?.message}`);
+  }
+}
+workOrders.events.on("resignature", (wo) => {
+  if (!wo?.id) return;
+  return holdOrReconcileInvoice(wo);
+});
+async function syncResignatureHold(before, after) {
+  try {
+    const was = workOrders.awaitsNewSignature(before);
+    const now = workOrders.awaitsNewSignature(after);
+    if (!after?.id || was === now) return;
+    await holdOrReconcileInvoice(after);
+  } catch (err) {
+    console.warn(`[resign] invoice hold sync failed for ${after?.id}: ${err?.message}`);
+  }
+}
+
+// PJL-100 #7 — "this completed visit was no charge", for the readers that
+// ask "does this signed work order have an invoice?" (the work-order
+// list's Needs-invoice filter, the tech page's recovery banner). Derived
+// on read from the service record the cascade wrote, never stored, so it
+// cannot drift from isNoChargeServiceRecord(). Adds `noCharge: true` to
+// each such work order; leaves every other one untouched.
+async function markNoChargeWorkOrders(wos) {
+  const completed = (wos || []).filter((w) => w && w.status === "completed" && w.propertyId);
+  if (!completed.length) return wos;
+  const byWo = new Map();
+  try {
+    for (const p of await properties.list({ includeDeleted: true, includeArchived: true })) {
+      for (const sr of p.serviceRecords || []) if (sr && sr.woId && !byWo.has(sr.woId)) byWo.set(sr.woId, sr);
+    }
+  } catch (err) { console.warn("[wo] no-charge lookup failed:", err?.message); return wos; }
+  for (const w of completed) if (isNoChargeServiceRecord(byWo.get(w.id))) w.noCharge = true;
+  return wos;
+}
+
+// One Tap to Pay start at a time per invoice (item 4, 2026-09-27). The start
+// route reads the invoice's stored intent and may create one; two taps
+// racing must queue, so the second sees the first's intent instead of making
+// its own. In-process, which is enough: the server runs as one instance (its
+// JSON store is on one disk).
+const terminalIntentLocks = new Map();
+function withTerminalIntentLock(invoiceId, fn) {
+  const prev = terminalIntentLocks.get(invoiceId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  terminalIntentLocks.set(invoiceId, tail);
+  tail.then(() => { if (terminalIntentLocks.get(invoiceId) === tail) terminalIntentLocks.delete(invoiceId); });
+  return run;
+}
+
+// Where a Stripe payment reached the finalizer, as the office reads it.
+const STRIPE_ARRIVAL_LABELS = {
+  confirm: "pay page",
+  webhook: "Stripe webhook",
+  "intent-reuse": "pay page (reopened)",
+  terminal: "Tap to Pay",
+  "terminal-reuse": "Tap to Pay (retry)"
+};
+
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm", by = "" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
-  // What this intent SHOULD have charged: the outstanding balance at the
-  // time it was created. Intents are created for balanceDue, so that's the
-  // primary expectation. `total` is still accepted because an intent
-  // created before the payment ledger existed — or on an invoice with no
-  // payments, where the two are equal — is equally legitimate. Anything
-  // else is the alarming "succeeded for the wrong amount" branch below.
-  const balanceCents = Math.round(Number(inv.balanceDue) * 100);
-  const totalCents = Math.round(Number(inv.total) * 100);
-  const expectedCents = summary.amountCents === totalCents ? totalCents : balanceCents;
 
   // Verification gauntlet — every check names its failure for the log.
   if (intent?.metadata?.invoiceId !== inv.id) {
@@ -3361,129 +3667,122 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   if (intent?.status !== "succeeded") {
     throw new Error(`intent ${summary.paymentIntentId} status is "${intent?.status}", not succeeded`);
   }
-  if (summary.amountCents !== expectedCents) {
-    // A succeeded intent for the WRONG amount is the one genuinely
-    // alarming branch: money moved but not the invoice's total. Do not
-    // flip paid — record it loudly and leave the invoice open for
-    // Patrick to reconcile by hand.
-    throw new Error(`intent ${summary.paymentIntentId} charged ${summary.amountCents}¢, invoice total is ${expectedCents}¢ — NOT flipping to paid, reconcile manually`);
+  if (!(Number(summary.amountCents) > 0)) {
+    throw new Error(`intent ${summary.paymentIntentId} has no charged amount`);
   }
   if ((summary.currency || "CAD") !== (inv.currency || "CAD")) {
     throw new Error(`intent ${summary.paymentIntentId} currency ${summary.currency} != invoice ${inv.currency || "CAD"}`);
   }
 
-  // Idempotency check — webhook after confirm, or a double webhook.
-  const fresh = await invoices.get(inv.id);
-  if (!fresh) throw new Error(`invoice ${inv.id} vanished mid-finalize`);
-  if (fresh.status === "paid") {
-    if (fresh.stripePaymentIntentId === summary.paymentIntentId || fresh.stripeChargeId === summary.chargeId) {
-      return { invoice: fresh, alreadyPaid: true, warning: null };
-    }
-    // Paid via some OTHER charge and now a second successful intent
-    // exists — a real double payment. Loud log; refund is a manual
-    // dashboard action, deliberately not automated.
-    console.error(`[stripe] DOUBLE PAYMENT? ${inv.id} already paid but intent ${summary.paymentIntentId} also succeeded (${via}). Refund one in the Stripe dashboard.`);
-    return { invoice: fresh, alreadyPaid: true, warning: "Invoice was already paid — a second successful payment exists in Stripe and needs a manual refund." };
-  }
+  // ONE accounting decision per Stripe payment, inside the invoice lock
+  // (Patrick, 2026-09-27). A payment already decided — the webhook after
+  // the confirm, a retry, the two racing — changes nothing and sends
+  // nothing. Otherwise up to what is owed goes on the ledger and any
+  // excess becomes one open payment exception: a charge that arrives
+  // after the invoice was covered (a second card, cash first), for more
+  // than the balance, or at an amount the invoice was since revised down
+  // from, is never hidden and never drives the balance negative.
+  const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
+  const decided = await invoices.recordProcessorPayment(inv.id, {
+    paymentIntentId: summary.paymentIntentId,
+    chargeId: summary.chargeId,
+    amount: summary.amountCents / 100,
+    currency: summary.currency || inv.currency || "CAD",
+    method: "card_qb",
+    methodLabel: tapToPay ? "Tap to Pay on iPhone" : "Online card payment",
+    cardBrand: summary.cardBrand,
+    cardLast4: summary.cardLast4,
+    via: STRIPE_ARRIVAL_LABELS[via] || via,
+    by: tapToPay ? (by || "tap_to_pay") : "customer",
+    notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`,
+    attempt: summary
+  });
+  if (!decided.ok) throw new Error(`invoice ${inv.id}: ${(decided.errors || [])[0] || "payment not recorded"}`);
+  // A payment reversed off the ledger (refunded) stays reversed (S6): the
+  // caller is told so, and nothing is recorded, sent or flagged.
+  if (decided.duplicate) return { invoice: decided.invoice, alreadyPaid: true, reversed: decided.reversed === true, warning: null };
+  const exception = decided.exception || null;
 
-  // Success attempt record, before anything else can fail.
-  try {
-    await invoices.appendPaymentAttempt(inv.id, {
-      outcome: "success",
-      processor: "stripe",
-      amount: (summary.amountCents ?? expectedCents) / 100,
-      currency: summary.currency || inv.currency || "CAD",
-      httpStatus: 200,
-      chargeId: summary.chargeId,
-      chargeStatus: summary.status,
-      paymentIntentId: summary.paymentIntentId,
-      processorRef: summary.processorRef,
-      customerMessage: "Payment received.",
-      cardBrand: summary.cardBrand,
-      cardLast4: summary.cardLast4,
-      avsStreet: summary.avsStreet,
-      avsZip: summary.avsZip,
-      cvcMatch: summary.cvcMatch
-    });
-  } catch (recordErr) {
-    console.error(`[stripe] FAILED TO RECORD SUCCESSFUL ATTEMPT on ${inv.id}: ${recordErr.message}`);
-  }
-
-  // QBO Payment record — QuickBooks is still the ledger. Best effort:
-  // the money is already in Stripe; a QBO hiccup must not stop the
-  // customer seeing a paid invoice. The warning surfaces to the admin.
+  // QBO Payment record: exactly what the ledger applied to this invoice
+  // (Patrick, 2026-09-28), never the processor charge. An excess stays a
+  // PJL payment exception and is not a payment of this invoice in
+  // QuickBooks either; nothing applied (wholly excess) posts nothing. Once
+  // per decided payment: a duplicate or reversed one returned above. Best
+  // effort: the money is already in Stripe and on the ledger.
   let qbPaymentId = null;
   let qbWarning = null;
-  try {
-    if (inv.quickbooksInvoiceId) {
-      const payment = await quickbooks.recordPaymentForInvoice({
-        qbInvoiceId: inv.quickbooksInvoiceId,
-        amountCents: expectedCents,
-        chargeId: summary.chargeId || summary.paymentIntentId
-      });
-      qbPaymentId = payment?.id || null;
+  const appliedCents = Math.round(Number(decided.applied) * 100);
+  if (appliedCents > 0) {
+    try {
+      if (inv.quickbooksInvoiceId) {
+        const payment = await quickbooks.recordPaymentForInvoice({
+          qbInvoiceId: inv.quickbooksInvoiceId,
+          amountCents: appliedCents,
+          chargeId: summary.chargeId || summary.paymentIntentId
+        });
+        qbPaymentId = payment?.id || null;
+      }
+    } catch (paymentErr) {
+      console.warn(`[stripe] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
+      qbWarning = paymentErr.message;
     }
-  } catch (paymentErr) {
-    console.warn(`[stripe] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
-    qbWarning = paymentErr.message;
   }
 
-  // Record the card payment in OUR ledger so amountPaid / balanceDue stay
-  // truthful and the status derives correctly. On an invoice that already
-  // had cash against it this settles the remainder rather than pretending
-  // the card covered the whole total.
-  try {
-    // Said by the intent itself, so the confirm route and the webhook write
-    // the same line whichever lands first.
-    const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
-    await invoices.addPayment(inv.id, {
-      amount: (summary.amountCents ?? expectedCents) / 100,
-      method: "card_qb",
-      receivedAt: new Date().toISOString(),
-      by: tapToPay ? (by || "tap_to_pay") : "customer",
-      notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`
+  let updated = decided.invoice;
+  if (decided.applied > 0) {
+    // Status comes from the ledger; stamp the Stripe ids of the payment
+    // that settled it. (A charge wholly in excess leaves them alone: it
+    // isn't what paid the invoice.)
+    const settled = Number(updated.balanceDue) <= 0.01;
+    updated = await invoices.update(inv.id, {
+      ...(settled && updated.status !== "paid" && updated.status !== "void" ? { status: "paid" } : {}),
+      stripePaymentIntentId: summary.paymentIntentId,
+      stripeChargeId: summary.chargeId,
+      quickbooksPaymentId: qbPaymentId,
+      notes: inv.notes
+        ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
+        : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
     });
-  } catch (ledgerErr) {
-    console.warn(`[stripe] ledger record failed for ${inv.id}: ${ledgerErr?.message}`);
+    // Threshold deposit: the invoice store reports this write's change to
+    // "paid" (only when the payment SETTLED it — never a part payment) to
+    // deposits.onInvoiceStatusChange. Nothing to call here (Fix A).
   }
 
-  // Status comes from the ledger; only force "paid" if the ledger didn't
-  // settle it (e.g. addPayment failed), so a successful charge can never
-  // leave the invoice looking unpaid.
-  const afterLedger = await invoices.get(inv.id);
-  const settled = afterLedger && Number(afterLedger.balanceDue) <= 0.01;
-  const updated = await invoices.update(inv.id, {
-    ...(settled && afterLedger.status !== "paid" ? { status: "paid" } : {}),
-    stripePaymentIntentId: summary.paymentIntentId,
-    stripeChargeId: summary.chargeId,
-    quickbooksPaymentId: qbPaymentId,
-    notes: inv.notes
-      ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
-      : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
-  });
-
-  // Threshold deposit — a paid deposit invoice spawns the held balance
-  // invoice; a paid balance invoice closes the quote's deposit stage.
-  try {
-    await deposits.onInvoicePaid(updated);
-  } catch (depErr) {
-    console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
+  // The office alert, once: only the call that opened the exception
+  // reaches here with one.
+  if (exception) {
+    console.error(`[stripe] PAYMENT EXCEPTION ${inv.id}: ${summary.paymentIntentId} charged $${exception.chargedTotal.toFixed(2)}, applied $${exception.applied.toFixed(2)}, excess $${exception.excess.toFixed(2)} (${exception.reason}).`);
+    try {
+      const sent = await sendPaymentExceptionAlert(updated, exception);
+      await invoices.markPaymentExceptionAlert(inv.id, exception.id, sent || { ok: false, error: "no result" });
+    } catch (alertErr) {
+      console.error(`[stripe] payment exception alert failed for ${inv.id}: ${alertErr.message}`);
+      await invoices.markPaymentExceptionAlert(inv.id, exception.id, { ok: false, error: alertErr.message }).catch(() => {});
+    }
   }
 
-  // Receipt email. Best effort — a receipt failure does not roll back
-  // anything. Skipped when the webhook finalizes an invoice the confirm
-  // POST already handled (alreadyPaid short-circuits above), so the
-  // customer can't get two receipts.
+  // Receipt email — one per decided Stripe payment (a duplicate returned
+  // above). An overpayment's receipt is for what was charged and says so
+  // neutrally. Best effort — a receipt failure rolls nothing back.
   let receiptWarning = null;
   try {
     const receiptPdf = await generateInvoicePdf(updated);
-    await sendPaymentReceipt(updated, receiptPdf);
+    await sendPaymentReceipt(updated, receiptPdf, exception ? { overpayment: { charged: exception.chargedTotal } } : {});
   } catch (receiptErr) {
     console.warn(`[stripe] receipt email failed for ${inv.id}: ${receiptErr.message}`);
     receiptWarning = `Payment recorded but receipt email failed to send: ${receiptErr.message}`;
   }
 
-  return { invoice: updated, alreadyPaid: false, warning: qbWarning || receiptWarning };
+  return {
+    invoice: updated,
+    alreadyPaid: decided.applied === 0,
+    warning: exception
+      ? `This payment was more than the invoice owed: $${exception.excess.toFixed(2)} is flagged on the invoice for refund or reconciliation.`
+      : (qbWarning || receiptWarning),
+    exception,
+    overpayment: Boolean(exception),
+    customerMessage: exception ? invoices.OVERPAYMENT_CUSTOMER_MESSAGE : null
+  };
 }
 
 // Klarna capture (PJL-34, build order step 4b) — the admin "Capture"
@@ -4105,6 +4404,27 @@ async function customerPortalSections(lead) {
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
 
+  // The customer's projects and each one's invoices — projects.
+  // invoicesForProjects, the ONE rule (Financials Fix B, 2026-09-28). A
+  // deposit or held balance invoice never carries projectId (it is made at
+  // acceptance, before the project exists), so matching projectId alone
+  // listed the deposit as a loose invoice and never on its project card,
+  // whose "deposit paid" stage could not be reached. Archived projects
+  // count for "whose invoice is it", as projectId did; only live ones get
+  // a card.
+  let customerProjects = [];
+  let projectInvoiceMap = new Map();
+  if (customerId) {
+    try {
+      const everyProject = (await projects.list({ includeArchived: true }))
+        .filter((p) => p.customerId === customerId && !p.deletedAt);
+      projectInvoiceMap = await projects.invoicesForProjects(everyProject, { invoiceRecords: allInvoices });
+      const liveIds = new Set((await projects.list({ includeArchived: false })).map((p) => p.id));
+      customerProjects = everyProject.filter((p) => liveIds.has(p.id));
+    } catch (err) { console.warn("[portal] project invoices failed:", err?.message); }
+  }
+  const projectInvoiceIds = new Set([...projectInvoiceMap.values()].flat().map((i) => i.id));
+
   // ---- PJL-21: invoices with no Work Order behind them (a normal,
   // supported creation path — invoices.createDraft accepts woId: null)
   // were otherwise invisible on the portal: Service History was
@@ -4128,7 +4448,7 @@ async function customerPortalSections(lead) {
       .filter(Boolean));
     const orphanInvoices = allInvoices.filter((i) => {
       if (!visibleInvoice(i)) return false;
-      if (i.projectId) return false; // surfaced via Projects instead
+      if (i.projectId || projectInvoiceIds.has(i.id)) return false; // surfaced via Projects instead
       if (i.woId && historyWoIds.has(i.woId)) return false; // already listed above
       if (customerId && i.customerId === customerId) return true;
       if (i.customerId) return false; // belongs to a different customer
@@ -4157,21 +4477,19 @@ async function customerPortalSections(lead) {
   let projectCards = [];
   if (customerId) {
     try {
-      const projs = (await projects.list({ includeArchived: false }))
-        .filter((p) => p.customerId === customerId && !p.deletedAt);
-      projectCards = await Promise.all(projs.map(async (p) => {
+      projectCards = await Promise.all(customerProjects.map(async (p) => {
         let metrics = null;
         try { metrics = await projects.computeProjectMetrics(p.id); } catch (_) { metrics = null; }
-        const projInvoices = allInvoices
-          .filter((i) => i.projectId === p.id && visibleInvoice(i))
-          .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        const projInvoices = (projectInvoiceMap.get(p.id) || []).filter(visibleInvoice);
         // Customer-facing stage rail. Derived, furthest-reached wins:
         //   accepted  — project exists (converted from an accepted quote)
         //   deposit   — a deposit invoice has been paid
         //   scheduled — build underway or work orders attached
         //   complete  — project status flipped to complete
         //   invoiced  — a non-deposit invoice exists post-completion
-        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        // Paid by the ledger, not by a status (payment reconciliation):
+        // a deposit marked Paid with its payments short has not been paid.
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && invoices.isSettled(i));
         const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
         const stage =
           p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
@@ -4222,6 +4540,13 @@ async function customerPortalSections(lead) {
   const seasonPlanYear = new Date().getFullYear();
   let ownedProperties = [];
   let seasonPlanBookings = [];
+  // PJL-31: a completed fall-closing booking produces no Work Order (see
+  // outreach.deriveBookingState's comment), so hasCompletedWork below
+  // never sees it — this is the only signal that "the season's service
+  // already happened." Scoped to fall specifically: completing a spring
+  // opening means the system just turned ON for the year, not that the
+  // season is over, so it doesn't get the "your season is done" copy.
+  let fallClosingComplete = false;
   try {
     const allProps = await properties.list();
     ownedProperties = customerId
@@ -4229,16 +4554,21 @@ async function customerPortalSections(lead) {
       : allProps.filter((prop) => prop.id && prop.id === lead.propertyId);
     const states = await Promise.all(ownedProperties.map(async (prop) => {
       try {
-        const st = await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
-        return (st && st.hasBooking)
-          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
-          : null;
+        return await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
       } catch (err) {
         console.warn("[portal] season-plan booking state failed:", err?.message);
         return null;
       }
     }));
-    seasonPlanBookings = states.filter(Boolean);
+    seasonPlanBookings = ownedProperties
+      .map((prop, i) => {
+        const st = states[i];
+        return (st && st.hasBooking)
+          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
+          : null;
+      })
+      .filter(Boolean);
+    fallClosingComplete = seasonPlanSeason === "fall" && states.some((st) => st && st.completed);
   } catch (err) {
     console.warn("[portal] season-plan bookings build failed:", err?.message);
   }
@@ -4252,7 +4582,8 @@ async function customerPortalSections(lead) {
   const derivedFacts = {
     upcomingBooking: envelopeUpcoming || woUpcoming || seasonPlanBookings.length > 0,
     hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
-    projectUnderway: projectCards.some((p) => p.stage === "scheduled")
+    projectUnderway: projectCards.some((p) => p.stage === "scheduled"),
+    fallClosingComplete
   };
 
   // JOB-006 (CRM-12) — the "Next visit" card, replacing the frozen
@@ -4504,16 +4835,23 @@ async function portalPayloadForLead(lead, req) {
   }
 
   const sections = await customerPortalSections(lead);
-  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false };
+  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false, fallClosingComplete: false };
   delete sections.derivedFacts;
   // Priority order (JOB-005, adopted 2026-08-02 with Patrick's two
-  // additions): project underway > quote ready > scheduled > complete >
-  // closed (quiet) > request open.
+  // additions): project underway > quote ready > scheduled > season
+  // complete > complete > closed (quiet) > request open.
+  //
+  // PJL-31: season_complete sits ABOVE the generic service_complete —
+  // when a customer's fall closing just finished and nothing else is
+  // upcoming, "your season with PJL is done" is more specific and more
+  // useful than the generic "your service is complete" (which exists
+  // for one-off repair/install visits, not the seasonal cycle).
   const derived = {
     state:
       facts.projectUnderway ? "project_underway"
       : status === "quoted" ? "quote_ready"
       : facts.upcomingBooking ? "service_scheduled"
+      : facts.fallClosingComplete ? "season_complete"
       : facts.hasCompletedWork ? "service_complete"
       : status === "lost" ? "closed"
       : "request_open",
@@ -4521,7 +4859,7 @@ async function portalPayloadForLead(lead, req) {
     hasCompletedWork: facts.hasCompletedWork,
     projectUnderway: facts.projectUnderway,
     showIntakeRail: !facts.hasCompletedWork && !facts.upcomingBooking
-      && !facts.projectUnderway && status !== "lost"
+      && !facts.fallClosingComplete && !facts.projectUnderway && status !== "lost"
   };
 
   // Warranty claims filed under this customer's email. Read-only here —
@@ -5279,8 +5617,13 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   // Look up the linked WO (if any) — we need to update wo.scheduledFor
   // and we also block the move if the tech has already arrived. Multi-WO
   // bookings rarely happen but if any WO has arrivedAt set, block.
-  const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
-  const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+  //
+  // THIS visit's WOs only (bookings.workOrdersForVisit, PJL-97): a
+  // returning customer's record can still link last spring's finished WO,
+  // whose arrivedAt refused every move and whose date the loop below
+  // rewrote onto the fall day.
+  const allLinkedWos = (await Promise.all((bookingRec.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+  const linkedWos = bookings.workOrdersForVisit(bookingRec, allLinkedWos);
   if (linkedWos.some((w) => w.arrivedAt)) {
     return { ok: false, status: 409, code: "wo_locked", errors: ["Technician has already arrived for this appointment — use the follow-up flow instead."] };
   }
@@ -6686,6 +7029,26 @@ async function serveWarrantyClaimFile(res, claim, rawN) {
   return res.end(file.data);
 }
 
+// What a project would bill today — the SAME source its final invoice
+// bills from: the T&M rollup priced from the effective parts catalog, or
+// the fixed-price source (projects.fixedPriceBillingSource). One function
+// for the billing-preview route and the Financials tab (2026-09-28).
+async function billingPreviewFor(proj) {
+  if (proj.billingMode === "time_and_material") {
+    const billing = await projects.computeTAndMBilling(proj.id, { partsCatalog: PARTS });
+    return { billingMode: "time_and_material", ...billing };
+  }
+  const src = await projects.fixedPriceBillingSource(proj);
+  return {
+    billingMode: "fixed_price",
+    lineItems: src.lineItems,
+    subtotal: src.subtotal,
+    hst: src.hst,
+    total: src.total,
+    note: src.note
+  };
+}
+
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
   // customer magic-link. Each helper returns false when it didn't handle
@@ -6704,8 +7067,8 @@ async function handleApi(req, res, pathname) {
   if (warrantyHandled !== false) return;
 
   // ===================================================================
-  // Twilio call-forward voicemail (additive — does NOT touch the SMS
-  // Messaging webhook). Telus stays Patrick's customer-facing number;
+  // Twilio call-forward voicemail (additive — the SMS Messaging webhook
+  // is route 5 below, /api/twilio-sms-incoming). Telus stays Patrick's customer-facing number;
   // unanswered calls forward to the existing Twilio number, whose
   // "A call comes in" Voice webhook points at /api/twilio-voice-incoming.
   // That plays a TTS greeting, records a voicemail, then Twilio fires two
@@ -6836,6 +7199,47 @@ async function handleApi(req, res, pathname) {
     res.writeHead(204, { "cache-control": "no-store" });
     res.end();
     return;
+  }
+
+  // 5) A customer TEXTED the Twilio number. The number's Messaging
+  //    "A message comes in" webhook points here. lib/sms-inbound.js decides:
+  //    YES confirms their one upcoming appointment (the appointment page's
+  //    own confirm), STOP turns off their seasonal texts, anything else is
+  //    forwarded to Patrick's cell with an "automated number — call or text
+  //    (905) 960-0181" reply. Same signature gate as the voice routes.
+  if (req.method === "POST" && pathname === "/api/twilio-sms-incoming") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "sms-incoming")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    let reply = null;
+    try {
+      const out = await smsInbound.handleInbound({
+        from: params.From || "",
+        to: params.To || "",
+        body: params.Body || "",
+        messageSid: params.MessageSid || params.SmsSid || "",
+        numMedia: params.NumMedia || 0
+      }, {
+        listBookings: () => bookings.list(),
+        listProperties: () => properties.list(),
+        summarize: appointmentActions.summarize,
+        confirmByToken: (token, opts) => appointmentActions.confirm(token, opts),
+        updateProperty: (id, patch) => properties.update(id, patch),
+        sendAlert: (body) => sendInboundTextAlertSms(body),
+        ownerPhone: process.env.NOTIFY_TO_PHONE || ""
+      });
+      reply = out.reply;
+      console.log(`[sms-inbound] ${out.cls} → ${out.action || "none"}${reply ? " (replied)" : ""}`);
+    } catch (err) {
+      // Answer Twilio anyway — an error response makes it retry the same
+      // text, and the retry would hit the same fault.
+      console.error("[sms-inbound] failed:", err?.message || err);
+    }
+    return sendTwiml(res, 200, reply
+      ? `<Response><Message>${escapeXml(reply)}</Message></Response>`
+      : "<Response/>");
   }
 
   // 4) Public, token-gated audio proxy. The SMS/email "Listen" link points
@@ -10797,11 +11201,30 @@ async function handleApi(req, res, pathname) {
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
 
       // Status gating
+      // PJL-100 #7 — never email a customer an invoice for nothing. A $0
+      // invoice can still exist (made by hand, older data); it is a record,
+      // not something to send.
+      if (inv.status !== "void" && !(Number(inv.total) > 0)) {
+        return sendJson(res, 409, { ok: false, code: "no_charge", errors: ["This invoice is $0 — there is nothing to send the customer."] });
+      }
       if (action === "send" && inv.status !== "draft") {
         return sendJson(res, 409, { ok: false, errors: [`Invoice is "${inv.status}" — only draft invoices can be sent. Use Resend to re-email.`] });
       }
       if (action === "resend" && inv.status === "void") {
         return sendJson(res, 409, { ok: false, errors: ["Cannot resend a voided invoice."] });
+      }
+      // PJL-96: a price Patrick has not confirmed never goes to the
+      // customer — the email carries the amount and the pay link.
+      if (invoices.isPriceUnconfirmed(inv)) {
+        return sendJson(res, 409, { ok: false, code: "price_unconfirmed", errors: ["Confirm this invoice's price before sending it — it's a suggested amount until you do."] });
+      }
+      // Re-signing (2026-09-26): the work order behind it changed in price
+      // after the customer signed; they sign the revised scope first.
+      if (invoices.scopeHoldCode(inv) === "revision_required") {
+        return sendJson(res, 409, { ok: false, code: "revision_required", errors: ["The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope before sending."] });
+      }
+      if (inv.scopeHold?.since) {
+        return sendJson(res, 409, { ok: false, code: "awaiting_signature", errors: ["The work order changed after the customer signed. Get their signature on the revised work order before sending this invoice."] });
       }
       // Threshold deposit — a held balance/final invoice waits for
       // project completion (the cascade clears the hold). Admin override:
@@ -11083,7 +11506,7 @@ async function handleApi(req, res, pathname) {
       // Map reason codes to HTTP status. The lib returned a structured
       // error — pass the same shape through so the UI can branch on it.
       const code = result.error;
-      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed"]);
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "price_unconfirmed", "awaiting_signature"]);
       const messages = {
         invoice_not_found: "Invoice not found.",
         missing_invoice_id: "Invoice ID missing in request URL.",
@@ -11096,7 +11519,9 @@ async function handleApi(req, res, pathname) {
         no_twilio_config: "Twilio is not configured on the server — reminder not sent.",
         disabled: "Invoice SMS is disabled in admin settings — reminder not sent.",
         opted_out: "Customer opted out of text reminders — reminder not sent.",
-        portal_token_failed: "Couldn't generate a portal link for this invoice."
+        portal_token_failed: "Couldn't generate a portal link for this invoice.",
+        price_unconfirmed: "Confirm this invoice's price first — nothing is texted while it is a suggestion.",
+        awaiting_signature: "The work order changed after the customer signed — get their new signature first. Nothing was texted."
       };
       const msg = messages[code] || code || "Reminder not sent.";
       if (code === "invoice_not_found") {
@@ -11175,7 +11600,7 @@ async function handleApi(req, res, pathname) {
       }
 
       const code = result.error;
-      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "autofire_recent"]);
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "autofire_recent", "price_unconfirmed"]);
       const messages = {
         invoice_not_found: "Invoice not found.",
         missing_invoice_id: "Invoice ID missing in request URL.",
@@ -11248,7 +11673,11 @@ async function handleApi(req, res, pathname) {
       // (set when Patrick clicks Send-to-customer); if absent, the
       // portal page shows a banner instead of a fake button.
       const publicBase = resolvePublicBaseUrl();
-      const payUrl = inv.paymentToken
+      // Only when the pay page would take the card (invoices.isPayableOnline):
+      // a Pay button to a "not ready" page — a draft, or a price PJL has not
+      // confirmed (PJL-96) — is a dead end; the page shows its "being
+      // prepared" banner instead.
+      const payUrl = inv.paymentToken && invoices.isPayableOnline(inv)
         ? `${publicBase}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
         : null;
       // Short property label — same logic as the SMS body. Drops city/
@@ -11476,6 +11905,13 @@ async function handleApi(req, res, pathname) {
       const body = await parseRequestBody(req);
       const inv = await invoices.getByPaymentToken(id, body?.t || "");
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      // Marked Paid with its payments short: nothing is collectible until
+      // the office reconciles it (payment reconciliation, 2026-09-28).
+      if (invoices.payBlockReason(inv) === "reconciliation_required") {
+        return sendJson(res, 409, { ok: false, code: "reconciliation_required", errors: [
+          `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
+        ] });
+      }
       if (inv.status === "paid") {
         return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."] });
       }
@@ -11490,7 +11926,15 @@ async function handleApi(req, res, pathname) {
       // Same rule the page reads (invoices.isPayableOnline): a draft is
       // payable only once staff opened it for payment on site.
       if (!invoices.isPayableOnline(inv)) {
-        return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
+        return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
+          invoices.payBlockReason(inv) === "price_unconfirmed"
+            ? "PJL is still confirming this invoice's price — nothing can be charged yet."
+            : invoices.payBlockReason(inv) === "reconciliation_required"
+              ? `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
+            : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
+              ? "This invoice is being updated — nothing can be charged yet."
+              : `This invoice is "${inv.status}" and isn't ready for payment.`
+        ] });
       }
 
       const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
@@ -11522,6 +11966,7 @@ async function handleApi(req, res, pathname) {
       const phone = await paymentSupportPhone();
 
       // Reuse the persisted open intent when it still matches.
+      let replacesReversed = null;
       if (inv.stripePaymentIntentId) {
         try {
           const { intent } = await stripe.retrievePaymentIntent(inv.stripePaymentIntentId);
@@ -11533,13 +11978,19 @@ async function handleApi(req, res, pathname) {
             // Paid but our flip hasn't landed yet (webhook in flight, or
             // it was missed). Don't mint a second chargeable intent for
             // an invoice whose money already moved — finalize now.
+            let result;
             try {
-              const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "intent-reuse" });
-              return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."], invoiceStatus: result.invoice.status });
+              result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "intent-reuse" });
             } catch (finErr) {
               console.error(`[payment-intent] succeeded-intent finalize failed for ${inv.id}: ${finErr.message}`);
               return sendJson(res, 409, { ok: false, errors: [`This invoice shows a completed payment. Please call us at ${phone} before paying again.`] });
             }
+            if (!result.reversed) {
+              return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."], invoiceStatus: result.invoice.status });
+            }
+            // That payment was refunded and reversed off the ledger (S6): it
+            // no longer counts, so what is owed is paid on a new intent.
+            replacesReversed = intent.id;
           }
           if (reusable && Number(intent.amount) !== amountCents) {
             // Amount changed under the open intent — kill it so the old
@@ -11563,8 +12014,11 @@ async function handleApi(req, res, pathname) {
         description: `PJL invoice ${inv.id}`,
         // Scoped to invoice + amount: a retry of this call reuses the
         // same intent at Stripe's end instead of creating a twin, and an
-        // amount change gets a genuinely new key.
-        idempotencyKey: `pjl-${inv.id}-${amountCents}`
+        // amount change gets a genuinely new key. After a refunded payment
+        // the balance is back at the same amount, so the key also names
+        // the payment it replaces; the plain key would hand back the
+        // refunded intent.
+        idempotencyKey: `pjl-${inv.id}-${amountCents}${replacesReversed ? `-after-${replacesReversed}` : ""}`
       });
       await invoices.update(inv.id, { stripePaymentIntentId: intent.id });
       return sendJson(res, 200, { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id });
@@ -11606,6 +12060,11 @@ async function handleApi(req, res, pathname) {
       const { intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId);
       try {
         const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "confirm" });
+        if (result.reversed) {
+          return sendJson(res, 409, { ok: false, code: "payment_reversed", errors: [
+            `This card payment was refunded, so it no longer counts toward this invoice. Please refresh the page to see what's owing, or call us at ${phone}.`
+          ] });
+        }
         const updated = result.invoice;
         return sendJson(res, 200, {
           ok: true,
@@ -11617,7 +12076,12 @@ async function handleApi(req, res, pathname) {
             total: updated.total,
             stripeChargeId: updated.stripeChargeId
           },
-          warning: result.warning
+          // More than the invoice owed (a payment exception): the page shows
+          // the neutral wording instead of a plain "Payment received". The
+          // office-facing warning stays in the office.
+          overpayment: result.overpayment === true,
+          customerMessage: result.customerMessage || null,
+          warning: result.overpayment ? null : result.warning
         });
       } catch (finErr) {
         // Verification failed — wrong invoice, wrong amount, or the
@@ -13013,11 +13477,20 @@ async function handleApi(req, res, pathname) {
       // embedded lead.booking shape doesn't carry the canonical BK- id,
       // so we can't match it on a field after the record is gone.
       const bookingToDelete = await bookings.get(id);
+      // A previous visit's finished WO on a reused record (PJL-97) is not
+      // "work in progress" on this one, so it never blocks the delete.
+      const deleteLinkedWos = bookingToDelete
+        ? (await Promise.all((bookingToDelete.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean)
+        : [];
+      const deleteVisitWoIds = new Set(bookingToDelete
+        ? bookings.workOrdersForVisit(bookingToDelete, deleteLinkedWos).map((w) => w.id)
+        : []);
       const result = await bookings.remove(id, {
         by: session.uid || "admin",
         isActiveWo: async (woId) => {
           const wo = await workOrders.get(woId);
           if (!wo) return false;
+          if (!deleteVisitWoIds.has(wo.id)) return false;
           // "Active" = anything past initial scheduling but not cancelled.
           return wo.status && wo.status !== "scheduled" && wo.status !== "cancelled";
         }
@@ -13651,6 +14124,428 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Part photos (P-PJL-35, FLOW-47) ----------------------------
+  // One verified photo per real-world fitting, shown only in the parts
+  // picker. lib/part-photos.js owns the one rule (photoStateFor) for
+  // whether a photo may show; these routes only read or change the stores
+  // and then rebuild the catalog so /api/parts reflects it.
+  //
+  //   GET    /api/part-photos/<sha256>/<160|480|1200|2000|t160|t320>.webp   image (staff; 2000 = the enlarged-viewer copy, only for sources larger than 1200)
+  //   GET    /api/part-photos                                overview (staff)
+  //   POST   /api/part-photos/:sku/photo      {data} | {imageUrl}   (admin)
+  //   POST   /api/part-photos/:sku/link       {sameAsSku} | {groupId} (admin)
+  //   DELETE /api/part-photos/:sku/link                              (admin)
+  //   POST   /api/part-photos/:sku/reconfirm                         (admin)
+  //   DELETE /api/part-photo-groups/:id/photo                        (admin)
+  const partPhotoImgMatch = pathname.match(/^\/api\/part-photos\/([a-f0-9]{64})\/(160|480|1200|t160|t320)\.webp$/);
+  if (partPhotoImgMatch && req.method === "GET") {
+    try {
+      // t160/t320 are the normalized square tile thumbnails; a photo saved
+      // before they existed gets them made on this first request, and one
+      // that can't be made falls back to the plain photo (resolveImageFile).
+      const file = await partPhotos.resolveImageFile(partPhotoImgMatch[1], partPhotoImgMatch[2]);
+      const buf = await fs.readFile(file.path);
+      // The URL is the image's own hash, so its bytes can never change:
+      // cache it for good. "private" because it sits behind staff auth.
+      // A fallback is NOT cached, so a later successful thumbnail replaces it.
+      res.writeHead(200, {
+        "content-type": "image/webp",
+        "content-length": buf.length,
+        "cache-control": file.fallback ? "private, no-store" : "private, max-age=31536000, immutable"
+      });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such photo."] }); }
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/part-photos") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      const { groups, links } = await partPhotos.snapshot();
+      const parts = Object.values(PARTS.parts || {}).map((p) => ({
+        sku: p.sku, partNumber: p.partNumber, description: p.description, size: p.size,
+        category: p.category, manufacturer: p.manufacturer || "",
+        photoState: p.photoState || "none", photo: p.photo || null,
+        groupId: links[p.sku] ? links[p.sku].groupId : null
+      }));
+      const groupSummary = {};
+      for (const [id, g] of Object.entries(groups)) {
+        const skus = Object.keys(links).filter((sku) => links[sku].groupId === id).sort();
+        // The effective default is whatever the merge decided for the
+        // fitting's visible members (one rule, lib/part-photos.js).
+        const member = skus.map((s) => PARTS.parts[s]).find((p) => p && p.photo && p.photo.groupId === id);
+        groupSummary[id] = {
+          id, label: g.label || id, tier: g.tier || "none", skus,
+          defaultSku: member ? member.photo.fittingDefaultSku : null,
+          defaultChosen: member ? !!member.photo.fittingDefaultChosen : false
+        };
+      }
+      return sendJson(res, 200, { ok: true, parts, groups: groupSummary, categories: PARTS.categories || [] });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read part photos."] });
+    }
+  }
+
+  const partPhotoSkuMatch = pathname.match(/^\/api\/part-photos\/([^/]+)\/(photo|link|reconfirm)$/);
+  if (partPhotoSkuMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const sku = decodeURIComponent(partPhotoSkuMatch[1]);
+    const action = partPhotoSkuMatch[2];
+    const part = PARTS.parts[sku];
+    if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
+    const by = await actorLabel(req);
+    try {
+      let result, note;
+      if (action === "photo" && req.method === "POST") {
+        // 8 MB image cap; base64 is ~4/3 of that.
+        const payload = await parseRequestBody(req, { maxBytes: 12 * 1024 * 1024 });
+        if (payload.imageUrl) {
+          result = await partPhotos.setPhotoFromUrl(sku, part, payload.imageUrl, { by });
+          note = `Set photo for ${sku} from ${new URL(String(payload.imageUrl)).hostname}`;
+        } else {
+          const buf = Buffer.from(String(payload.data || ""), "base64");
+          if (buf.length > 8 * 1024 * 1024) return sendJson(res, 413, { ok: false, errors: ["That image is too large (8 MB max)."] });
+          result = await partPhotos.setPhoto(sku, part, buf, { by, source: { method: "upload" } });
+          note = `Uploaded photo for ${sku}`;
+        }
+        if (result.sharedWith.length) note += ` (shared with ${result.sharedWith.join(", ")})`;
+      } else if (action === "link" && req.method === "POST") {
+        const payload = await parseRequestBody(req);
+        let groupId = payload.groupId;
+        if (!groupId && payload.sameAsSku) {
+          const { links } = await partPhotos.snapshot();
+          groupId = links[payload.sameAsSku] && links[payload.sameAsSku].groupId;
+          if (!groupId) return sendJson(res, 422, { ok: false, errors: ["That part has no photo to share yet."] });
+        }
+        if (!groupId) return sendJson(res, 422, { ok: false, errors: ["Choose the part this is the same fitting as."] });
+        result = await partPhotos.linkToGroup(sku, part, String(groupId), { by });
+        note = `Linked ${sku} to photo group ${groupId}${payload.sameAsSku ? ` (same fitting as ${payload.sameAsSku})` : ""}`;
+      } else if (action === "link" && req.method === "DELETE") {
+        result = await partPhotos.unlink(sku, { by });
+        note = `Unlinked ${sku} from its photo`;
+      } else if (action === "reconfirm" && req.method === "POST") {
+        result = await partPhotos.reconfirm(sku, part, { by });
+        note = `Reconfirmed the photo for ${sku} after an edit`;
+      } else {
+        return sendJson(res, 405, { ok: false, errors: ["Method not allowed."] });
+      }
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: `part-photo.${action}`, note, after: { sku, ...result } });
+      return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none", photo: PARTS.parts[sku]?.photo || null });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't update the photo."] });
+    }
+  }
+
+  // ---------- Photo Review (P-PJL-35 M3b, FLOW-49) ------------------------
+  //   GET  /api/part-photo-review                       queues + progress (staff)
+  //   POST /api/part-photo-review/:sku/approve {hash}   approve a candidate (admin)
+  //   POST /api/part-photo-review/:sku/reject {reason}  reject the AI result (admin)
+  //   POST /api/part-photo-review/fittings/:id {action: confirm|dismiss, keep} (admin)
+  // "Upload my own" uses POST /api/part-photos/:sku/photo (above).
+  // Nothing here starts, pauses or resumes a backfill run (held for M3c).
+  // ---------- Calibration run (P-PJL-35 M3c) --------------------------------
+  //   GET  /api/part-photo-backfill/plan         the exact 15 SKUs + call estimate (staff)
+  //   POST /api/part-photo-backfill/calibration  start it (admin) — the ONLY start door
+  //   POST /api/part-photo-backfill/pause|resume (admin)
+  // Hard limits live in lib/photo-backfill.startCalibration: the approved
+  // 15-part mixed sample, auto-approve OFF, live photos skipped, one run at
+  // a time. There is no "whole catalog" route.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      return sendJson(res, 200, { ok: true, ...photoBackfill.calibrationPlan(), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the plan."] });
+    }
+  }
+  // POST /api/part-photo-backfill/probe — ONE isolated web-search call to
+  // check the organisation/key can use the tool (approved by Patrick,
+  // 2026-09-27). Touches no backfill state, no candidates, no photos.
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/probe") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server."] });
+    const by = await actorLabel(req);
+    const probe = await photoAiLib.probeWebSearch({ client: photoAiLib.createAnthropicClient() });
+    await settings.recordAudit({ who: by, action: "part-photo.backfill.probe", note: probe.ok ? `Web-search probe succeeded (${probe.webSearchRequests} search)` : `Web-search probe failed: ${probe.toolResultError || (probe.apiError && probe.apiError.message) || probe.stopReason}`, after: probe });
+    return sendJson(res, 200, { ok: true, probe });
+  }
+
+  // ---------- The controlled wave (P-PJL-35 M3c, Patrick 2026-09-27) --------
+  //   GET  /api/part-photo-backfill/wave-plan   the exact ≤30-part plan + estimate (staff)
+  //   POST /api/part-photo-backfill/wave {skus} start it (admin) — the engine
+  //        refuses unless `skus` is exactly the plan it would run now.
+  // Auto-approve OFF, one run at a time. There is no whole-catalog route.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/wave-plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      return sendJson(res, 200, { ok: true, ...photoBackfill.wavePlan(), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the wave plan."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/wave") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      // `skus` is the list Patrick confirmed in the dialog; the engine
+      // compares it with the plan it would run and refuses any difference.
+      // No other field of the payload is read: a wave has no finder switch.
+      const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off, no web search, budget $${status.run.budget.spentUsd.toFixed(2)} spent of $${status.run.budget.usd}): ${status.run.wave.skus.join(", ")}`, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });
+    }
+  }
+
+  // ---------- The fast-path benchmark (Patrick, Sep 28 2026) -----------------
+  //   GET  /api/part-photo-backfill/benchmark-plan[?skus=a,b]  the exact ≤10-part
+  //        dry-run plan, the baseline it is compared with, and the status of
+  //        the fast-path sources (staff)
+  //   POST /api/part-photo-backfill/benchmark {skus}  start it (admin) — a
+  //        DRY RUN: the engine refuses unless `skus` is exactly the plan;
+  //        nothing is written to the photo stores; auto-approve OFF.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/benchmark-plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      // This handler has no parsed `url` in scope (the first production call
+      // answered "url is not defined", 2026-09-28): parse the query here.
+      const q = String(new URL(req.url, "http://localhost").searchParams.get("skus") || "").split(",").map((s) => s.trim()).filter(Boolean);
+      return sendJson(res, 200, { ok: true, ...photoBackfill.benchmarkPlan(q.length ? { skus: q } : {}), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the benchmark plan."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/benchmark") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      // `skus` is the list confirmed in the dialog; the engine compares it
+      // with the plan it would run and refuses any difference.
+      const status = await photoBackfill.startBenchmark({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.benchmark", note: `Started the fast-path benchmark (dry run, ${status.run.counts.total} parts, auto-approve off, nothing saved): ${status.run.benchmark.skus.join(", ")}`, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the benchmark."] });
+    }
+  }
+
+  const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|rerun-unresolved|pause|resume)$/);
+  if (backfillActionMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    const action = backfillActionMatch[1];
+    try {
+      let status, note;
+      if (action === "calibration") {
+        if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+        status = await photoBackfill.startCalibration({ by });
+        note = `Started the photo calibration run (${status.run.counts.total} parts, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
+      } else if (action === "rerun-unresolved") {
+        // Only the calibration parts that still have no live photo (approved
+        // by Patrick, 2026-09-27) — never the whole sample, never the catalog.
+        if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+        // `only`: an optional subset of the unresolved calibration parts;
+        // the engine refuses anything outside that set.
+        const payload = await parseRequestBody(req).catch(() => ({}));
+        const only = Array.isArray(payload && payload.only) ? payload.only.map(String).slice(0, 20) : null;
+        status = await photoBackfill.startCalibrationRerun({ by, only });
+        note = `Re-ran the unresolved calibration parts (${status.run.counts.total}, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
+      } else if (action === "pause") {
+        status = await photoBackfill.pause();
+        note = "Paused the photo backfill run";
+      } else {
+        status = await photoBackfill.resume();
+        note = "Resumed the photo backfill run";
+      }
+      await settings.recordAudit({ who: by, action: `part-photo.backfill.${action}`, note, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't do that."] });
+    }
+  }
+
+  // ---------- Quality upgrade of live photos (Patrick, Sep 28 2026) ----------
+  //   GET  /api/part-photo-quality/plan            the cached plan: deterministic upgrades + review rows (staff)
+  //   POST /api/part-photo-quality/plan            (re)build it — reads each photo's product page (admin)
+  //   POST /api/part-photo-quality/upgrade {hashes} apply exactly the upgrades shown (admin)
+  //   POST /api/part-photo-quality/review/:groupId {action: keep} (admin)
+  // A replacement of the picture only: part match, fitting, approval and
+  // confidence are never touched (lib/part-photos.upgradePhotoQuality).
+  if (req.method === "GET" && pathname === "/api/part-photo-quality/plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try { return sendJson(res, 200, { ok: true, ...(await photoQuality.summary()) }); }
+    catch (err) { return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the quality plan."] }); }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-quality/plan") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      // Slow (a page and 1–3 images per photo): start it and answer at once; GET reports progress.
+      photoQuality.buildPlan({ by }).catch((err) => console.error("[photo-quality] plan failed:", err && err.message));
+      await settings.recordAudit({ who: by, action: "part-photo.quality.plan", note: "Started building the photo quality-upgrade plan" });
+      return sendJson(res, 200, { ok: true, ...(await photoQuality.summary()) });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't build the plan."] }); }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-quality/upgrade") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const out = await photoQuality.apply({ by, hashes: Array.isArray(payload && payload.hashes) ? payload.hashes.map(String) : null });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.quality.upgrade", note: `Restored ${out.applied.length} stored image(s) to the larger copy of the same picture (${out.applied.filter((a) => a.kind === "live").length} live, ${out.applied.filter((a) => a.kind === "candidate").length} review candidate(s); tiers, checks and approvals unchanged)${out.skipped.length ? `; ${out.skipped.length} skipped` : ""}`, after: out });
+      return sendJson(res, 200, { ok: true, ...out });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't apply the upgrades."] }); }
+  }
+  const qualityReviewMatch = pathname.match(new RegExp("^/api/part-photo-quality/review/([^/]+)$"));
+  if (qualityReviewMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const groupId = decodeURIComponent(qualityReviewMatch[1]);
+      const out = await photoQuality.resolveReview(groupId, { action: String(payload.action || ""), by });
+      await settings.recordAudit({ who: by, action: "part-photo.quality.review", note: `Quality review: kept ${groupId} as is`, after: out });
+      return sendJson(res, 200, { ok: true, groupId, ...out });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the review."] }); }
+  }
+
+  if (req.method === "GET" && pathname === "/api/part-photo-review") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      // Results land in the stores as the run goes; the catalog's photo
+      // states follow them here so the queues are current.
+      rebuildCatalogFromOverrides();
+      const { groups, links } = await partPhotos.snapshot();
+      const status = photoBackfill.status();
+      const queues = buildReviewQueues({
+        parts: PARTS.parts, groups, links,
+        fittings: await photoBackfill.fittingsToConfirm()
+      });
+      const quality = await photoQuality.summary();
+      const liveAuto = Object.values(PARTS.parts).filter((p) => p.photoState === "verified" && p.photo && String(p.photo.approvedBy || "").startsWith("auto:")).length;
+      const progress = { ...status.catalog, liveAuto, errors: status.run ? status.run.counts.error : 0 };
+      // Quality review rows are a queue of their own; the plan summary and the deterministic upgrades ride alongside.
+      return sendJson(res, 200, { ok: true, ...queues, quality: quality.review, qualityPlan: { plan: quality.plan, counts: quality.counts, upgrades: quality.upgrades }, progress, run: status.run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the review queue."] });
+    }
+  }
+
+  const photoReviewSkuMatch = pathname.match(/^\/api\/part-photo-review\/([^/]+)\/(approve|reject)$/);
+  if (photoReviewSkuMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const sku = decodeURIComponent(photoReviewSkuMatch[1]);
+    const part = PARTS.parts[sku];
+    if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req);
+      let result, note;
+      if (photoReviewSkuMatch[2] === "approve") {
+        result = await partPhotos.approveCandidate(sku, part, String(payload.hash || ""), { by });
+        note = `Approved the AI's photo for ${sku}${result.sharedWith.length ? ` (shared with ${result.sharedWith.join(", ")})` : ""}`;
+      } else {
+        const reason = String(payload.reason || "").slice(0, 300);
+        result = await partPhotos.rejectAiResult(sku, part, { by, reason });
+        note = `Rejected the AI's photo for ${sku}${reason ? `: ${reason}` : ""}`;
+        if (result.sentBack.length) note += `; sent back ${result.sentBack.length} other auto-approved photo(s) from the same run`;
+      }
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: `part-photo.review.${photoReviewSkuMatch[2]}`, note, after: { sku, ...result } });
+      return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none" });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the review."] });
+    }
+  }
+
+  const photoReviewFittingMatch = pathname.match(/^\/api\/part-photo-review\/fittings\/([^/]+)$/);
+  if (photoReviewFittingMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const id = decodeURIComponent(photoReviewFittingMatch[1]);
+      const payload = await parseRequestBody(req);
+      const action = String(payload.action || "");
+      const out = await photoBackfill.resolveFitting(id, { action, keep: payload.keep ? String(payload.keep) : null, by });
+      rebuildCatalogFromOverrides();
+      const f = out.fitting;
+      const note = action === "confirm"
+        ? `Confirmed ${f.a} and ${f.b} are the same fitting (kept ${f.kept}'s photo)`
+        : `${f.a} and ${f.b} are not the same fitting`;
+      await settings.recordAudit({ who: by, action: `part-photo.fitting.${f.status}`, note, after: { ...f, ...(out.result || {}) } });
+      return sendJson(res, 200, { ok: true, fitting: f });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save that."] });
+    }
+  }
+
+  // POST /api/part-photo-groups/:id/default {sku} — Patrick's "Default for
+  // this fitting": the part whose description, part #, price and supplier
+  // the picker's one-row fitting shows and whose Add it uses. (admin)
+  const partPhotoDefaultMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/default$/);
+  if (partPhotoDefaultMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoDefaultMatch[1]);
+      const payload = await parseRequestBody(req);
+      const sku = String(payload.sku || "");
+      const result = await partPhotos.setFittingDefault(groupId, sku, PARTS.parts[sku], { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.default", note: `Default for fitting ${groupId} → ${sku}${result.previous ? ` (was ${result.previous})` : ""}`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the default."] });
+    }
+  }
+
+  const partPhotoGroupMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/photo$/);
+  if (partPhotoGroupMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoGroupMatch[1]);
+      const result = await partPhotos.removeGroupPhoto(groupId, { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.remove", note: `Removed the photo from ${groupId} (${result.skus.join(", ") || "no parts"})`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't remove the photo."] });
+    }
+  }
+
   // POST /api/parts/import/preview — accept parsed rows from the browser
   // (SheetJS parses xlsx client-side; see parts-suppliers.js), return a
   // diff against the current merged catalog. Stages the parsed data in
@@ -14208,39 +15103,79 @@ async function handleApi(req, res, pathname) {
   if (woCreateInvoiceMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(woCreateInvoiceMatch[1]);
-      const wo = await workOrders.get(id);
-      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property — link a property first."] });
-      // Check for an existing invoice on this WO before drafting a new one.
-      const existing = (await invoices.listByWorkOrder(id))[0];
-      if (existing) {
-        return sendJson(res, 200, { ok: true, invoice: existing, alreadyExisted: true });
-      }
-      const woLineItems = completionCascade.lineItemsFromWo(wo);
-      if (!woLineItems.length) {
-        return sendJson(res, 422, { ok: false, errors: [
-          "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
-        ] });
-      }
-      const inv = await invoices.createDraft({
-        woId: wo.id,
-        quoteId: wo.onSiteQuote?.quoteId || null,
-        propertyId: wo.propertyId,
-        customerName: wo.customerName || "",
-        customerEmail: wo.customerEmail || "",
-        customerPhone: wo.customerPhone || "",
-        address: wo.address || "",
-        lineItems: woLineItems,
-        notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+      const actor = await actorLabel(req);
+      // Under the SAME lock as Finish's completion cascade (and the desk
+      // re-run), so "Generate invoice now" and the cascade take turns: the
+      // second one to run sees the first one's invoice and returns it. The
+      // store's one-active-invoice rule (invoices.createDraft) is the
+      // backstop for any path that doesn't take this lock.
+      const [status, body] = await serializeOn(`completion-cascade:${id}`, async () => {
+        const wo = await workOrders.get(id);
+        if (!wo) return [404, { ok: false, errors: ["Work order not found."] }];
+        if (!wo.propertyId) return [422, { ok: false, errors: ["WO has no linked property — link a property first."] }];
+        // Re-signing: no new bill for a revised scope the customer hasn't signed.
+        if (workOrders.awaitsNewSignature(wo)) {
+          return [409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order before invoicing it."] }];
+        }
+        // The WO's ACTIVE invoice, by the store's own rule — a voided one
+        // doesn't count, so void-and-regenerate works from this button.
+        const existing = invoices.activeInvoiceForWorkOrder(await invoices.listByWorkOrder(id), id);
+        if (existing) {
+          return [200, { ok: true, invoice: existing, alreadyExisted: true }];
+        }
+        // What this work order bills: billing.billingFor, the same one
+        // calculation Finish and the tech's preview ask (the fee exactly as
+        // signed once locked; a price-pending line as the suggestion
+        // Patrick confirms). It used to bill the booked tier as seeded.
+        const bill = await billing.billingFor(wo);
+        const woLineItems = bill.lines;
+        // PJL-100 #7 — a no-charge visit has no invoice by design (Fix #8).
+        // "Generate invoice now" used to draft a $0 one here, which /send
+        // then emailed to the customer. Judged on the lines this route would
+        // actually bill — AFTER the PJL-96 re-price above, which turns a
+        // price-pending custom-size line into its suggested amount, so a
+        // closing Patrick prices is never mistaken for a no-charge one.
+        {
+          const sr = wo.status === "completed" ? await properties.findServiceRecordByWo(wo.propertyId, wo.id).catch(() => null) : null;
+          const noCharge = woLineItems.length ? bill.noCharge : isNoChargeServiceRecord(sr);
+          if (noCharge) {
+            return [409, { ok: false, code: "no_charge", errors: ["No charge — this visit cost the customer nothing, so there is no invoice to draft."] }];
+          }
+        }
+        if (!woLineItems.length) {
+          return [422, { ok: false, errors: [
+            "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
+          ] }];
+        }
+        let inv;
+        try {
+          inv = await invoices.createDraft({
+            woId: wo.id,
+            quoteId: wo.onSiteQuote?.quoteId || null,
+            propertyId: wo.propertyId,
+            customerName: wo.customerName || "",
+            customerEmail: wo.customerEmail || "",
+            customerPhone: wo.customerPhone || "",
+            address: wo.address || "",
+            lineItems: woLineItems,
+            notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+          });
+        } catch (err) {
+          // The store holds one active invoice per work order; whatever beat
+          // this call to it is the answer, not an error.
+          if (err?.code !== "wo_already_invoiced") throw err;
+          return [200, { ok: true, invoice: await invoices.get(err.existingInvoiceId), alreadyExisted: true }];
+        }
+        try {
+          await workOrders.appendHistory(id, {
+            action: "invoice_drafted",
+            by: actor,
+            note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
+          });
+        } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
+        return [201, { ok: true, invoice: inv, alreadyExisted: false }];
       });
-      try {
-        await workOrders.appendHistory(id, {
-          action: "invoice_drafted",
-          by: await actorLabel(req),
-          note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
-        });
-      } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
-      return sendJson(res, 201, { ok: true, invoice: inv, alreadyExisted: false });
+      return sendJson(res, status, body);
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create invoice."] });
     }
@@ -14253,13 +15188,18 @@ async function handleApi(req, res, pathname) {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property."] });
+      if (workOrders.awaitsNewSignature(wo)) {
+        return sendJson(res, 409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order first."] });
+      }
       const payload = await parseRequestBody(req).catch(() => ({}));
       // skipSms — for re-drafting an invoice after a correction. Without it a
       // re-run schedules a fresh "your invoice is ready" text to a customer
       // who either already got one or shouldn't be contacted by a re-cut.
-      const result = await completionCascade.run(wo, {
+      // PJL-100 (nit) — under the same per-WO lock as the phone's Finish,
+      // so a desk re-run landing with it makes one invoice, not two.
+      const result = await serializeOn(`completion-cascade:${id}`, async () => completionCascade.run((await workOrders.get(id)) || wo, {
         skipInvoiceSms: payload?.skipSms === true
-      });
+      }));
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run cascade."] });
@@ -14579,7 +15519,7 @@ async function handleApi(req, res, pathname) {
       if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file."] });
       const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
@@ -14632,7 +15572,7 @@ async function handleApi(req, res, pathname) {
 
       // Find the canonical Booking record for this lead (or upsert one if
       // the legacy lead.booking shape is the only thing present).
-      let bookingRecord = (await bookings.listByLead(lead.id))[0];
+      let bookingRecord = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRecord) bookingRecord = await syncBookingFromLead(lead);
       if (!bookingRecord) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
@@ -14691,7 +15631,7 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
 
       const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
@@ -14706,8 +15646,11 @@ async function handleApi(req, res, pathname) {
         ? bookingRec.rescheduleCount : 0;
       const limitReached = rescheduleCount >= 1;
 
-      const linkedWoIds = Array.isArray(bookingRec?.workOrderIds) ? bookingRec.workOrderIds : [];
-      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      // This visit's WOs only (PJL-97): last spring's finished WO on a
+      // reused record is not "the appointment is underway".
+      const allLinkedWos = (await Promise.all((bookingRec?.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+      const linkedWoIds = bookingRec ? bookings.workOrderIdsForVisit(bookingRec, allLinkedWos) : [];
+      const linkedWos = bookingRec ? bookings.workOrdersForVisit(bookingRec, allLinkedWos) : [];
       const woLocked = linkedWos.some((w) =>
         w.arrivedAt
         || w.status === "in_progress"
@@ -14781,7 +15724,7 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       if (!bookingRec) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
@@ -14808,8 +15751,11 @@ async function handleApi(req, res, pathname) {
 
       // WO state checks. Multi-WO and arrived/in-progress/signed/completed
       // all force a phone call. Customer can't unwind a job that's underway.
-      const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
-      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      // This visit's WOs only (PJL-97) — for the guards AND the cascade
+      // below, which must never touch last spring's finished WO.
+      const allLinkedWos = (await Promise.all((bookingRec.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+      const linkedWoIds = bookings.workOrderIdsForVisit(bookingRec, allLinkedWos);
+      const linkedWos = bookings.workOrdersForVisit(bookingRec, allLinkedWos);
       if (linkedWos.some((w) => w.arrivedAt || w.status === "in_progress" || w.status === "signed" || w.status === "completed")) {
         return sendJson(res, 409, {
           ok: false,
@@ -14936,6 +15882,9 @@ async function handleApi(req, res, pathname) {
     // business on a screen asking for one address's. Absent is still
     // `null` from searchParams.get, so an unfiltered call is unchanged.
     if (propertyId !== null) all = all.filter((i) => i.propertyId === propertyId);
+    // The office's "Needs refund / reconciliation" filter: an open payment
+    // exception (invoices.needsReconciliation, the one rule).
+    if (url.searchParams.get("needsReconciliation") === "1") all = all.filter((i) => invoices.needsReconciliation(i));
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     // The two BEARER tokens never leave the server on this route.
     //
@@ -14975,12 +15924,36 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes,
-        by: session?.uid || "admin"
+        by: session?.uid || "admin",
+        refuseWhileHeld: true
       });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 201, { ok: true, invoice: result.invoice, payment: result.payment });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record the payment."] });
+    }
+  }
+
+  // POST /api/invoices/:id/payment-exceptions/:exceptionId/resolve
+  //   { resolution: "refunded" | "reconciled", note }  — admin only.
+  // Closes a payment exception once the excess is refunded (in Stripe —
+  // PJL refunds nothing by itself) or settled some other way. A note is
+  // required; the exception and its history are kept.
+  const paymentExceptionResolveMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-exceptions\/([^/]+)\/resolve$/);
+  if (paymentExceptionResolveMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.resolvePaymentException(
+        decodeURIComponent(paymentExceptionResolveMatch[1]),
+        decodeURIComponent(paymentExceptionResolveMatch[2]),
+        { resolution: payload?.resolution, note: payload?.note, by: session?.uid || "admin" }
+      );
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, exception: result.exception });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't resolve the payment exception."] });
     }
   }
 
@@ -14996,7 +15969,7 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes
-      }, { by: session?.uid || "admin" });
+      }, { by: session?.uid || "admin", refuseWhileHeld: true });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 200, { ok: true, invoice: result.invoice, payment: result.payment });
     } catch (err) {
@@ -15029,6 +16002,27 @@ async function handleApi(req, res, pathname) {
   // the customer, phone in hand, should not have to email them first to be
   // able to take their money. Idempotent — the same invoice keeps the same
   // token, so this never invalidates a link already in someone's inbox.
+  // POST /api/invoices/:id/confirm-price (PJL-96) — Patrick sets the price
+  // of a closing he prices himself: a custom size (16+ residential, 9+
+  // commercial) or a commercial account without its own price. Body:
+  // { amount? } in dollars; omitted = confirm the suggested amount as is.
+  // ADMIN ONLY — a price is a desk decision, like the fee waiver. Until
+  // this runs the invoice is not payable, not sendable and not texted.
+  const invoiceConfirmPriceMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/confirm-price$/);
+  if (invoiceConfirmPriceMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Only an admin can set this invoice's price."] });
+      const id = decodeURIComponent(invoiceConfirmPriceMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.confirmPrice(id, { amount: body?.amount ?? null, by: await actorLabel(req) });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyConfirmed: result.alreadyConfirmed === true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm the price."] });
+    }
+  }
+
   const invoicePayLinkMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-link$/);
   if (invoicePayLinkMatch && req.method === "POST") {
     try {
@@ -15072,63 +16066,112 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const id = decodeURIComponent(terminalIntentMatch[1]);
-      // The same on-site rule as "Take payment now" — a "Bill later" draft
-      // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
-      // it stamps the draft as opened on site, so the ledger and the pay
-      // page agree about it afterwards.
-      const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
-      if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
-      const inv = opened.invoice;
-      // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
-      // the phone sends is ignored.
-      const amountCents = Math.round(Number(inv.balanceDue) * 100);
-      if (!Number.isFinite(amountCents) || amountCents <= 0) {
-        return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
-      }
-      const currency = inv.currency || "CAD";
-      const reply = (intent) => sendJson(res, 200, {
-        ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
-      });
+      // One tap at a time per invoice (item 4, 2026-09-27): what follows
+      // reads the invoice's stored intent and may create one, so two taps
+      // racing must see each other's result, not both start a charge.
+      return await withTerminalIntentLock(id, async () => {
+        // The same on-site rule as "Take payment now" — a "Bill later" draft
+        // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
+        // it stamps the draft as opened on site, so the ledger and the pay
+        // page agree about it afterwards.
+        const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
+        if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
+        let inv = opened.invoice;
+        // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
+        // the phone sends is ignored.
+        let amountCents = Math.round(Number(inv.balanceDue) * 100);
+        if (!Number.isFinite(amountCents) || amountCents <= 0) {
+          return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
+        }
+        const currency = inv.currency || "CAD";
+        const reply = (intent) => sendJson(res, 200, {
+          ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
+        });
 
-      // A second tap reuses the open intent instead of minting a second
-      // chargeable one — the pay page's rule, on its own slot, because the
-      // two intents are different kinds (card_present vs card) and neither
-      // client can confirm the other's.
-      if (inv.stripeTerminalIntentId) {
-        try {
-          const { intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId);
-          const open = ["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status);
-          if (open && Number(intent.amount) === amountCents) return reply(intent);
-          if (intent?.status === "succeeded") {
-            // Money already moved and the flip has not landed. Finalize,
-            // never charge again.
-            const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
-            return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+        // A second tap never starts a second charge while the first can still
+        // take the customer's money. stripe.intentPhase() is the one rule:
+        //   collectable → reuse it (or replace it, if the balance changed —
+        //                 it can't have taken money)
+        //   in flight   → refuse: start nothing, cancel nothing
+        //   succeeded   → finalize it, start nothing
+        //   canceled    → a fresh attempt
+        // and a stored intent Stripe can't tell us about is never charged
+        // beside. Its own slot, apart from the pay page's: the two intents are
+        // different kinds (card_present vs card) and neither client can
+        // confirm the other's.
+        if (inv.stripeTerminalIntentId) {
+          let intent = null;
+          try {
+            ({ intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId));
+          } catch (lookupErr) {
+            const gone = lookupErr?.httpStatus === 404 || lookupErr?.errorCode === "resource_missing";
+            if (!gone) {
+              console.warn(`[terminal-intent] stored intent ${inv.stripeTerminalIntentId} unreadable for ${inv.id}: ${lookupErr.message}`);
+              return sendJson(res, 502, {
+                ok: false, code: "stripe_unreadable", paymentIntentId: inv.stripeTerminalIntentId,
+                errors: ["Couldn't check the earlier Tap to Pay payment with Stripe, so no new charge was started. Try again in a moment."]
+              });
+            }
+            console.warn(`[terminal-intent] stored intent ${inv.stripeTerminalIntentId} no longer exists at Stripe for ${inv.id}; starting a fresh one`);
           }
-          if (open) {
-            // The balance changed under it (a part payment, a revision):
-            // cancel so the old amount can never be collected.
-            await stripe.cancelPaymentIntent(intent.id).catch((cancelErr) => {
-              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+          const phase = intent ? stripe.intentPhase(intent) : "canceled";
+          if (phase === "in_flight") {
+            return sendJson(res, 409, {
+              ok: false, code: "payment_in_progress", paymentIntentId: intent.id, intentStatus: intent.status || null,
+              errors: ["A Tap to Pay charge for this invoice is still being processed. Don't take another payment — wait for it to finish, then check the invoice."]
             });
           }
-        } catch (lookupErr) {
-          console.warn(`[terminal-intent] stored intent lookup failed for ${inv.id}: ${lookupErr.message}`);
+          if (phase === "succeeded") {
+            // Money already moved and the flip has not landed. Finalize,
+            // never charge again.
+            let result;
+            try {
+              result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
+            } catch (finErr) {
+              console.error(`[terminal-intent] succeeded intent ${intent.id} not finalized for ${inv.id}: ${finErr.message}`);
+              return sendJson(res, 409, {
+                ok: false, code: "payment_not_finalized", paymentIntentId: intent.id,
+                errors: ["This invoice has a completed Tap to Pay charge that couldn't be recorded automatically. Don't take another payment — check the invoice."]
+              });
+            }
+            const left = Math.round(Number(result.invoice?.balanceDue) * 100);
+            if (!(left > 0)) {
+              return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+            }
+            // It paid less than is owed now (the invoice was revised up): the
+            // rest can be taken, on a new intent.
+            inv = result.invoice;
+            amountCents = left;
+          } else if (phase === "collectable") {
+            if (Number(intent.amount) === amountCents) return reply(intent);
+            // The balance changed under it (a part payment, a revision):
+            // cancel so the old amount can never be collected. If Stripe won't
+            // cancel it, it may have started moving money — start nothing.
+            try {
+              await stripe.cancelPaymentIntent(intent.id);
+            } catch (cancelErr) {
+              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+              return sendJson(res, 409, {
+                ok: false, code: "payment_in_progress", paymentIntentId: intent.id, intentStatus: intent.status || null,
+                errors: ["The earlier Tap to Pay charge for this invoice couldn't be cancelled, so no new charge was started. Check the invoice before taking payment."]
+              });
+            }
+          }
+          // canceled (or gone) → a fresh attempt below.
         }
-      }
 
-      const intent = await stripe.createTerminalPaymentIntent({
-        amountCents,
-        currency,
-        invoiceId: inv.id,
-        description: `PJL invoice ${inv.id}`,
-        // Two taps racing before either stored its intent get ONE intent;
-        // keyed on the intent it replaces too, so a cancelled one is never
-        // handed back for the same amount later.
-        idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+        const created = await stripe.createTerminalPaymentIntent({
+          amountCents,
+          currency,
+          invoiceId: inv.id,
+          description: `PJL invoice ${inv.id}`,
+          // Keyed on the intent it replaces too, so a cancelled one is never
+          // handed back for the same amount later.
+          idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+        });
+        await invoices.update(inv.id, { stripeTerminalIntentId: created.id });
+        return reply(created);
       });
-      await invoices.update(inv.id, { stripeTerminalIntentId: intent.id });
-      return reply(intent);
     } catch (err) {
       console.warn(`[terminal-intent] failed: ${err.message}`);
       return sendJson(res, 502, { ok: false, errors: [err.message || "Couldn't start the payment."] });
@@ -15155,7 +16198,15 @@ async function handleApi(req, res, pathname) {
       // The ONE paid-flip: belongs to this invoice, succeeded, right amount
       // and currency, idempotent — the pay page's and the webhook's.
       const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "terminal", by: session?.uid || "" });
-      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null });
+      if (result.reversed) {
+        return sendJson(res, 409, { ok: false, code: "payment_reversed", paymentIntentId: intent.id, invoice: result.invoice, errors: [
+          "This Tap to Pay payment was refunded and reversed on the invoice, so it wasn't recorded again. Check the invoice before taking another payment."
+        ] });
+      }
+      return sendJson(res, 200, {
+        ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null,
+        overpayment: result.overpayment === true, customerMessage: result.customerMessage || null, exception: result.exception || null
+      });
     } catch (err) {
       console.warn(`[terminal-intent] finalize refused for ${inv.id}: ${err.message}`);
       return sendJson(res, 409, { ok: false, code: "not_verified", errors: [err.message] });
@@ -15219,21 +16270,24 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceMatch[1]);
       const payload = await parseRequestBody(req);
       const before = await invoices.get(id);
-      const updated = await invoices.update(id, payload);
-      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
-
-      // Threshold deposit — paid/void transitions on deposit invoices
-      // drive the quote's deposit lifecycle. Best-effort.
-      try {
-        if (before && before.status !== "paid" && updated.status === "paid") {
-          await deposits.onInvoicePaid(updated);
-        }
-        if (before && before.status !== "void" && updated.status === "void") {
-          await deposits.onInvoiceVoided(updated);
-        }
-      } catch (depErr) {
-        console.warn(`[invoice-patch] deposit hook failed for ${id}:`, depErr?.message);
+      // A manual "Paid" / "Partially paid" is recording money, and a manual
+      // "Sent" is Send: neither while the invoice is held for a revised
+      // scope (invoices.paymentHoldFor — the same rule every payment route
+      // asks).
+      if (before && ["paid", "partially_paid", "sent"].includes(payload?.status) && payload.status !== before.status) {
+        const held = invoices.paymentHoldFor(before);
+        if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       }
+      // Who changed it — the audit for a status change, and for resolving a
+      // payment reconciliation (never the body's say-so).
+      const patchSession = await requireUser(req);
+      const updated = await invoices.update(id, { ...payload, by: await actorLabel(req, patchSession?.uid || "admin") });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
+
+      // Threshold deposit — paid / un-paid / void transitions drive the
+      // quote's deposit lifecycle; the invoice store reports this write's
+      // change to deposits.onInvoiceStatusChange itself (Fix A).
 
       // PR 3 — status mirror to QuickBooks. When admin sets status to
       // void in PJL, push the same change to QB. Best-effort: a QB
@@ -15254,6 +16308,9 @@ async function handleApi(req, res, pathname) {
 
       return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
+      // A refused "Mark paid" (record_payment_required) or a Partially paid
+      // the ledger doesn't bear out (status_mismatch) says why, with its code.
+      if (err && err.code && err.status) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
     }
   }
@@ -15297,7 +16354,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       const updated = await invoices.get(id);
-      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning: qbWarning });
+      const warning = [result.holdNote, qbWarning].filter(Boolean).join(" ") || null;
+      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning, stillHeld: Boolean(result.holdNote) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't revise invoice."] });
     }
@@ -15381,10 +16439,12 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceVoidMatch[1]);
       const body = await parseRequestBody(req).catch(() => ({}));
       const reason = typeof body?.reason === "string" ? body.reason : "";
+      const beforeVoid = await invoices.get(id);
       const result = await invoices.voidInvoice(id, { reason, by: session.uid || "admin" });
       if (!result.ok) {
         return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       }
+      if (!result.alreadyVoid) await settleNoChargeOnVoid(beforeVoid);
 
       // Mirror the void to QuickBooks — best-effort, non-blocking, same as
       // the legacy PATCH→void path. A QB failure surfaces as a warning; the
@@ -15402,14 +16462,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       // Threshold deposit — voiding a deposit invoice reverts the quote
-      // to awaiting-deposit and withdraws a held balance invoice.
-      if (!result.alreadyVoid) {
-        try {
-          await deposits.onInvoiceVoided(result.invoice);
-        } catch (depErr) {
-          console.warn(`[invoice-void] deposit hook failed for ${id}:`, depErr?.message);
-        }
-      }
+      // to awaiting-deposit and withdraws a held balance invoice; the
+      // invoice store reports the void to deposits.onInvoiceStatusChange.
       return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void invoice."] });
@@ -15498,6 +16552,42 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, supplier: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update supplier."] });
+    }
+  }
+
+  // ---------- Supplier logos (P-PJL-35 M2a) -------------------------
+  //   GET    /api/supplier-logos/<sha256>.png   the logo image (staff)
+  //   POST   /api/suppliers/:id/logo {data}     upload/replace (admin)
+  //   DELETE /api/suppliers/:id/logo            remove (admin)
+  // The official logo, resized only (lib/supplier-logos.js).
+  const supplierLogoImgMatch = pathname.match(/^\/api\/supplier-logos\/([a-f0-9]{64})\.png$/);
+  if (supplierLogoImgMatch && req.method === "GET") {
+    try {
+      const buf = await fs.readFile(supplierLogos.logoPath(supplierLogoImgMatch[1]));
+      res.writeHead(200, { "content-type": "image/png", "content-length": buf.length, "cache-control": "private, max-age=31536000, immutable" });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such logo."] }); }
+    return;
+  }
+  const supplierLogoMatch = pathname.match(/^\/api\/suppliers\/([^/]+)\/logo$/);
+  if (supplierLogoMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const id = decodeURIComponent(supplierLogoMatch[1]);
+    const current = await suppliers.get(id);
+    if (!current) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+    const by = await actorLabel(req);
+    try {
+      let logo = null;
+      if (req.method === "POST") {
+        const payload = await parseRequestBody(req, { maxBytes: 6 * 1024 * 1024 });
+        logo = await supplierLogos.save(Buffer.from(String(payload.data || ""), "base64"));
+      }
+      const updated = await suppliers.setLogo(id, logo);
+      await settings.recordAudit({ who: by, action: logo ? "supplier.logo.set" : "supplier.logo.remove", note: `${logo ? "Set" : "Removed"} the logo for ${current.name} (${id})`, after: { id, logo } });
+      return sendJson(res, 200, { ok: true, supplier: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the logo."] });
     }
   }
 
@@ -15766,7 +16856,17 @@ async function handleApi(req, res, pathname) {
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const all = await projects.list({ status, propertyId, includeArchived });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    return sendJson(res, 200, { ok: true, projects: all });
+    // Each project's signed agreement, and the Dashboard's total, from the
+    // SAME resolver as the workspace header and the Change Orders tab
+    // (projects.agreementsForProjects → describeAgreement). The list and the
+    // Dashboard show these; they never read the frozen proposalSnapshot or
+    // add money up in the browser (2026-09-27).
+    const agreements = await projects.agreementsForProjects(all);
+    return sendJson(res, 200, {
+      ok: true,
+      projects: all.map((p) => ({ ...p, agreement: agreements.get(p.id) || null })),
+      totals: projects.contractTotals(all, agreements)
+    });
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
@@ -16009,24 +17109,36 @@ async function handleApi(req, res, pathname) {
             depositInvoiceId: null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
-          try {
-            const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
-            const byRole = (role) => chainInvoices
-              .filter((inv) => inv.invoiceRole === role)
-              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
-            const best = byRole("balance") || byRole("deposit");
-            if (best) linkedQuote.depositInvoiceId = best.id;
-          } catch (err) { /* tolerate — Invoice tab just falls back to finalInvoiceId or greys out */ }
         }
       } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+
+    // The project's invoices — projects.invoicesForProject, the ONE rule
+    // (Financials Fix B, 2026-09-28): tagged with the project, its final
+    // invoice, or a deposit/balance invoice on its quote chain. A VOID
+    // invoice is never "the" invoice here: it used to be picked when it
+    // was the newest, and the Overview then showed it as money owed.
+    let projInvoices = [];
+    try { projInvoices = await projects.invoicesForProject(proj); } catch (err) { /* tolerate — panels just don't render */ }
+    const liveProjInvoices = projInvoices.filter(projects.isLiveInvoice);
+    if (linkedQuote) {
+      // Prefer the balance invoice if the deposit's already been paid and
+      // superseded by one; else the deposit invoice.
+      const byRole = (role) => liveProjInvoices
+        .filter((inv) => inv.invoiceRole === role)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+      const best = byRole("balance") || byRole("deposit");
+      if (best) linkedQuote.depositInvoiceId = best.id;
     }
 
     // Invoice summary (2026-09-21) — real numbers inline (status, total,
     // amount paid, balance due), not just a link out. Prefers the
     // project's final invoice (set at completion); falls back to the
     // deposit/balance invoice resolved above for a job still in progress.
+    // Never a void one.
     let invoiceSummary = null;
-    const invoiceId = proj.finalInvoiceId || (linkedQuote && linkedQuote.depositInvoiceId) || null;
+    const liveFinal = proj.finalInvoiceId && liveProjInvoices.some((i) => i.id === proj.finalInvoiceId) ? proj.finalInvoiceId : null;
+    const invoiceId = liveFinal || (linkedQuote && linkedQuote.depositInvoiceId) || null;
     if (invoiceId) {
       try {
         const inv = await invoices.get(invoiceId);
@@ -16079,7 +17191,24 @@ async function handleApi(req, res, pathname) {
       };
     }
 
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary });
+    // The signed agreement — projects.describeAgreement, the SAME function
+    // the Change Orders tab reads — so "Contract value" is never an
+    // unsigned revision and never a second interpretation in React.
+    let agreement = null;
+    try { agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj)); }
+    catch (err) { /* tolerate — the header shows "—" */ }
+    // The header's "Billing" card and next action — the SAME model the
+    // Financials tab shows (lib/financials-view.js billingSummary), so the
+    // header can never call a held, unsent balance invoice "outstanding"
+    // (2026-09-28). invoiceSummary above stays for the classic page.
+    let billing = null;
+    try {
+      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+      billing = financialsView.billingSummary(financialsView.describeFinancials({
+        project: proj, agreement, invoices: projInvoices, depositQuote, methodLabels: invoices.PAYMENT_METHOD_LABELS
+      }));
+    } catch (err) { /* tolerate — the header shows "—" */ }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -16304,7 +17433,15 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, tasks: proj.tasks || [] });
+      // Archived tasks are kept so the crew's records still point
+      // somewhere, but they are off the job's list. Ask for them
+      // explicitly with ?includeArchived=1.
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const all = proj.tasks || [];
+      const tasks = url.searchParams.get("includeArchived") === "1"
+        ? all
+        : all.filter((t) => !projects.taskIsArchived(t));
+      return sendJson(res, 200, { ok: true, tasks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read tasks."] });
     }
@@ -16313,11 +17450,14 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskListMatch[1]);
       const payload = await parseRequestBody(req);
+      // actorLabel across all four task writes: `by` lands in history and,
+      // for an archive, on the record itself where the Tasks tab renders
+      // it. "admin" in front of Patrick is not a record of who did it.
       const task = await projects.addTask(id, {
         description: payload.description,
         sourceLineItemId: payload.sourceLineItemId || null,
         notes: payload.notes || ""
-      });
+      }, { by: await actorLabel(req) });
       return sendJson(res, 201, { ok: true, task });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add task."] });
@@ -16330,7 +17470,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const task = await projects.updateTask(id, taskId, payload);
+      const task = await projects.updateTask(id, taskId, payload, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, task });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
@@ -16341,11 +17481,248 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
-      const result = await projects.removeTask(id, taskId);
-      return sendJson(res, 200, { ok: true, removed: result.removed });
+      const result = await projects.removeTask(id, taskId, { by: await actorLabel(req) });
+      // removed = gone for good (nothing ever referenced it).
+      // archived = kept, because the crew's records point at it.
+      return sendJson(res, 200, {
+        ok: true, removed: result.removed, archived: result.archived, reasons: result.reasons || []
+      });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove task."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/progress — move a task from the
+  // OFFICE (2026-09-25). Body: { percent } (0-100, absolute) or
+  // { percentDelta }.
+  //
+  // Patrick's split: technicians capture on site through the field app;
+  // the workspace is where he reviews and manages — "task status should
+  // synchronize immediately, but there must be only one underlying task
+  // record", and "task updates should remain available from both places."
+  //
+  // Until now there was only ONE door. `/api/work-orders/:woId/tasks-done`
+  // writes the day's log line and then flips the project's master task,
+  // which is the right order and already keeps one record — but it needs a
+  // work order, so a task could not be corrected or finished from the desk
+  // at all.
+  //
+  // This is the second door onto the SAME record: it calls the same
+  // `projects.addTaskProgress()` the field path calls, so the status
+  // invariant (0 pending / 1-99 in_progress / 100 done) is enforced in one
+  // place for both. It deliberately does NOT write a daily-log line —
+  // an office correction is not a day's work, and inventing a session
+  // would put hours on the job that nobody worked. `completedByWoId` is
+  // null for the same reason: the history then says plainly that this one
+  // was not closed out on a visit.
+  //
+  // Absolute `percent` is converted to a delta here because the mutator is
+  // cumulative; sending an absolute from a screen that has just read the
+  // task is what a person means by "set it to 60".
+  const taskProgressMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/progress$/);
+  if (taskProgressMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskProgressMatch[1]);
+      const taskId = decodeURIComponent(taskProgressMatch[2]);
+      const payload = await parseRequestBody(req);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const task = (proj.tasks || []).find((t) => t.id === taskId);
+      if (!task) return sendJson(res, 404, { ok: false, errors: ["Task not found."] });
+      if (projects.taskIsArchived(task)) {
+        return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+      }
+
+      let delta;
+      if (payload.percent !== undefined && payload.percent !== null) {
+        const target = Number(payload.percent);
+        if (!Number.isFinite(target) || target < 0 || target > 100) {
+          return sendJson(res, 400, { ok: false, errors: ["percent must be between 0 and 100."] });
+        }
+        const current = task.status === "done" ? 100 : (Number(task.percentComplete) || 0);
+        delta = Math.round(target) - current;
+      } else {
+        delta = Number(payload.percentDelta);
+        if (!Number.isFinite(delta)) {
+          return sendJson(res, 400, { ok: false, errors: ["Send percent or percentDelta."] });
+        }
+      }
+
+      // actorLabel, not the raw uid: `by` is rendered straight to the
+      // screen in nine surfaces, and "usr_a1b2c3" in front of Patrick is
+      // not a record of who changed it.
+      const updated = await projects.addTaskProgress(id, taskId, delta, null, {
+        by: await actorLabel(req)
+      });
+      // The job's own figure comes back with it, from the server's
+      // calculation — so the screen never has to work out what the change
+      // did to the project's percentage.
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task: updated, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update progress."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/restore — put an archived task
+  // back on the list (2026-09-25). Patrick: "an accidental archive must be
+  // recoverable without editing project data manually."
+  //
+  // Nothing is reconstructed, because archiving never removed anything:
+  // the progress, the work orders' daily-log lines, their photos and the
+  // recorded hours were untouched the whole time. This clears the three
+  // fields archiving added, and the audit trail keeps BOTH entries.
+  const taskRestoreMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/restore$/);
+  if (taskRestoreMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskRestoreMatch[1]);
+      const taskId = decodeURIComponent(taskRestoreMatch[2]);
+      const task = await projects.restoreTask(id, taskId, { by: await actorLabel(req) });
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
+    }
+  }
+
+  // GET /api/projects/:id/materials — the Materials tab (2026-09-27).
+  //
+  // Three sections, and the split between them is the whole point:
+  //
+  //   planning   — each material list SEPARATELY, with its own totals.
+  //                Never summed across lists, because re-syncing the
+  //                System Builder after purchasing produces a second
+  //                list repeating the same BOM.
+  //   stock      — physical facts, so safe to aggregate project-wide:
+  //                received (from PO receipts), used on site, and the
+  //                balance between them.
+  //   exceptions — mismatches for the office to look at. They never
+  //                block the crew and are never folded into a list.
+  const projectMaterialsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/materials$/);
+  if (projectMaterialsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(projectMaterialsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+
+      const lists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
+      // Every PO that came from any of this job's lists. Receipts are
+      // counted from these, not from a line's "have" status, which a
+      // human can set by hand.
+      const listIds = new Set(lists.map((l) => l.id));
+      const allPos = await purchaseOrders.list({});
+      const pos = allPos.filter((po) =>
+        (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
+      const buildWos = await workOrders.listBuildWosForProject(id);
+
+      const model = projectMaterials.describeProject({
+        lists, purchaseOrders: pos, buildWos,
+        partsMap: (PARTS && PARTS.parts) || {}
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
+    }
+  }
+
+  // GET /api/projects/:id/change-orders — the Change Orders tab
+  // (2026-09-27). Read-only: every figure and sentence the tab shows comes
+  // from lib/change-orders-view.js over the rules that already exist —
+  // the shared "open" rule, the quote chain, and the completion check's
+  // own blockers. Actions stay on the classic page's office-only routes.
+  const changeOrdersViewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/change-orders$/);
+  if (changeOrdersViewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(changeOrdersViewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const chainInfo = await projects.resolveProjectQuote(proj);
+      const preflight = await projects.completionPreflight(id);
+      const model = changeOrdersView.describeChangeOrders({
+        project: proj,
+        chainInfo,
+        blockers: preflight.blockers || [],
+        stageOf: projects.scopeChangeStage,
+        describeAgreement: projects.describeAgreement,
+        revisionStateOf: projects.scopeChangeRevisionState
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
+    }
+  }
+
+  // GET /api/projects/:id/daily-records — the day list the Daily Records
+  // tab renders (2026-09-26, item 4 of Patrick's directive).
+  //
+  // Everything the screen shows is calculated HERE: recorded vs effective
+  // clock times, the person-hours each comes to, who corrected what and
+  // why, and — per day — whether a correction is still allowed and the
+  // sentence explaining why not. The page displays; it does not compute.
+  // That is the standing rule from the Tasks release, and on this screen
+  // it matters twice over, because every number on it is money.
+  const dailyRecordsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/daily-records$/);
+  if (dailyRecordsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(dailyRecordsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const buildWos = await workOrders.listBuildWosForProject(id);
+      const model = dailyRecords.describeProject(buildWos, { project: proj });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
+    }
+  }
+
+  // ---- Project problems (2026-09-26) ----
+  //
+  // A problem belongs to the PROJECT and links to the daily record it
+  // was found on. Same gate as the rest of /api/projects/* ("user"):
+  // a technician finding a problem on site is exactly who should be
+  // able to raise one, and the audit trail names them.
+  const problemsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems$/);
+  if (problemsMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(problemsMatch[1]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.addProblem(id, {
+        title: payload.title,
+        description: payload.description || "",
+        discoveredOnWoId: payload.discoveredOnWoId || null,
+        discoveredWorkDate: payload.discoveredWorkDate || null,
+        taskId: payload.taskId || null,
+        photoRef: payload.photoRef || null,
+        scopeChangeId: payload.scopeChangeId || null
+      }, { by: await actorLabel(req) });
+      return sendJson(res, 201, { ok: true, problem });
+    } catch (err) {
+      const status = err.code === "project_not_found" ? 404 : err.code === "missing_title" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't record that problem."], code: err.code || null });
+    }
+  }
+
+  // PATCH /api/projects/:id/problems/:problemId — open / monitoring /
+  // resolved. Resolving requires a note; re-opening keeps the history.
+  const problemStatusMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems\/([^/]+)$/);
+  if (problemStatusMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(problemStatusMatch[1]);
+      const problemId = decodeURIComponent(problemStatusMatch[2]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.setProblemStatus(id, problemId, payload.status, {
+        note: payload.note || "",
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 200, { ok: true, problem });
+    } catch (err) {
+      const status =
+        err.code === "project_not_found" || err.code === "problem_not_found" ? 404 :
+        err.code === "bad_status" || err.code === "resolution_note_required" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update that problem."], code: err.code || null });
     }
   }
 
@@ -16375,7 +17752,7 @@ async function handleApi(req, res, pathname) {
       }
       const quote = await quotes.get(proj.sourceQuoteId);
       if (!quote) return sendJson(res, 422, { ok: false, errors: ["Source quote not found."] });
-      const updated = await projects.seedTasksFromQuote(id, quote);
+      const updated = await projects.seedTasksFromQuote(id, quote, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, project: updated });
     } catch (err) {
       const status = err.code === "tasks_partially_done" ? 409 : 400;
@@ -16421,13 +17798,63 @@ async function handleApi(req, res, pathname) {
       const woId = decodeURIComponent(sessionLabourersMatch[1]);
       const sessionId = decodeURIComponent(sessionLabourersMatch[2]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
+      // No requireAdmin here: setting the crew count is a FIELD action and
+      // needsAuth fences this path at "user" so techs can reach it. (The
+      // call that used to sit here bound a value used only for `by:`,
+      // never for gating — actorLabel does that job now.)
+      // actorLabel resolves the signed-in user's NAME, not their uid, so
+      // the correction log reads "Dana Whitfield" rather than a token
+      // nobody recognises six months later. Same attribution the task
+      // writes use since #307.
       const wo = await workOrders.setLabourersForSession(woId, sessionId, payload.count, payload.note || "", {
-        by: session?.uid || "admin"
+        by: await actorLabel(req),
+        reason: payload.reason || ""
       });
       return sendJson(res, 200, { ok: true, workOrder: wo });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update labourers."] });
+    }
+  }
+
+  // ---- Correct a session's clock times (office) ----
+  //
+  // The office fix for a technician who forgot to clock out, or clocked
+  // in on the wrong job. It is a CORRECTION, not a second work session:
+  // the original times stay on the record, the new ones are stamped with
+  // who/when/why, and hours are billed from the corrected values.
+  //
+  // Body: { inAt?, outAt?, reason }  — reason is required.
+  const sessionTimesMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/sessions\/([^/]+)\/times$/);
+  if (sessionTimesMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(sessionTimesMatch[1]);
+      const sessionId = decodeURIComponent(sessionTimesMatch[2]);
+      const payload = await parseRequestBody(req);
+      // Gated at "admin" by needsAuth above — not by a call here, because
+      // requireAdmin RETURNS NULL rather than throwing, so a bare call is
+      // a no-op wearing the shape of a gate.
+      const result = await workOrders.correctSessionTimes(woId, sessionId, {
+        inAt: payload.inAt ?? null,
+        outAt: payload.outAt ?? null,
+        reason: payload.reason || "",
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      // 404 for a record that isn't there, 409 for a work order that is
+      // locked or a session that is gone, 422 for a correction the
+      // numbers refuse. Each one tells the office which it is.
+      const status =
+        err.code === "wo_not_found" ? 404 :
+        err.code === "session_not_found" ? 404 :
+        err.code === "wo_locked" ? 409 :
+        err.code === "wrong_mode" ? 409 :
+        422;
+      return sendJson(res, status, {
+        ok: false,
+        errors: [err.message || "Couldn't correct the session times."],
+        code: err.code || null
+      });
     }
   }
 
@@ -16458,6 +17885,9 @@ async function handleApi(req, res, pathname) {
         try {
           const proj = await projects.get(projectId);
           const t = (proj?.tasks || []).find((x) => x.id === taskId);
+          if (t && projects.taskIsArchived(t)) {
+            return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+          }
           if (t) curPct = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
         } catch (_) {}
       }
@@ -16472,8 +17902,14 @@ async function handleApi(req, res, pathname) {
 
       // Upload any attached photos first, stamping taskId on each.
       const photoMetas = [];
-      if (Array.isArray(payload.photos) && payload.photos.length) {
-        const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      // PJL-100 #1 — under the SAME per-WO photo lock as the upload and
+      // delete routes, reading the photo list fresh inside it. This block
+      // used to number and write back its photos from the copy read at the
+      // top of the route, so a normal upload landing meanwhile lost one of
+      // the two photos (10/10 rounds).
+      if (Array.isArray(payload.photos) && payload.photos.length) await fieldPhotoUploads.run(woId, async () => {
+        const fresh = (await workOrders.get(woId)) || wo;
+        const existing = Array.isArray(fresh.photos) ? fresh.photos : [];
         const remaining = MAX_PHOTOS_PER_WO - existing.length;
         if (remaining > 0) {
           // Stamp taskId on each photo before validation.
@@ -16499,7 +17935,7 @@ async function handleApi(req, res, pathname) {
             console.warn("[tasks-done photos] upload failed:", photoErr?.message);
           }
         }
-      }
+      });
 
       // Record the per-day log line (delta + resulting cumulative), then flip
       // the project's master task (authoritative). Same order as before
@@ -16651,15 +18087,30 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
     }
   }
+  // Change requests (Patrick, 2026-09-27). The ACCOUNT's role decides —
+  // not the page or the device: a technician may capture a draft (notes,
+  // line items, photos) and edit its notes; only the office may send it,
+  // edit the customer email, record the customer's answer, withdraw it, or
+  // generate the revised quote. Patrick signed in as admin on site keeps
+  // every office action. `by` is the person's name (actorLabel).
+  const OFFICE_ONLY_SCOPE = "Only the office can do this. Your change request is saved for the office to review.";
+  const scopeErrorStatus = (err) => ({
+    scr_not_found: 404, project_not_found: 404, scr_locked: 409, scr_wrong_state: 409, scr_already_resolved: 409, scr_send_in_progress: 409,
+    no_recipient: 409, email_not_configured: 503, delivery_failed: 502,
+    delivery_uncertain: 409, no_uncertain_send: 409, bad_outcome: 400,
+    project_closed: 409, scr_in_signed_agreement: 409
+  }[err?.code] || 400);
+
   if (scopeListMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(scopeListMatch[1]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
-      const scr = await projects.createScopeChangeRequest(id, payload, { by: session?.uid || "admin" });
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in first."] });
+      const scr = await projects.createScopeChangeRequest(id, payload, { by: await actorLabel(req, session.uid || "staff") });
       return sendJson(res, 201, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't create scope change."] });
     }
   }
 
@@ -16669,12 +18120,17 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeItemMatch[1]);
       const scrId = decodeURIComponent(scopeItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
-      const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: session?.uid || "admin" });
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in first."] });
+      // The customer-facing email (recipient, subject, wording) is the office's.
+      const officeSession = await requireAdmin(req);
+      if (payload && payload.draftEmail && !officeSession) {
+        return sendJson(res, 403, { ok: false, errors: ["Only the office can change the email to the customer."] });
+      }
+      const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: await actorLabel(req, session.uid || "staff") });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      const status = err.code === "scr_locked" ? 409 : err.code === "scr_not_found" ? 404 : 400;
-      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't update scope change."] });
     }
   }
 
@@ -16684,40 +18140,63 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeSendMatch[1]);
       const scrId = decodeURIComponent(scopeSendMatch[2]);
       const session = await requireAdmin(req);
-      const scr = await projects.sendScopeChangeRequest(id, scrId, { by: session?.uid || "admin" });
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
 
-      // Send the email via existing notify infrastructure.
+      // The sender. None when email is not set up — then nothing is sent
+      // and the change stays unsent (projects.sendScopeChangeRequest).
+      let deliver = null;
       if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-        try {
-          let nodemailer;
-          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
-          if (nodemailer) {
+        let nodemailer;
+        try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+        if (nodemailer) {
+          deliver = async (email) => {
             const transporter = nodemailer.createTransport({
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             // Nothing goes to a load-test record — lib/test-recipients.js.
             testRecipients.guardTransport(transporter);
-            await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
-              to: scr.draftEmail.to,
-              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: scr.draftEmail.subject,
-              text: scr.draftEmail.body
-            }).catch(async (err) => {
-              await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: false, error: err.message, refId: scrId });
+            try {
+              await transporter.sendMail({
+                from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+                to: email.to,
+                replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+                subject: email.subject,
+                text: email.body
+              });
+            } catch (err) {
+              await mailerLog.logSend({ kind: "other", to: email.to, ok: false, error: err.message, refId: scrId });
               throw err;
-            });
-            await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: true, refId: scrId });
-          }
-        } catch (err) {
-          console.warn("[scope-change send] email failed:", err?.message);
+            }
+            await mailerLog.logSend({ kind: "other", to: email.to, ok: true, refId: scrId });
+          };
         }
       }
 
+      const scr = await projects.sendScopeChangeRequest(id, scrId, { by: await actorLabel(req, session.uid || "admin"), deliver });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send scope change."] });
+      if (err.code === "delivery_failed" || err.code === "email_not_configured") {
+        console.warn("[scope-change send] not sent:", err.message);
+      }
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't send scope change."], scopeChange: err.scopeChange || null });
+    }
+  }
+
+  // After an interrupted send (delivery_uncertain): the office says whether
+  // the email actually arrived. Office-only, like sending.
+  const scopeSendOutcomeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/send-outcome$/);
+  if (scopeSendOutcomeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeSendOutcomeMatch[1]);
+      const scrId = decodeURIComponent(scopeSendOutcomeMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      const scr = await projects.resolveUncertainScopeSend(id, scrId, { outcome: payload.outcome, by: await actorLabel(req, session.uid || "admin") });
+      return sendJson(res, 200, { ok: true, scopeChange: scr });
+    } catch (err) {
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't record the send outcome."] });
     }
   }
 
@@ -16728,13 +18207,16 @@ async function handleApi(req, res, pathname) {
       const scrId = decodeURIComponent(scopeResolveMatch[2]);
       const payload = await parseRequestBody(req);
       const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      // From this route an approve/reject is always the office recording
+      // the customer's answer; the library stamps it that way.
       const scr = await projects.resolveScopeChangeRequest(id, scrId, {
         resolution: payload.resolution,
         note: payload.note || ""
-      }, { by: session?.uid || "admin" });
+      }, { by: await actorLabel(req, session.uid || "admin"), source: "recorded_by_office" });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't resolve scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't resolve scope change."] });
     }
   }
 
@@ -16744,10 +18226,11 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeRevisionMatch[1]);
       const scrId = decodeURIComponent(scopeRevisionMatch[2]);
       const session = await requireAdmin(req);
-      const revision = await projects.generateQuoteRevisionFromScopeChange(id, scrId, { by: session?.uid || "admin" });
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      const revision = await projects.generateQuoteRevisionFromScopeChange(id, scrId, { by: await actorLabel(req, session.uid || "admin") });
       return sendJson(res, 201, { ok: true, quote: revision });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate revision."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't generate revision."] });
     }
   }
 
@@ -16796,7 +18279,17 @@ async function handleApi(req, res, pathname) {
             });
             // Nothing goes to a load-test record — lib/test-recipients.js.
             testRecipients.guardTransport(transporter);
-            const html = renderStatusUpdateHtml(entry.snapshot);
+            // One signed link per photo, minted at send time. Scoped to
+            // that photo alone, so a forwarded email exposes those photos
+            // and nothing else.
+            const { sessionSecret } = await readAuthConfig();
+            const baseUrl = resolvePublicBaseUrl();
+            const html = renderStatusUpdateHtml(entry.snapshot, {
+              photoUrlFor: (p) => {
+                try { return baseUrl + photoLinks.pathFor(p.woId, p.n, photoLinks.mint(p.woId, p.n, sessionSecret)); }
+                catch { return null; }
+              }
+            });
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: recipient.email,
@@ -16858,6 +18351,12 @@ async function handleApi(req, res, pathname) {
       // them as part of the cascade. Both are best-effort — the lib
       // catches errors so an email outage doesn't roll back completion.
       const deps = {
+        // The parts catalog the T&M bill is priced from: the SAME effective
+        // catalog (baseline + admin edits + supplier prices) the billing
+        // preview shows (Financials Fix B). The cascade used to re-read raw
+        // parts.json, so an edited price previewed at one figure and billed
+        // at another — or blocked the invoice as an unknown SKU.
+        partsCatalog: PARTS,
         notifyAdmin: async ({ project, invoice, serviceRecord }) => {
           if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
           let nodemailer;
@@ -16967,15 +18466,23 @@ async function handleApi(req, res, pathname) {
       // mid-cascade or wrong-amount invoice.
       if (payload.notify === false) delete deps.notifyCustomer;
 
+      // Overriding the completion checks is an office decision: the checks
+      // exist to stop a job being billed on a scope nobody has signed. A
+      // technician gets a real refusal, not a quiet pass (requireAdmin
+      // returns null rather than throwing, so the result must be checked).
+      if (payload.allowOverride === true && !session) {
+        return sendJson(res, 403, { ok: false, errors: ["Only the office can override the completion checks."] });
+      }
       const result = await projects.completeProject(id, {
-        by: session?.uid || "admin",
+        by: await actorLabel(req, session?.uid || "admin"),
         allowOverride: payload.allowOverride === true,
+        overrideReason: String(payload.overrideReason || "").slice(0, 1000),
         attestationNote: payload.attestationNote || "",
         deps
       });
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
-      const status = err.code === "preflight_blockers" ? 409 : 400;
+      const status = err.code === "preflight_blockers" || err.code === "override_reason_required" ? 409 : 400;
       return sendJson(res, status, {
         ok: false,
         errors: [err.message || "Couldn't complete project."],
@@ -16992,22 +18499,45 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(tandmPreviewMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      if (proj.billingMode === "time_and_material") {
-        const billing = await projects.computeTAndMBilling(id, { partsCatalog: PARTS });
-        return sendJson(res, 200, { ok: true, billingMode: "time_and_material", ...billing });
-      }
-      // Fixed-price: mirror proposal snapshot.
-      const snap = proj.proposalSnapshot;
-      return sendJson(res, 200, {
-        ok: true,
-        billingMode: "fixed_price",
-        lineItems: snap?.lineItems || [],
-        subtotal: snap?.subtotal || 0,
-        hst: snap?.hst || 0,
-        total: snap?.total || 0
-      });
+      return sendJson(res, 200, { ok: true, ...(await billingPreviewFor(proj)) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't compute billing."] });
+    }
+  }
+
+  // GET /api/projects/:id/financials — the Financials tab (2026-09-28).
+  // Read-only: every figure and sentence the tab shows comes from
+  // lib/financials-view.js over the rules that already exist — the job's
+  // invoices (projects.invoicesForProject), the signed agreement, the
+  // deposit lifecycle, the billing preview and the completion check's own
+  // blockers. Recording payments, sending and revising stay on the classic
+  // invoice pages.
+  const financialsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/financials$/);
+  if (financialsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(financialsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
+      const projInvoices = await projects.invoicesForProject(proj);
+      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+      let billing;
+      try { billing = await billingPreviewFor(proj); } catch (err) {
+        billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
+      }
+      const preflight = await projects.completionPreflight(id);
+      const model = financialsView.describeFinancials({
+        project: proj,
+        agreement,
+        invoices: projInvoices,
+        depositQuote,
+        billing,
+        blockers: preflight.blockers || [],
+        methodLabels: invoices.PAYMENT_METHOD_LABELS
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financials."] });
     }
   }
 
@@ -18640,6 +20170,8 @@ async function handleApi(req, res, pathname) {
       }
       const inv = await invoices.get(invoiceId);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const held = invoices.paymentHoldFor(inv);
+      if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       if (!inv.quoteId) return sendJson(res, 400, { ok: false, errors: ["This invoice isn't linked to a quote — nothing to capture."] });
       const quote = await quotes.get(inv.quoteId);
       if (!quote) return sendJson(res, 404, { ok: false, errors: ["The quote linked to this invoice wasn't found."] });
@@ -18712,6 +20244,18 @@ async function handleApi(req, res, pathname) {
       const dupe = existing.find((p) => p.sourceQuoteId === quoteId);
       if (dupe) {
         return sendJson(res, 200, { ok: true, project: dupe, alreadyExisted: true });
+      }
+      // ...or for a signed REVISION of a quote that already has one. A
+      // revision is the same job re-priced; a second project for it would
+      // bill the job twice. The project already follows the revision
+      // (currentQuoteId), so hand that one back.
+      {
+        const chainOf = (await quotes.resolveQuoteChain(quoteId)).chain.map((q) => q.id);
+        const jobProject = existing.find((p) =>
+          (p.sourceQuoteId && chainOf.includes(p.sourceQuoteId)) || (p.currentQuoteId && chainOf.includes(p.currentQuoteId)));
+        if (jobProject) {
+          return sendJson(res, 200, { ok: true, project: jobProject, alreadyExisted: true });
+        }
       }
 
       // A quote built FROM a project's System Builder design already
@@ -19754,6 +21298,7 @@ async function handleApi(req, res, pathname) {
     if (leadId) all = all.filter((w) => w.leadId === leadId);
     // Most-recently-updated first so the index lands on active work.
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    await markNoChargeWorkOrders(all);   // PJL-100 #7
     return sendJson(res, 200, { ok: true, workOrders: all });
   }
 
@@ -19896,7 +21441,14 @@ async function handleApi(req, res, pathname) {
                   key: fallbackKey
                 };
               })();
-          if (resolved.custom) {
+          // PJL-96: a custom size, or a commercial account without its own
+          // price, is seeded PRICE PENDING — Patrick sets the price. It used
+          // to seed nothing (and close as "no charge") or the tier's price.
+          const pendingDecision = property
+            ? pricingLib.seasonalFeeDecision(property, type, { commercial: await customers.isCommercialAccount(property.customerId) })
+            : null;
+          const pending = pendingDecision?.status === "pending";
+          if (resolved.custom && !pending) {
             // Custom-quote tier (16+ residential / 9+ commercial) and no
             // override on the property — don't seed a meaningless $0 line.
             // Tech adds lines manually on-site.
@@ -19921,7 +21473,7 @@ async function handleApi(req, res, pathname) {
               source: { zoneNumbers: [], issueIds: [], baseline: true },
               note: resolved.source === "property_override" ? "Per-property rate" : ""
             };
-            const builderLineItems = [seasonalLine];
+            const builderLineItems = [pending ? pricingLib.pendingFeeLine(seasonalLine, pendingDecision) : seasonalLine];
             // Optional additional fall-closing plumbing line.
             const sp = property?.seasonalPricing || {};
             if (type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
@@ -19952,7 +21504,7 @@ async function handleApi(req, res, pathname) {
                 lastBuiltAt: new Date().toISOString(),
                 builderLineItems
               }
-            });
+            }, { systemWrite: true });
             if (seededWo) wo = seededWo;
           }
         } catch (err) {
@@ -19970,10 +21522,15 @@ async function handleApi(req, res, pathname) {
       // bookings carry workOrderIds[] for multi-day repairs). Looks up
       // the booking via the lead's id since lead.booking is the legacy
       // embedded shape; the canonical Booking record matches by leadId.
+      //
+      // Only the record that IS the lead's current booking (PJL-93). This
+      // used to attach to every record the lead had, so a returning
+      // customer's fall WO was also written onto last season's closed
+      // record.
       if (lead) {
         try {
-          const leadBookings = await bookings.listByLead(lead.id);
-          for (const bk of leadBookings) await bookings.attachWorkOrder(bk.id, wo.id);
+          const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
+          if (current) await bookings.attachWorkOrder(current.id, wo.id);
         } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
@@ -20016,6 +21573,25 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, workOrder: wo });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create work order."] });
+    }
+  }
+
+  // GET /api/work-orders/:id/customer-summary — what the customer is
+  // signing for: the work done and the charges, line by line, as the
+  // invoice bills them (lib/customer-summary.js). Before Finish it previews
+  // the invoice from billing.billingFor, the call Finish drafts from; after,
+  // it reads the invoice. A price PJL confirms after the visit carries no
+  // number. Read-only; signed-in staff (the /api/work-orders gate).
+  const customerSummaryMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/customer-summary$/);
+  if (customerSummaryMatch && req.method === "GET") {
+    try {
+      const wo = await workOrders.get(decodeURIComponent(customerSummaryMatch[1]));
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const summary = await require("./lib/customer-summary").customerSummaryFor(wo);
+      return sendJson(res, 200, { ok: true, summary });
+    } catch (error) {
+      console.error("[customer-summary]", error?.message);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't build the summary — try again."] });
     }
   }
 
@@ -20067,7 +21643,12 @@ async function handleApi(req, res, pathname) {
                 key: fallbackKey
               };
             })();
-        if (!resolved.custom) {
+        // PJL-96: same as the create-time seed — price pending, not nothing.
+        const pendingDecision = property
+          ? pricingLib.seasonalFeeDecision(property, wo.type, { commercial: await customers.isCommercialAccount(property.customerId) })
+          : null;
+        const pending = pendingDecision?.status === "pending";
+        if (!resolved.custom || pending) {
           const refDate = lead?.booking?.start
             ? new Date(lead.booking.start)
             : new Date(wo.scheduledFor || wo.createdAt || Date.now());
@@ -20083,7 +21664,7 @@ async function handleApi(req, res, pathname) {
             source: { zoneNumbers: [], issueIds: [], baseline: true },
             note: resolved.source === "property_override" ? "Per-property rate" : ""
           };
-          const seededLines = [seasonalLine];
+          const seededLines = [pending ? pricingLib.pendingFeeLine(seasonalLine, pendingDecision) : seasonalLine];
           const sp = property?.seasonalPricing || {};
           if (wo.type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
             const addlPrice = Number(sp.additionalFallBlowoutPrice);
@@ -20114,7 +21695,7 @@ async function handleApi(req, res, pathname) {
                 lastBuiltAt: wo.onSiteQuote?.lastBuiltAt || new Date().toISOString(),
                 builderLineItems: [...seededLines, ...existingBuilder]
               }
-            });
+            }, { systemWrite: true });
             console.log(`[wo-self-heal] seeded seasonal fee on ${wo.id} (${resolved.source}, $${resolved.price}${seededLines.length > 1 ? ` + $${seededLines[1].originalPrice} additional` : ""})`);
           } catch (err) {
             console.warn("[wo-self-heal] seed failed:", err?.message);
@@ -20155,26 +21736,43 @@ async function handleApi(req, res, pathname) {
       } catch (err) { console.warn("[wo-get] computePropertyEdits failed:", err?.message); }
     }
     // What Finish will bill for the seasonal fee, from the zones on the WO
-    // right now (fall-closing fix #7) — the same resolver the cascade runs,
-    // so the tech sees "6 zones → $105" before tapping Finish. Derived,
-    // never stored; absent on non-seasonal WOs and once completed.
+    // right now (fall-closing fix #7) — billing.billingFor, the SAME call
+    // Finish and "Generate invoice now" make, so the tech sees "6 zones →
+    // $105" and the invoice says $105. Derived, never stored; absent on
+    // non-seasonal WOs and once completed.
     let seasonalFee = null;
     if ((wo.type === "fall_closing" || wo.type === "spring_opening") && wo.status !== "completed") {
-      try {
-        const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
-        const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial });
-        if (refresh.before || refresh.customQuote) {
-          seasonalFee = {
-            zoneCount: refresh.zoneCount, commercial,
-            changed: refresh.changed || refresh.customQuote === true,
-            customQuote: refresh.customQuote === true,
-            current: refresh.before,
-            atFinish: refresh.after
-          };
-        }
-      } catch (err) { console.warn("[wo-get] seasonal fee preview failed:", err?.message); }
+      const fee = (await billing.billingFor(wo, { property })).fee;
+      if (fee && (fee.before || fee.pending)) {
+        seasonalFee = {
+          zoneCount: fee.zoneCount, commercial: fee.commercial,
+          changed: fee.changed || fee.pending,
+          customQuote: fee.pending,
+          // PJL-96: priced when the WO was signed — this is the price, final.
+          lockedAtSigning: fee.lockedAtSigning,
+          current: fee.before,
+          atFinish: fee.after
+        };
+      }
     }
-    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee });
+    await markNoChargeWorkOrders([wo]);   // PJL-100 #7
+
+    // Person-hours for this day, calculated HERE from the shared module
+    // rather than re-derived in the page. Patrick's standing rule after
+    // the Tasks release: "display server-calculated totals instead of
+    // independently recalculating them in React." The classic project
+    // page used to run its own (out − in) × labourers loop, which is a
+    // third copy of a money calculation and the one most likely to miss
+    // an office correction. It now reads this field.
+    //
+    // "toNow" matches the project metrics: a crew still clocked in shows
+    // hours so far. Billing is the one that skips open sessions.
+    // Computed AFTER markNoChargeWorkOrders, which may rewrite `wo`.
+    const personHours = wo.type === "build"
+      ? sessionHours.sumPersonHours([wo], { openSessions: "toNow" })
+      : null;
+
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee, personHours });
   }
 
   if (workOrderMatch && req.method === "PATCH") {
@@ -20336,7 +21934,11 @@ async function handleApi(req, res, pathname) {
       if (payload && payload.signature && typeof payload.signature === "object"
           && existing.signature?.signed
           && typeof payload.signature.imageData === "string"
-          && payload.signature.imageData === existing.signature.imageData) {
+          && payload.signature.imageData === existing.signature.imageData
+          // …and the same signer (PJL-100 nit): the same drawing under a
+          // different name is a change, and meets the lock below.
+          && String(payload.signature.customerName ?? existing.signature.customerName ?? "").trim()
+             === String(existing.signature.customerName ?? "").trim()) {
         delete payload.signature;
         if (payload.locked === true) delete payload.locked;
       }
@@ -20347,7 +21949,14 @@ async function handleApi(req, res, pathname) {
       // dedicated route, materials, paidOnSite, departure stamp,
       // techNotes, serviceChecklist) keep flowing — the WO continues
       // operationally; only the scope is frozen.
-      if (workOrders.isScopeFrozen(existing)) {
+      // Re-signing (Patrick, 2026-09-26): a work order re-locked with a
+      // revised scope still takes the customer's NEW signature — and only
+      // the sign-and-complete shape, nothing else, through the lock.
+      const RESIGN_KEYS = new Set(["signature", "locked", "status", "arrivedAt", "departedAt"]);
+      const resignAttempt = workOrders.awaitsNewSignature(existing)
+        && payload && payload.signature && typeof payload.signature === "object"
+        && Object.keys(payload).every((k) => RESIGN_KEYS.has(k));
+      if (workOrders.isScopeFrozen(existing) && !resignAttempt) {
         const touched = workOrders.findProtectedFieldTouched(payload);
         if (touched) {
           return sendJson(res, 409, {
@@ -20407,8 +22016,26 @@ async function handleApi(req, res, pathname) {
             ip,
             userAgent
           };
+          // PJL-96: price the seasonal fee from the zones recorded BEFORE the
+          // lock, in this same write (a separate write would trip If-Match).
+          // A revised scope already re-locked had its price frozen then.
+          const priced = existing.locked === true ? null : await seasonalQuoteAtLock(existing, Array.isArray(payload.zones) ? payload.zones : null);
+          if (priced) payload.onSiteQuote = priced.onSiteQuote;
           payload.locked = true;
         }
+      }
+
+      // Re-signing: a work order awaiting the customer's signature on a
+      // revised scope does not complete without it (workOrders.
+      // awaitsNewSignature is the one rule; the new signature can ride in
+      // this same request, as the phone's Finish sends it).
+      if (payload && payload.status === "completed" && existing.status !== "completed"
+          && workOrders.awaitsNewSignature(existing) && !(payload.signature && payload.signature.signed === true)) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "resign_required",
+          errors: ["The priced scope changed after the customer signed. The customer needs to sign the revised work order before it can be finished."]
+        });
       }
 
       // Snapshot the prior status so we can detect a transition to
@@ -20434,6 +22061,7 @@ async function handleApi(req, res, pathname) {
         });
       }
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      await syncResignatureHold(existing, updated);
 
       // Audit trail — append a generic mutation entry for non-status,
       // non-signature fields. Status_change and signature_capture are
@@ -20539,7 +22167,7 @@ async function handleApi(req, res, pathname) {
             phone: wo.customerPhone || "",
             email: wo.customerEmail || "",
             address: wo.address || "",
-            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})`
+            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})${invoices.isPriceUnconfirmed(invoice) ? " — SUGGESTED price, confirm it on the invoice before it goes out" : ""}`
               : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length ? " · No charge" : " · No invoice drafted — price this visit")}`
           },
           // The alert shell prints "Requested" items and an "Estimated
@@ -20594,7 +22222,12 @@ async function handleApi(req, res, pathname) {
         // invoice page or QB). paidOnSiteAtCompletion still gets
         // stamped on the invoice record for accounting / QB
         // reconciliation, just not surfaced in the customer email.
-        const totalLine = invoice && invoice.total > 0
+        // PJL-96: a price Patrick has not confirmed (a custom size, or a
+        // commercial account without its own price) is never shown to the
+        // customer — the draft carries only a suggestion.
+        const totalLine = invoice && invoices.isPriceUnconfirmed(invoice)
+          ? `<p style="margin: 0 0 14px;">PJL will confirm the price for today's visit and send your invoice.</p>`
+          : invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
         // Warranty line REMOVED from this email on Patrick's 2026-09-01
@@ -20662,7 +22295,7 @@ async function handleApi(req, res, pathname) {
           ? `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
     <p style="margin: 0 0 14px;">${serviceIntro}</p>
-    <p style="margin: 0 0 14px;">Please review the summary below — your invoice will follow separately.</p>
+    <p style="margin: 0 0 14px;">Please review the summary below${invoice ? " — your invoice will follow separately" : ""}.</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
           : `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
@@ -20761,9 +22394,31 @@ async function handleApi(req, res, pathname) {
         // response was lost). Answer with the invoice that completion
         // drafted, so the phone lands on it instead of "Couldn't finish".
         // Waits for a cascade still running for this WO first.
-        await serializeOn(`completion-cascade:${id}`, async () => {});
-        let invoiceId = null;
-        let invoiceTotal = null;
+        //
+        // PJL-100 #2 — …and if the first attempt completed the WO but its
+        // cascade never ran (the server restarted mid-request, or the
+        // cascade threw), there is no service record: run the cascade now,
+        // under the same per-WO lock, instead of answering "done" with
+        // nothing behind it. The cascade is idempotent, so a second retry
+        // arriving meanwhile finds the service record and only looks up.
+        let retryCascade = null;
+        await serializeOn(`completion-cascade:${id}`, async () => {
+          if (!updated.propertyId) return;
+          const hasRecord = await properties.findServiceRecordByWo(updated.propertyId, id).catch(() => null);
+          if (hasRecord) return;
+          const retryBaseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+          try {
+            retryCascade = await completionCascade.run(await workOrders.get(id) || updated, {
+              notifyAdmin: async (ctx) => { setImmediate(() => runAdminNotify(ctx, retryBaseUrl).catch((e) => console.warn("[cascade] admin notify failed:", e?.message))); },
+              notifyCustomer: async (ctx) => { setImmediate(() => runCustomerNotify(ctx).catch((e) => console.warn("[cascade] customer notify failed:", e?.message))); }
+            });
+          } catch (err) {
+            console.warn("[cascade] run on completion retry failed:", err?.message);
+            try { await workOrders.appendHistory(id, { action: "cascade_failed", by: "system", note: String(err?.message || "cascade threw").slice(0, 200) }); } catch (_e) {}
+          }
+        });
+        let invoiceId = retryCascade?.invoice?.id || null;
+        let invoiceTotal = retryCascade?.invoice?.total ?? null;
         try {
           const mine = (await invoices.listByWorkOrder(id)).filter((i) => i.status !== "void");
           mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -20775,7 +22430,18 @@ async function handleApi(req, res, pathname) {
           try { noCharge = isNoChargeServiceRecord(await properties.findServiceRecordByWo(updated.propertyId, id)); }
           catch (_e) { noCharge = false; }
         }
-        responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
+        if (retryCascade && retryCascade.ok) {
+          // The retry did the work the first attempt never got to.
+          responseBody.workOrder = (await workOrders.get(id)) || responseBody.workOrder;
+          responseBody.cascade = {
+            ran: true, alreadyRan: false, invoiceId, invoiceTotal,
+            invoiceDraftError: retryCascade.invoiceDraftError || null,
+            propertyEditsApplied: !!retryCascade.propertyEditsApplied,
+            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord)
+          };
+        } else {
+          responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
+        }
       }
       return sendJson(res, 200, responseBody);
     } catch (error) {
@@ -20930,6 +22596,40 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/photo-link/:woId/:n?s=<signed> — ONE photo, for a reader
+  // with no staff session (the customer status-update email). The
+  // signature is checked against this exact work order and photo number,
+  // so it cannot be replayed onto any other photo. Everything that is not
+  // a valid link for THIS photo is a 403 with no image bytes.
+  const photoLinkMatch = pathname.match(/^\/api\/photo-link\/([^/]+)\/(\d+)$/);
+  if (photoLinkMatch && req.method === "GET") {
+    try {
+      const woId = decodeURIComponent(photoLinkMatch[1]);
+      const n = Number(photoLinkMatch[2]);
+      const sig = new URL(req.url, baseUrlFromReq(req)).searchParams.get("s") || "";
+      const config = await readAuthConfig();
+      if (!photoLinks.verify(sig, woId, n, config.sessionSecret)) {
+        return sendJson(res, 403, { ok: false, errors: ["This photo link is not valid."] });
+      }
+      const wo = await workOrders.get(woId);
+      const photoMeta = wo && (wo.photos || []).find((p) => Number(p.n) === n);
+      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      const file = await readWorkOrderPhotoFile(woId, n);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+      res.writeHead(200, {
+        "content-type": file.mediaType,
+        // private: an email proxy may cache it for this reader, a shared
+        // cache may not.
+        "cache-control": "private, max-age=86400",
+        "content-length": file.data.length
+      });
+      res.end(file.data);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't serve photo."] });
+    }
+  }
+
   // GET /api/work-orders/:id/photo/:n — serve a single photo file.
   // Cookie-gated by the standard admin auth (handled upstream via
   // requireAuth's "/api/work-orders" prefix match). Same caching policy
@@ -20987,14 +22687,15 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, error: "wo_not_found", errors: ["Work order not found."] });
-      if (wo.signature && wo.signature.signed === true) {
+      const reAccepting = workOrders.awaitsNewSignature(wo);
+      if (!reAccepting && wo.signature && wo.signature.signed === true) {
         return sendJson(res, 409, {
           ok: false,
           error: "already_signed",
           errors: ["This work order is already signed — bypass not available."]
         });
       }
-      if (wo.signatureBypass) {
+      if (!reAccepting && wo.signatureBypass) {
         return sendJson(res, 409, {
           ok: false,
           error: "already_bypassed",
@@ -21008,6 +22709,12 @@ async function handleApi(req, res, pathname) {
         ? payload.reason.trim()
         : "admin_override";
       const note = typeof payload?.note === "string" ? payload.note : "";
+
+      // PJL-96: price the seasonal fee from the zones recorded before the
+      // bypass freezes the work order — same rule as the signature path.
+      // (Not on a revised scope already re-locked — its price was frozen then.)
+      const pricedAtLock = wo.locked === true ? null : await seasonalQuoteAtLock(wo, null);
+      if (pricedAtLock) await workOrders.update(id, { onSiteQuote: pricedAtLock.onSiteQuote }, { systemWrite: true });
 
       let updated;
       try {
@@ -21026,6 +22733,7 @@ async function handleApi(req, res, pathname) {
         }
         return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record signature bypass."] });
       }
+      await syncResignatureHold(wo, updated);
 
       // Bypass-time sweep — mirrors the sign-time sweep in the PATCH
       // route. Carry-forward "Repair now" deferred items resolve at the
@@ -21090,9 +22798,20 @@ async function handleApi(req, res, pathname) {
       const by = session.uid || "admin";
 
       try {
+        // Re-locking a revised scope freezes its price NOW (PJL-96's
+        // lock-point rule, applied to the revised scope); the customer's new
+        // signature is still required after (workOrders.awaitsNewSignature).
+        let revisedQuote = null;
+        if (action === "relock") {
+          const before = await workOrders.get(id);
+          if (before && before.locked !== true && workOrders.awaitsNewSignature(before)) {
+            const priced = await seasonalQuoteAtLock(before, null);
+            revisedQuote = priced ? priced.onSiteQuote : null;
+          }
+        }
         const updated = action === "unlock"
           ? await workOrders.unlockWorkOrder(id, { reason: payload?.reason, unlockedBy: by }, { ip, userAgent })
-          : await workOrders.relockWorkOrder(id, { relockedBy: by }, { ip, userAgent });
+          : await workOrders.relockWorkOrder(id, { relockedBy: by, onSiteQuote: revisedQuote }, { ip, userAgent });
         return sendJson(res, 200, { ok: true, workOrder: updated });
       } catch (err) {
         const code = err?.code || "";
@@ -22038,27 +23757,10 @@ async function handleApi(req, res, pathname) {
   // both the per-issue defer endpoint and the bulk defer-all endpoint so
   // the snapshot pricing logic stays consistent. Returns null if the issue
   // can't be located on the WO (caller treats as a no-op).
+  // Lives in lib/wo-findings.js since PJL-100 #5, so the completion
+  // cascade's retry builds exactly the same entry.
   function deferredPayloadFromIssue(wo, zoneNumber, issue, reason) {
-    const photoIds = (wo.photos || [])
-      .filter((p) => p.issueId === issue.id)
-      .map((p) => Number(p.n))
-      .filter(Number.isFinite);
-    let priceSnapshot = null;
-    try {
-      priceSnapshot = issueRollup.rollupSingleIssueToLineItems(issue, Number(zoneNumber) || 0, PRICING);
-    } catch (err) {
-      console.warn("[defer] price snapshot failed:", err?.message);
-    }
-    return {
-      fromWoId: wo.id,
-      fromZone: Number(zoneNumber) || null,
-      type: issue.type,
-      qty: Number(issue.qty) || 1,
-      notes: issue.notes || "",
-      reason: reason || "customer_declined",
-      photoIds,
-      suggestedPriceSnapshot: priceSnapshot
-    };
+    return woFindings.deferredPayloadFromIssue(wo, zoneNumber, issue, reason, PRICING);
   }
 
   // Per-issue defer (granular tap-to-defer in the tech UI). Body: { reason }.
@@ -22105,11 +23807,16 @@ async function handleApi(req, res, pathname) {
         reason = wo.type === "fall_closing" ? "fall_visit_no_repairs_policy" : "customer_declined";
       }
 
-      const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, zoneNumber, issue, reason));
+      // PJL-100 #4 — the one copy rule: serialized with the bulk defer (a
+      // tap racing the phone's Finish copies once) and stamped on the fresh
+      // record (no stale zones written back).
+      const carried = await woFindings.copyFindingsForward(id, { only: [{ zone: zoneNumber, issueId }], reason, pricingJson: PRICING });
+      if (carried.alreadyDeferred.length) {
+        return sendJson(res, 200, { ok: true, alreadyDeferred: true, deferredId: carried.alreadyDeferred[0].deferredId, workOrder: carried.workOrder });
+      }
+      const entry = carried.deferred[0]?.entry || null;
       if (!entry) return sendJson(res, 500, { ok: false, errors: ["Couldn't write deferred entry."] });
-      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: entry.id };
-
-      const updatedWo = await workOrders.update(id, { zones });
+      const updatedWo = carried.workOrder;
       try {
         await workOrders.appendHistory(id, {
           action: "issue_deferred",
@@ -22181,13 +23888,17 @@ async function handleApi(req, res, pathname) {
       // 1) Create the deferred record (severity=emergency).
       const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
       const userAgent = req.headers["user-agent"] || "";
-      const deferredPayload = {
-        ...deferredPayloadFromIssue(wo, zoneNumber, issue, "emergency_override"),
-        severity: "emergency"
-      };
-      const deferredEntry = await properties.addDeferredIssue(propertyId, deferredPayload);
+      // PJL-100 #4 — the one copy rule, serialized with every other copy for
+      // this WO: if the bulk defer copied this finding meanwhile, it is
+      // already on the property and is not escalated twice.
+      const carried = await woFindings.copyFindingsForward(id, {
+        only: [{ zone: zoneNumber, issueId }], reason: "emergency_override", extra: { severity: "emergency" }, pricingJson: PRICING
+      });
+      if (carried.alreadyDeferred.length) {
+        return sendJson(res, 409, { ok: false, code: "already_deferred", errors: ["This finding was already moved to the property's recommendations."] });
+      }
+      const deferredEntry = carried.deferred[0]?.entry || null;
       if (!deferredEntry?.id) return sendJson(res, 500, { ok: false, errors: ["Couldn't write the deferred entry — the finding is still on the work order."] });
-      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: deferredEntry.id };
 
       // 2) Stamp the customer's authorizing signature onto the deferred record's
       //    preAuthorization slot — same shape the portal pre-auth flow uses,
@@ -22217,10 +23928,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
         console.warn("[emergency] follow-up WO create failed:", err?.message);
       }
 
-      // 4) Update the fall WO — issue kept and stamped, note logged.
-      const techNotes = (wo.techNotes ? wo.techNotes + "\n\n" : "") +
+      // 4) Update the fall WO — issue kept and stamped (by the copy above),
+      // note logged. PJL-100 #4: only the note is written, appended to the
+      // record as it is NOW; zones are no longer written back from the copy
+      // read at the top of this route.
+      const freshForNote = (await workOrders.get(id)) || wo;
+      const techNotes = (freshForNote.techNotes ? freshForNote.techNotes + "\n\n" : "") +
         `[EMERGENCY ${new Date().toISOString()}] Zone ${zoneNumber} ${issue.type}: ${severityReason}. Follow-up WO ${followupWoId || "(create failed — Patrick to handle manually)"}.`;
-      const updatedWo = await workOrders.update(id, { zones, techNotes });
+      const updatedWo = await workOrders.update(id, { techNotes });
 
       // 5) Notify Patrick immediately (rule #13).
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
@@ -22287,27 +24002,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // findings" while the email promised they were in it. A finding
       // whose copy FAILED keeps no stamp and is reported, never silently
       // dropped; a stamped one is never copied twice (retry-safe).
-      const deferredIds = [];
-      const failures = [];
-      const nextZones = [];
-      for (const z of wo.zones || []) {
-        const issues = [];
-        for (const issue of z.issues || []) {
-          if (issue.deferredId) { issues.push(issue); continue; }
-          try {
-            const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, z.number, issue, "fall_visit_no_repairs_policy"));
-            if (!entry?.id) throw new Error("no deferred entry was written");
-            deferredIds.push(entry.id);
-            issues.push({ ...issue, deferredId: entry.id });
-          } catch (err) {
-            console.warn(`[defer] zone ${z.number} issue ${issue.id} not transferred:`, err?.message);
-            failures.push({ zone: z.number, issueId: issue.id, error: String(err?.message || err).slice(0, 200) });
-            issues.push(issue);
-          }
-        }
-        nextZones.push({ ...z, issues });
-      }
-      if (deferredIds.length) await workOrders.update(id, { zones: nextZones });
+      // PJL-100 #4 — through the one copy rule (lib/wo-findings.js):
+      // serialized per WO, so two overlapping calls can't both copy the
+      // same finding, and stamped on the FRESH record, so a zone edit saved
+      // while the copies ran is kept (this used to write back zones read
+      // before them).
+      const carried = await woFindings.copyFindingsForward(id, { reason: "fall_visit_no_repairs_policy", pricingJson: PRICING });
+      const deferredIds = carried.deferred.map((d) => d.deferredId);
+      const failures = carried.notTransferred;
       try {
         await workOrders.appendHistory(id, {
           action: "issues_bulk_deferred",
@@ -23859,7 +25561,9 @@ async function orderDayForDriving(rows) {
             status: wo.status,
             zoneCount: (wo.zones || []).length
           } : null,
-          onRouteNotifiedAt: lead.onRouteNotifiedAt || null
+          // Only a notice sent for THIS visit: the stamp lives on the lead,
+          // which outlives the visit (a spring notice is not this fall's).
+          onRouteNotifiedAt: onRouteStampForVisit(lead.onRouteNotifiedAt, lead.booking.start, lead.onRouteNotifiedFor)
         };
       });
 
@@ -23898,8 +25602,11 @@ async function orderDayForDriving(rows) {
           // tech sees "already opened, status" on the card — and so the
           // work-order union below (mergeDaySchedule dedupes on wo.id)
           // can never list that job a second time.
-          const linkedWo = (Array.isArray(b.workOrderIds) && b.workOrderIds.length)
-            ? allWos.find((w) => b.workOrderIds.includes(w.id)) || null
+          // Only a WO of THIS visit (PJL-97): a record reused across
+          // seasons can still link last spring's finished job.
+          const visitWoIds = new Set(bookings.workOrdersForVisit(b, allWos).map((w) => w.id));
+          const linkedWo = visitWoIds.size
+            ? allWos.find((w) => visitWoIds.has(w.id)) || null
             : null;
           dayBookings.push({
             leadId: b.leadId || "",
@@ -23927,7 +25634,10 @@ async function orderDayForDriving(rows) {
               status: linkedWo.status,
               zoneCount: (linkedWo.zones || []).length
             } : null,
-            onRouteNotifiedAt: null
+            // Season-plan visits notify through the booking itself
+            // (POST /api/bookings/:id/notify-on-route); a record reused
+            // across seasons only counts a notice sent for this visit.
+            onRouteNotifiedAt: onRouteStampForVisit(b.onRouteNotifiedAt, b.scheduledFor, b.onRouteNotifiedFor)
           });
         }
         dayBookings.sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -24168,7 +25878,8 @@ async function orderDayForDriving(rows) {
   }
 
   // Tech taps "Notify on route" on the today's-schedule view.
-  // Sends SMS + email to the customer with the on_route template,
+  // Texts the customer the on_route template (a text only — no email;
+  // no phone on file → refused, nothing sent, nothing stamped),
   // logs an activity entry, and stamps lead.onRouteNotifiedAt so the
   // UI can show "✓ notified at 9:14 AM" instead of re-firing on
   // accidental double-tap. Body: (none required).
@@ -24180,6 +25891,9 @@ async function orderDayForDriving(rows) {
       const idx = allLeads.findIndex((l) => l.id === leadId);
       if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
       const lead = allLeads[idx];
+      if (!String(lead.contact?.phone || "").trim()) {
+        return sendJson(res, 409, { ok: false, errors: ["No phone number on file, so no text can go — call the customer instead. Nothing was sent."] });
+      }
 
       // Decorate with portalUrl + booking shape so the template fills out
       // {firstName}, {serviceLabel}, {portalUrl} correctly. baseUrl is
@@ -24195,6 +25909,8 @@ async function orderDayForDriving(rows) {
       });
 
       lead.onRouteNotifiedAt = new Date().toISOString();
+      // Which visit it was for, so a later visit isn't shown as notified.
+      lead.onRouteNotifiedFor = lead.booking?.start || null;
       lead.crm = lead.crm || {};
       lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
       lead.crm.activity.unshift({
@@ -24212,6 +25928,45 @@ async function orderDayForDriving(rows) {
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't notify customer."] });
+    }
+  }
+
+  // "Notify on route" for a visit with no lead behind it — a season-plan
+  // (assignment) booking, which carries its own customer name, phone and
+  // email. Same on_route text as the lead route (text only), sent to the
+  // booking's contact; stamps booking.onRouteNotifiedAt for this visit. A
+  // second tap the same day sends nothing more.
+  const bookingNotifyMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/notify-on-route$/);
+  if (bookingNotifyMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in again."] });
+      const id = decodeURIComponent(bookingNotifyMatch[1]);
+      const b = await bookings.get(id);
+      if (!b) return sendJson(res, 404, { ok: false, errors: ["Visit not found."] });
+      if (!bookingHoldsItsSlot(b.status)) return sendJson(res, 409, { ok: false, errors: ["This visit isn't active, so nothing was sent."] });
+      const already = onRouteStampForVisit(b.onRouteNotifiedAt, b.scheduledFor, b.onRouteNotifiedFor);
+      if (already) return sendJson(res, 200, { ok: true, notifiedAt: already, alreadySent: true });
+      const name = String(b.customerName || "").trim();
+      const phone = String(b.customerPhone || "").trim();
+      const email = String(b.customerEmail || "").trim();
+      if (!phone) {
+        return sendJson(res, 409, { ok: false, errors: ["No phone number on file, so no text can go — call the customer instead. Nothing was sent."] });
+      }
+      const recipient = {
+        id: b.id,
+        contact: { name, firstName: name.split(/[\s&]+/)[0] || "", phone, email },
+        booking: { serviceLabel: b.serviceLabel || "", start: b.scheduledFor },
+        portalUrl: welcomePortalUrlFor([])(b)
+      };
+      notifyCustomer("on_route", recipient).catch((err) => {
+        console.error("[notify-on-route:booking]", err);
+      });
+      const notifiedAt = new Date().toISOString();
+      await bookings.markOnRouteNotified(b.id, { at: notifiedAt, forVisit: b.scheduledFor, by: session.uid || "tech" });
+      return sendJson(res, 200, { ok: true, notifiedAt });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't notify the customer."] });
     }
   }
 
@@ -24262,6 +26017,16 @@ async function orderDayForDriving(rows) {
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
         catch (err) { console.warn("[quotes] attachWorkOrder failed:", err?.message); }
+      }
+      // create() mints a fresh id when the envelope's is already taken (a
+      // stale envelope still naming last season's WO). The booking record
+      // only knows the envelope id, so link the new WO to the record for
+      // this booking, or a reschedule would leave it behind (PJL-97).
+      if (customId && wo.id !== customId) {
+        try {
+          const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
+          if (current) await bookings.attachWorkOrder(current.id, wo.id);
+        } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
       // Tag the lead with the WO id + log activity.
@@ -25000,7 +26765,18 @@ async function orderDayForDriving(rows) {
     const confirmationFor = (bookingId) => {
       const b = bookingId && confirm ? confirm.byId.get(bookingId) : null;
       if (!b) return null;
-      return { bookingId: b.id, sentAt: b.assignment.outreach?.steps?.["1"]?.at || null };
+      // sentAt is when WE messaged them; respondedAt is when THEY answered.
+      // The panel used to show only the first and label it "confirmed",
+      // which read as the customer's answer (2026-09-25).
+      const o = b.assignment.outreach || {};
+      return {
+        bookingId: b.id,
+        sentAt: o.steps?.["1"]?.at || null,
+        seenAt: o.seenAt || null,
+        respondedAt: o.respondedAt || null,
+        responseVia: o.responseVia || null,
+        responseLabel: o.respondedAt ? bookings.responseLabel(o.responseVia) : ""
+      };
     };
     for (const row of booked) {
       const c = confirmationFor(row.bookingId);
@@ -27413,6 +29189,9 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") {
     return { dir: SERVER_DIR, relative: "/parts-suppliers.html" };
   }
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") {
+    return { dir: SERVER_DIR, relative: "/part-photos.html" };
+  }
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") {
     return { dir: SERVER_DIR, relative: "/purchase-orders.html" };
   }
@@ -27948,7 +29727,10 @@ async function retimeCustomerBooking(row, start, durationMinutes) {
   const label = (iso) => new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
   const rec = row.bookingId ? await bookings.get(row.bookingId) : null;
   const woIds = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
-  const wos = (await Promise.all(woIds.map((id) => Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+  const allWos = (await Promise.all(woIds.map((id) => Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+  // This visit's WOs only (PJL-97): last spring's arrivedAt must not
+  // freeze the fall stop's time, and its date must not follow the route.
+  const wos = rec ? bookings.workOrdersForVisit(rec, allWos) : allWos;
   if (wos.some((w) => w && w.arrivedAt)) return false;
 
   if (row.leadId) {
@@ -28410,14 +30192,51 @@ if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
 // then exit. A hard cap well under Render's 30 s makes sure we never
 // wait for SIGKILL. The periodic sweeps are not awaited: each is
 // best-effort and re-runs on the next boot or interval.
+// The periodic sweeps, held so shutdown can stop them.
+//
+// Eleven of them, none previously unref'd, each re-arming forever. They
+// never blocked the old exit — process.exit() does not care what is on
+// the event loop — but a sweep that fires WHILE the process is draining
+// can start a fresh store write just as we are trying to finish the
+// ones already queued. Clearing them first makes "finish what is in
+// flight" a set that stops growing.
+const sweepTimers = [];
+function trackSweep(fn, ms) {
+  const t = setInterval(fn, ms);
+  sweepTimers.push(t);
+  return t;
+}
+
 const SHUTDOWN_GRACE_MS = 8000;
+// Well inside SHUTDOWN_GRACE_MS, so the two together stay far under
+// Render's 30s default and cannot be what holds a deploy open.
+const DISK_DRAIN_MS = 3000;
+async function finishDiskWrites(label) {
+  // Bounded. writeJsonAtomic() renames a finished temp file over the
+  // target, so a store is never left as garbage even if we give up
+  // here — the cost of the bound is a lost change, not a broken file.
+  const pending = atomicJson.pendingStoreWrites();
+  if (!pending) return;
+  console.log(`[shutdown] waiting for ${pending} queued store write(s) (${label})`);
+  const raced = await Promise.race([
+    atomicJson.drainStores().then(() => "drained"),
+    new Promise((r) => setTimeout(() => r("timeout"), DISK_DRAIN_MS))
+  ]);
+  console.log(raced === "drained"
+    ? "[shutdown] store writes finished"
+    : `[shutdown] store writes still pending after ${DISK_DRAIN_MS / 1000}s — exiting anyway (writes are atomic; the files on disk stay whole)`);
+}
+
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} received — draining connections (max ${SHUTDOWN_GRACE_MS / 1000}s)`);
-  const forceExit = setTimeout(() => {
+  // Stop the sweeps first so nothing new is queued behind us.
+  for (const t of sweepTimers) clearInterval(t);
+  const forceExit = setTimeout(async () => {
     console.warn("[shutdown] grace period elapsed — closing remaining connections");
     if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    await finishDiskWrites("forced");
     process.exit(0);
   }, SHUTDOWN_GRACE_MS);
   forceExit.unref();
@@ -28428,11 +30247,13 @@ function shutdown(signal) {
     ? setInterval(() => server.closeIdleConnections(), 250)
     : null;
   if (idleSweep) idleSweep.unref();
-  server.close((err) => {
+  server.close(async (err) => {
     if (idleSweep) clearInterval(idleSweep);
     if (err) console.warn("[shutdown] server.close:", err?.message);
-    else console.log("[shutdown] all connections closed — exiting");
+    else console.log("[shutdown] all connections closed");
     clearTimeout(forceExit);
+    await finishDiskWrites("clean");
+    console.log("[shutdown] exiting");
     process.exit(0);
   });
   if (idleSweep) server.closeIdleConnections();
@@ -28479,7 +30300,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepQuotes();
-  setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
+  trackSweep(sweepQuotes, 6 * 60 * 60 * 1000);
 
   // Invoice-ready SMS sweep (Invoice SMS brief, May 2026). The primary
   // fire path is a setTimeout inside the completion cascade; this sweep
@@ -28498,7 +30319,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepInvoiceSms();
-  setInterval(sweepInvoiceSms, 2 * 60 * 1000);
+  trackSweep(sweepInvoiceSms, 2 * 60 * 1000);
 
   // Google review request sweep (design handoff, Jul 2026). Due times
   // are persisted in review-requests.json (no in-memory timers — the
@@ -28516,7 +30337,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepReviewRequests();
-  setInterval(sweepReviewRequests, 5 * 60 * 1000);
+  trackSweep(sweepReviewRequests, 5 * 60 * 1000);
 
   // Assignment time sync sweep. Assigned bookings mirror the season
   // plan's sequenced arrival times, and the plan's clock moves — a
@@ -28543,7 +30364,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignedTimes();
-  setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+  trackSweep(sweepAssignedTimes, 10 * 60 * 1000);
 
   // Lead-booking heal sweep. A booking made through the public flow is
   // born on its LEAD; the canonical bookings.json record is a mirror
@@ -28570,7 +30391,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepLeadBookings();
-  setInterval(sweepLeadBookings, 10 * 60 * 1000);
+  trackSweep(sweepLeadBookings, 10 * 60 * 1000);
 
   // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
   // customers get theirs from the cadence's step 6; the customer who
@@ -28602,7 +30423,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepBookingReminders();
-  setInterval(sweepBookingReminders, 5 * 60 * 1000);
+  trackSweep(sweepBookingReminders, 5 * 60 * 1000);
 
   // New-customer welcome sweep. Gated by settings.welcomeEmail.enabled
   // (default OFF); a customer's EARLIEST slot-holding booking, once it is
@@ -28626,7 +30447,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepWelcomeEmails();
-  setInterval(sweepWelcomeEmails, 5 * 60 * 1000);
+  trackSweep(sweepWelcomeEmails, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
@@ -28661,7 +30482,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignmentCadence();
-  setInterval(sweepAssignmentCadence, 5 * 60 * 1000);
+  trackSweep(sweepAssignmentCadence, 5 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the
@@ -28681,7 +30502,7 @@ server.listen(PORT, HOST, () => {
   // Initial sweep on boot — catches anything that aged out while the
   // server was down. After that, every 24 hours.
   sweepTrash();
-  setInterval(sweepTrash, 24 * 60 * 60 * 1000);
+  trackSweep(sweepTrash, 24 * 60 * 60 * 1000);
 
   // Outstanding warranty-claim reminder. The brief asks to "constantly be
   // reminded of outstanding warranty claims" — this is the push half of
@@ -28709,7 +30530,7 @@ server.listen(PORT, HOST, () => {
       console.warn("[warranty-claim] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
+  trackSweep(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
 
   // Klarna financing capture-deadline reminders (PJL-34, build order
   // step 5). TRD §8: reminders are the WHOLE defense for the 28-day
@@ -28734,5 +30555,5 @@ server.listen(PORT, HOST, () => {
       console.warn("[financing] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepFinancingReminders, 3 * 60 * 60 * 1000);
+  trackSweep(sweepFinancingReminders, 3 * 60 * 60 * 1000);
 });

@@ -32,6 +32,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const calibration = require("./site-plan-calibration");
+const sessionHours = require("./session-hours");
 
 const FILE = path.join(__dirname, "..", "data", "projects.json");
 
@@ -159,6 +160,11 @@ function blankProject() {
     // sourceQuoteId points back to it so we can render "from Q-2026-0042"
     // on the project header.
     sourceQuoteId: null,
+    // currentQuoteId — the signed agreement governing the job NOW. Starts
+    // as the source quote; moves to a change-order revision only when the
+    // customer SIGNS it (adoptSignedRevision). sourceQuoteId never moves:
+    // deposits, the quote folder and convert-to-project all key on it.
+    currentQuoteId: null,
 
     // -------- project_proposal enrichment (Brief 1, May 2026) --------
     // Populated when the source quote is a project_proposal. Stay at
@@ -186,6 +192,10 @@ function blankProject() {
     // (Brief 2 takes over from there). { id, description, sourceLineItemId,
     // status, completedAt?, completedByWoId?, order }
     tasks: [],
+    // problems[] — things found on site that outlive the day they were
+    // found on. The PROBLEM is live until somebody deals with it; its
+    // DISCOVERY is a fact about that day and never changes.
+    problems: [],
     // attachments[] — references to the quote's attachments by id, so
     // the project page can render the same map / diagram thumbnails
     // without re-uploading. { id, sourceQuoteAttachmentId, kind,
@@ -273,6 +283,10 @@ function hydrate(rec) {
     buildTracking: rec?.buildTracking === true,
     labourRateLocked: rec?.labourRateLocked == null ? null : Number(rec.labourRateLocked),
     scopeChangeRequests: Array.isArray(rec?.scopeChangeRequests) ? rec.scopeChangeRequests : [],
+    // Problems belong to the PROJECT and link to the daily record they
+    // were found on — see lib/project-problems.js for why the status is
+    // tested in exactly one place.
+    problems: Array.isArray(rec?.problems) ? rec.problems : [],
     statusUpdates: Array.isArray(rec?.statusUpdates) ? rec.statusUpdates : [],
     finalWoId: typeof rec?.finalWoId === "string" ? rec.finalWoId : null,
     projectCompletionAt: typeof rec?.projectCompletionAt === "string" ? rec.projectCompletionAt : null,
@@ -635,6 +649,34 @@ async function _updateUnlocked(id, patch = {}) {
 // Idempotent at the caller — the convert-to-project endpoint checks
 // for an existing project with sourceQuoteId === quote.id before
 // invoking this and returns the existing one if found.
+// The frozen copy of a signed proposal the project bills from. ONE builder:
+// conversion, re-enrichment and a newly signed change-order revision all
+// use it, so the three can never disagree about what a snapshot holds.
+function buildProposalSnapshot(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "" } = {}) {
+  return {
+    quoteId: quote.id,
+    version: quote.version || 1,
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    acceptanceMethod: quote.acceptanceMethod || null,
+    acceptedAt: quote.acceptedAt || null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    proposalSections: Array.isArray(quote.proposalSections)
+      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
+      : [],
+    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
+    subtotal: Number(quote.subtotal) || 0,
+    hst: Number(quote.hst) || 0,
+    total: Number(quote.total) || 0,
+    customRates: { ...(quote.customRates || {}) },
+    scope: quote.scope || "",
+    frozenAt: nowIso()
+  };
+}
+
 async function createFromProposal(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
   if (!quote) throw new Error("createFromProposal requires a quote.");
 
@@ -672,28 +714,7 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
     }));
 
   // Freeze the proposal snapshot.
-  const proposalSnapshot = {
-    quoteId: quote.id,
-    version: quote.version || 1,
-    branch: quote.branch || null,
-    billingMode: quote.billingMode || null,
-    acceptanceMethod: quote.acceptanceMethod || null,
-    acceptedAt: quote.acceptedAt || null,
-    customerName,
-    customerEmail,
-    customerPhone,
-    address,
-    proposalSections: Array.isArray(quote.proposalSections)
-      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
-      : [],
-    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
-    subtotal: Number(quote.subtotal) || 0,
-    hst: Number(quote.hst) || 0,
-    total: Number(quote.total) || 0,
-    customRates: { ...(quote.customRates || {}) },
-    scope: quote.scope || "",
-    frozenAt: nowIso()
-  };
+  const proposalSnapshot = buildProposalSnapshot(quote, { customerName, customerEmail, customerPhone, address });
 
   // Delegate to the standard create() so the id-generation + file-write
   // path is single-source. Then patch the proposal-only fields.
@@ -767,30 +788,9 @@ async function enrichFromProposal(projectId, quote, { customerName = "", custome
       order: i
     }));
 
-  const proposalSnapshot = {
-    quoteId: quote.id,
-    version: quote.version || 1,
-    branch: quote.branch || null,
-    billingMode: quote.billingMode || null,
-    acceptanceMethod: quote.acceptanceMethod || null,
-    acceptedAt: quote.acceptedAt || null,
-    customerName,
-    customerEmail,
-    customerPhone,
-    address,
-    proposalSections: Array.isArray(quote.proposalSections)
-      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
-      : [],
-    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
-    subtotal: Number(quote.subtotal) || 0,
-    hst: Number(quote.hst) || 0,
-    total: Number(quote.total) || 0,
-    customRates: { ...(quote.customRates || {}) },
-    scope: quote.scope || "",
-    frozenAt: nowIso()
-  };
+  const proposalSnapshot = buildProposalSnapshot(quote, { customerName, customerEmail, customerPhone, address });
 
-  const canReseedTasks = !(current.tasks || []).some((t) => t.status === "done");
+  const canReseedTasks = !activeTasks(current).some((t) => t.status === "done");
   const tasks = canReseedTasks
     ? (quote.lineItems || []).map((li, i) => ({
         id: "task_" + random8(),
@@ -968,14 +968,18 @@ async function _mutateUnlocked(projectId, fn) {
   return result === undefined ? next : result;
 }
 
-async function seedTasksFromQuote(projectId, quote) {
+async function seedTasksFromQuote(projectId, quote, { by = "admin" } = {}) {
   return _mutate(projectId, (proj) => {
     // Refuse if any task is already done — re-seed would erase history.
-    if ((proj.tasks || []).some((t) => t.status === "done")) {
+    if (activeTasks(proj).some((t) => t.status === "done")) {
       const err = new Error("Cannot re-seed tasks once any task is done.");
       err.code = "tasks_partially_done";
       throw err;
     }
+    // Archived tasks survive a re-seed. They are the record the crew's
+    // daily logs and photos point at; replacing the array wholesale would
+    // erase exactly what archiving exists to protect.
+    const keep = (proj.tasks || []).filter(taskIsArchived);
     proj.tasks = (quote.lineItems || []).map((li, idx) => ({
       id: "task_" + random8(),
       description: String(li.label || li.sourceKey || `Task ${idx + 1}`).slice(0, 400),
@@ -987,7 +991,9 @@ async function seedTasksFromQuote(projectId, quote) {
       order: idx,
       notes: ""
     }));
-    appendHistory(proj, { action: "tasks_seeded", note: `${proj.tasks.length} from quote ${quote.id}` });
+    const seeded = proj.tasks.length;
+    proj.tasks = proj.tasks.concat(keep);
+    appendHistory(proj, { action: "tasks_seeded", by, note: `${seeded} from quote ${quote.id}${keep.length ? `, ${keep.length} archived kept` : ""}` });
     return proj;
   });
 }
@@ -1015,6 +1021,95 @@ async function addTask(projectId, { description, sourceLineItemId = null, notes 
   });
 }
 
+// ---- Project problems (2026-09-26) --------------------------------
+//
+// "The problem should belong to the project, with a link to the daily
+// record where it was discovered." Resolving one APPENDS — it never
+// edits the discovery, exactly as archiving a task never touched the
+// crew's log lines in #307.
+
+async function addProblem(projectId, {
+  title, description = "", discoveredOnWoId = null, discoveredWorkDate = null,
+  taskId = null, photoRef = null, scopeChangeId = null
+} = {}, { by = "admin" } = {}) {
+  if (!title || !String(title).trim()) {
+    throw Object.assign(new Error("A problem needs a title."), { code: "missing_title" });
+  }
+  return _mutate(projectId, (proj) => {
+    if (!Array.isArray(proj.problems)) proj.problems = [];
+    const ts = nowIso();
+    const problem = {
+      id: "prob_" + random8(),
+      title: String(title).trim().slice(0, 200),
+      description: String(description || "").slice(0, 4000),
+      status: "open",
+      // The discovery is a fact about that day. Nothing below ever
+      // writes to these again.
+      discoveredAt: ts,
+      discoveredOnWoId: discoveredOnWoId || null,
+      discoveredWorkDate: discoveredWorkDate || null,
+      reportedBy: String(by || "admin").slice(0, 80),
+      resolvedAt: null,
+      resolvedBy: null,
+      resolutionNote: "",
+      taskId: taskId || null,
+      photoRef: photoRef || null,
+      scopeChangeId: scopeChangeId || null,
+      history: [{ ts, action: "problem_opened", by, note: String(title).trim().slice(0, 200) }]
+    };
+    proj.problems.push(problem);
+    appendHistory(proj, { action: "problem_opened", by, note: `${problem.id} — ${problem.title}` });
+    return problem;
+  });
+}
+
+// Move a problem between open / monitoring / resolved.
+//
+// Resolving REQUIRES a note: "resolved" with no account of how is a
+// record that answers the wrong question in six months. Re-opening a
+// resolved problem clears the resolution fields but KEEPS every history
+// entry, so the fact it was once called resolved is not erased.
+async function setProblemStatus(projectId, problemId, status, { note = "", by = "admin" } = {}) {
+  const problemsLib = require("./project-problems");
+  if (!problemsLib.isStatus(status)) {
+    throw Object.assign(new Error("Unknown problem status."), { code: "bad_status" });
+  }
+  const cleanNote = String(note || "").trim();
+  if (status === "resolved" && cleanNote.length < 3) {
+    throw Object.assign(
+      new Error("Say how it was resolved — that note is the record."),
+      { code: "resolution_note_required" }
+    );
+  }
+  return _mutate(projectId, (proj) => {
+    const prob = (proj.problems || []).find((x) => x.id === problemId);
+    if (!prob) throw Object.assign(new Error("Problem not found."), { code: "problem_not_found" });
+    const ts = nowIso();
+    const from = prob.status;
+    if (from === status && status !== "resolved") return prob;   // no-op, no noise
+
+    if (status === "resolved") {
+      prob.resolvedAt = ts;
+      prob.resolvedBy = String(by || "admin").slice(0, 80);
+      prob.resolutionNote = cleanNote.slice(0, 4000);
+    } else {
+      // Re-opening: the resolution is no longer true, so it goes — but
+      // the history below keeps the fact that it was made.
+      prob.resolvedAt = null;
+      prob.resolvedBy = null;
+      prob.resolutionNote = "";
+    }
+    prob.status = status;
+    if (!Array.isArray(prob.history)) prob.history = [];
+    prob.history.push({
+      ts, action: "problem_status", by,
+      note: `${from} → ${status}${cleanNote ? " — " + cleanNote : ""}`
+    });
+    appendHistory(proj, { action: "problem_status", by, note: `${prob.id} ${from} → ${status}` });
+    return prob;
+  });
+}
+
 async function updateTask(projectId, taskId, patch, { by = "admin" } = {}) {
   return _mutate(projectId, (proj) => {
     const t = (proj.tasks || []).find((x) => x.id === taskId);
@@ -1030,16 +1125,168 @@ async function updateTask(projectId, taskId, patch, { by = "admin" } = {}) {
   });
 }
 
+/* ── Archived tasks (2026-09-25) ──────────────────────────────────
+ *
+ * Patrick: "Removing a task with work-order activity archives it rather
+ * than deleting its history. A task may be permanently deleted only if
+ * nothing has ever referenced it."
+ *
+ * Before this, removeTask() spliced the record out of the array. It
+ * refused only when the task was DONE — so a task at 40%, with the
+ * crew's daily-log lines and task-anchored photos pointing at its id,
+ * could be erased from the office, leaving those references dangling
+ * against an id that no longer existed anywhere.
+ *
+ * An archived task keeps its record, its id and everything that points
+ * at it. It simply stops counting.
+ *
+ * THIS IS THE ONE RULE FOR "STILL COUNTS", and every reader calls it —
+ * the same discipline the cancelled-booking slot leak taught
+ * (CLAUDE.md, `bookingHoldsItsSlot`): a state meaning "this no longer
+ * counts" has to be honoured by all of them, not just the one you are
+ * standing in. */
+function taskIsArchived(t) {
+  return Boolean(t && t.archivedAt);
+}
+function activeTasks(proj) {
+  return (proj && Array.isArray(proj.tasks) ? proj.tasks : []).filter((t) => !taskIsArchived(t));
+}
+
+/* Has anything, anywhere, ever pointed at this task?
+ *
+ * Deliberately generous: every answer here tips the decision toward
+ * KEEPING the record, and the cost of a false positive is one archived
+ * row nobody looks at. The cost of a false negative is a work order
+ * referring to a task that does not exist.
+ *
+ * Returns the reasons, not just a boolean, so the history entry can say
+ * WHY it was archived rather than asserting it. */
+async function taskReferences(proj, task) {
+  const reasons = [];
+  if (!task) return reasons;
+
+  // It has been worked, or was finished at some point.
+  const pct = task.status === "done" ? 100 : Number(task.percentComplete) || 0;
+  if (pct > 0) reasons.push(`progress logged (${pct}%)`);
+  if (task.status !== "pending") reasons.push(`status ${task.status}`);
+  if (task.completedAt) reasons.push("was completed");
+
+  // The crew's own records point at it by id.
+  try {
+    const workOrders = require("./work-orders");
+    const buildWos = await workOrders.listBuildWosForProject(proj.id);
+    let logLines = 0, photos = 0, wos = 0;
+    for (const wo of buildWos) {
+      const lines = (wo.dailyLog && wo.dailyLog.tasksCompletedToday) || [];
+      const hit = lines.filter((l) => String(l.taskId) === String(task.id)).length;
+      const pics = (wo.photos || []).filter((p) => String(p.taskId || "") === String(task.id)).length;
+      if (hit || pics) wos += 1;
+      logLines += hit;
+      photos += pics;
+    }
+    if (logLines) reasons.push(`${logLines} daily-log entr${logLines === 1 ? "y" : "ies"} on ${wos} work order${wos === 1 ? "" : "s"}`);
+    if (photos) reasons.push(`${photos} photo${photos === 1 ? "" : "s"} anchored to it`);
+  } catch (_) {
+    // Cannot read the work orders → cannot prove it is unreferenced.
+    // Archiving is the safe answer, so say so rather than staying silent.
+    reasons.push("work orders could not be read");
+  }
+
+  // The project's own audit trail names it — but only for things that
+  // happened TO the work, not for the office editing its own plan.
+  // Adding a task and renaming it are both just planning; a task you
+  // typed and immediately corrected must still be deletable, or the list
+  // fills with archived typos nobody can clear.
+  const PLANNING_ONLY = new Set(["task_added", "task_updated", "tasks_seeded", "task_archived", "task_removed"]);
+  const named = (proj.history || []).filter(
+    (h) => h && typeof h.note === "string" && h.note.includes(task.id) && !PLANNING_ONLY.has(h.action)
+  ).length;
+  if (named) reasons.push(`${named} history entr${named === 1 ? "y" : "ies"}`);
+
+  return reasons;
+}
+
+/* Remove a task — by archiving it when anything has ever referenced it,
+ * and only truly deleting one that nothing ever touched.
+ *
+ * The reference check runs BEFORE the mutation because it has to read
+ * the work orders, and _mutate's callback is synchronous. The store is
+ * single-writer and lock-serialised, so the window is narrow; a task
+ * that gained a reference inside it would be hard-deleted, which is why
+ * the check is written to over-report rather than under-report.
+ *
+ * Returns { removed, archived, reasons } — the caller needs to be able
+ * to tell the person which of the two things happened. */
 async function removeTask(projectId, taskId, { by = "admin" } = {}) {
-  return _mutate(projectId, (proj) => {
-    const i = (proj.tasks || []).findIndex((x) => x.id === taskId);
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const existing = (proj.tasks || []).find((x) => x.id === taskId);
+  if (!existing) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
+  if (taskIsArchived(existing)) {
+    throw Object.assign(new Error("That task is already archived."), { code: "task_archived" });
+  }
+  const reasons = await taskReferences(proj, existing);
+
+  return _mutate(projectId, (p) => {
+    const i = (p.tasks || []).findIndex((x) => x.id === taskId);
     if (i === -1) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
-    if (proj.tasks[i].status === "done") {
+    const t = p.tasks[i];
+    if (t.status === "done") {
       throw Object.assign(new Error("Completed tasks cannot be removed."), { code: "task_locked" });
     }
-    const [removed] = proj.tasks.splice(i, 1);
-    appendHistory(proj, { action: "task_removed", by, note: removed.description.slice(0, 100) });
-    return { removed: removed.id };
+
+    if (reasons.length) {
+      // Archive. The record, its id and everything pointing at it stay.
+      t.archivedAt = nowIso();
+      t.archivedBy = by;
+      t.archivedReason = reasons.join("; ").slice(0, 300);
+      appendHistory(p, {
+        action: "task_archived", by,
+        note: `${taskId} ${t.description.slice(0, 60)} — kept because: ${t.archivedReason}`
+      });
+      return { removed: null, archived: t.id, reasons };
+    }
+
+    // Nothing ever referenced it: it was added and never touched, so
+    // there is no history to protect.
+    const [gone] = p.tasks.splice(i, 1);
+    appendHistory(p, { action: "task_removed", by, note: gone.description.slice(0, 100) });
+    return { removed: gone.id, archived: null, reasons: [] };
+  });
+}
+
+/* Put an archived task back on the list (2026-09-25).
+ *
+ * Patrick: "an accidental archive must be recoverable without editing
+ * project data manually. Restoring should preserve all existing logs,
+ * photos, hours and audit history."
+ *
+ * It can, because archiving never took anything away. Archiving ADDS
+ * three fields; the progress, the completion stamps, the work orders'
+ * daily-log lines, their photos and the recorded hours were untouched
+ * throughout. So restoring is the exact inverse — clear the three
+ * fields — and there is deliberately nothing here that reconstructs
+ * state, because there is no state to reconstruct.
+ *
+ * The audit trail GROWS: the archive entry stays and a restore entry
+ * joins it, so the record reads as what happened rather than as though
+ * it never did. */
+async function restoreTask(projectId, taskId, { by = "admin" } = {}) {
+  return _mutate(projectId, (proj) => {
+    const t = (proj.tasks || []).find((x) => x.id === taskId);
+    if (!t) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
+    if (!taskIsArchived(t)) {
+      throw Object.assign(new Error("That task is not archived."), { code: "task_not_archived" });
+    }
+    const wasArchivedAt = t.archivedAt;
+    delete t.archivedAt;
+    delete t.archivedBy;
+    delete t.archivedReason;
+    appendHistory(proj, {
+      action: "task_restored", by,
+      note: `${taskId} ${t.description.slice(0, 60)} — archived ${wasArchivedAt}, back on the list`
+    });
+    return t;
   });
 }
 
@@ -1236,18 +1483,20 @@ async function computeProjectMetrics(projectId) {
   const workOrders = require("./work-orders");
   const buildWos = await workOrders.listBuildWosForProject(projectId);
 
-  const totalTasks = (proj.tasks || []).length;
-  const doneTasks = (proj.tasks || []).filter((t) => t.status === "done").length;
+  // Archived tasks do not count — they were taken off the job's list and
+  // kept only so the crew's records still point somewhere.
+  const liveTasks = activeTasks(proj);
+  const totalTasks = liveTasks.length;
+  const doneTasks = liveTasks.filter((t) => t.status === "done").length;
   // Partial-aware progress: average each task's completion so a half-finished
   // task moves the bar, not only fully-done ones. done reads as 100 even on
   // legacy records that predate percentComplete. doneTasks is kept for the
   // "X of Y tasks" label.
   const taskPct = (t) => (t.status === "done" ? 100 : (Number(t.percentComplete) || 0));
   const percentComplete = totalTasks > 0
-    ? Math.round((proj.tasks || []).reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
+    ? Math.round(liveTasks.reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
     : 0;
 
-  let totalPersonHours = 0;
   let photoCount = 0;
   let daysLogged = 0;
   let lastWorkDate = null;
@@ -1261,21 +1510,15 @@ async function computeProjectMetrics(projectId) {
         lastWorkDate = dl.workDate;
       }
     }
-    for (const s of sessions) {
-      if (!s.inAt) continue;
-      const outAt = s.outAt || new Date().toISOString(); // active sessions count up to now
-      const ms = new Date(outAt) - new Date(s.inAt);
-      if (Number.isFinite(ms) && ms > 0) {
-        totalPersonHours += (ms / 3600000) * (Number(s.labourersOnSite) || 1);
-      }
-    }
     photoCount += Array.isArray(wo.photos) ? wo.photos.length : 0;
   }
-  totalPersonHours = Math.round(totalPersonHours * 100) / 100;
+  // Hours come from the shared calculation, not a loop of our own. The
+  // ONE thing metrics does differently from billing is count a session
+  // that is still running, so "hours so far" moves while the crew is on
+  // site — that difference is this argument and nothing else.
+  totalPersonHours = sessionHours.sumPersonHours(buildWos, { openSessions: "toNow" });
 
-  const pendingScopeChanges = (proj.scopeChangeRequests || []).filter(
-    (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-  ).length;
+  const pendingScopeChanges = openScopeChanges(proj).length;
 
   return {
     totalTasks, doneTasks, percentComplete,
@@ -1301,19 +1544,11 @@ async function computeTAndMBilling(projectId, { partsCatalog = null } = {}) {
   const workOrders = require("./work-orders");
   const buildWos = await workOrders.listBuildWosForProject(projectId);
 
-  // Labour: sum across all sessions of (hours × labourers).
-  let totalHours = 0;
-  for (const wo of buildWos) {
-    const sessions = wo.dailyLog?.sessions || [];
-    for (const s of sessions) {
-      if (!s.inAt || !s.outAt) continue; // skip open sessions in billing
-      const ms = new Date(s.outAt) - new Date(s.inAt);
-      if (Number.isFinite(ms) && ms > 0) {
-        totalHours += (ms / 3600000) * (Number(s.labourersOnSite) || 1);
-      }
-    }
-  }
-  totalHours = Math.round(totalHours * 100) / 100;
+  // Labour: the SAME calculation the project metrics use, from the same
+  // module, on the same effective (corrected) session values. Billing
+  // skips a session that has not ended — you cannot invoice a crew that
+  // is still on site — and that is the only way it differs.
+  const totalHours = sessionHours.sumPersonHours(buildWos, { openSessions: "skip" });
   const rate = Number(proj.labourRateLocked);
 
   const lineItems = [];
@@ -1404,6 +1639,72 @@ const SCR_STATUSES = [
   "executed_under_revision"
 ];
 
+// ---- The ONE "is this change still open?" rule (2026-09-27) ----------
+//
+// Every reader — the Overview count (computeProjectMetrics), the
+// completion check (completionPreflight) and the customer's status email
+// (generateStatusUpdate) — asks this, so they cannot disagree. Before,
+// each carried its own copy: two counted only drafts and changes awaiting
+// the customer, and the completion check tested billingMode ===
+// "fixed_price", so a legacy project with no billingMode recorded (billed
+// as fixed price, like everything that is not T&M) could close with an
+// approved change that never reached its revised quote.
+//
+//   in_review          drafted, not yet sent (or its send failed)
+//   awaiting_customer  sent; waiting on the customer's answer
+//   awaiting_revision  approved on a fixed-price job, revised quote not yet
+//                      generated — the job is billed on its signed quote,
+//                      so the change is not in the price until that happens
+//
+// Everything else is closed: rejected, withdrawn, executed under a
+// revision (from there the quote chain's own hold — revision_unsigned —
+// holds the job until the customer signs), and on a time & material job an
+// approved change, which is billed as the hours it takes.
+function scopeChangeStage(scr, proj) {
+  if (!scr) return null;
+  if (scr.status === "pending_admin_review") return "in_review";
+  if (scr.status === "pending_customer_approval") return "awaiting_customer";
+  if (scr.status === "approved" && !scr.linkedRevisionQuoteId && proj?.billingMode !== "time_and_material") {
+    return "awaiting_revision";
+  }
+  return null;
+}
+function openScopeChanges(proj) {
+  return (proj?.scopeChangeRequests || []).filter((s) => scopeChangeStage(s, proj) !== null);
+}
+
+// Where a change that went into a revised quote now stands — ONE answer for
+// the withdraw guard and the Change Orders tab (2026-09-27):
+//   signed   — in a signed agreement (the revision itself, or carried into a
+//              newer version that was signed). Never rewritten: taking it
+//              out needs a NEW change order and a new signed revision.
+//   unsigned — in a revised quote the customer can still sign.
+//   dead     — its revision was declined, withdrawn or trashed without
+//              being signed: not in any price.
+//   missing  — the linked quote is not on file.
+function scopeChangeRevisionState(scr, chainInfo) {
+  const quotes = require("./quotes");
+  if (!scr || !scr.linkedRevisionQuoteId) return { state: null, quote: null };
+  const byId = new Map(((chainInfo && chainInfo.chain) || []).map((q) => [q.id, q]));
+  const rev = byId.get(scr.linkedRevisionQuoteId);
+  if (!rev) return { state: "missing", quote: null };
+  const gov = chainInfo.governing;
+  const pend = chainInfo.pending;
+  const v = Number(rev.version) || 1;
+  if (quotes.isSignedAgreement(rev)) return { state: "signed", quote: rev };
+  if (gov && (Number(gov.version) || 1) > v) return { state: "signed", quote: gov };
+  if (quotes.isUnsignedLive(rev)) return { state: "unsigned", quote: rev };
+  if (pend && (Number(pend.version) || 1) >= v) return { state: "unsigned", quote: pend };
+  return { state: "dead", quote: rev };
+}
+
+// A completed, invoiced job's change orders are closed: the invoice was
+// written from them. A correction is a credit or a new invoice, never a
+// rewritten change.
+function projectIsClosedForChanges(proj) {
+  return Boolean(proj && (proj.status === "complete" || proj.projectCompletionAt || proj.finalInvoiceId));
+}
+
 async function createScopeChangeRequest(projectId, fields, { by = "admin" } = {}) {
   const description = String(fields?.description || "").trim();
   if (!description) {
@@ -1492,84 +1793,593 @@ async function updateScopeChangeRequest(projectId, scrId, patch, { by = "admin" 
   });
 }
 
-async function sendScopeChangeRequest(projectId, scrId, { by = "admin" } = {}) {
-  return _mutate(projectId, (proj) => {
-    const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+// Send a change request to the customer — and mark it SENT only once the
+// email has actually gone (Patrick, 2026-09-27). `deliver(draftEmail)` is
+// the caller's email sender; it must resolve on delivery and throw on
+// failure. No recipient, no sender (email not set up) or a failed delivery
+// leaves the change unsent and records the attempt, with its reason and
+// who tried, in scr.sendAttempts — kept even after a later send succeeds.
+// One send per change request, protected by the SAVED record, not only by
+// memory (2026-09-27). Before the email goes, the change is marked
+// `sendInFlight` on disk (inside the project lock). If the server stops
+// between the email leaving and the outcome being written, that mark
+// survives the restart, and the next send is refused as
+// `delivery_uncertain` — nobody can tell whether the customer got it, so
+// the office checks and records the outcome (resolveUncertainScopeSend)
+// instead of the system guessing and emailing twice. The in-memory set
+// only tells a send still running in THIS process (a double click →
+// "already being sent") apart from one a restart interrupted.
+const _scopeSendsInFlight = new Set();
+async function sendScopeChangeRequest(projectId, scrId, opts = {}) {
+  const key = `${projectId}:${scrId}`;
+  if (_scopeSendsInFlight.has(key)) {
+    throw Object.assign(new Error("This change request is already being sent."), { code: "scr_send_in_progress" });
+  }
+  _scopeSendsInFlight.add(key);
+  try { return await _sendScopeChangeRequest(projectId, scrId, opts); }
+  finally { _scopeSendsInFlight.delete(key); }
+}
+
+function uncertainSendError(scr) {
+  const f = scr.sendInFlight || {};
+  return Object.assign(
+    new Error(`A send to ${f.to || "the customer"} started ${f.at || "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved, so we can't tell whether the email arrived. Check the sent mail or ask the customer, then record whether it went — it will not be sent again until you do.`),
+    { code: "delivery_uncertain", sendInFlight: f }
+  );
+}
+
+// The office's answer to an interrupted send: "sent" (the email did arrive
+// — the change moves to awaiting the customer, dated when it went) or
+// "not_sent" (it did not — the change stays a draft and can be sent).
+// Either way the interrupted attempt stays on record.
+async function resolveUncertainScopeSend(projectId, scrId, { outcome, by = "admin" } = {}) {
+  if (outcome !== "sent" && outcome !== "not_sent") {
+    throw Object.assign(new Error("Say whether the email went: sent or not_sent."), { code: "bad_outcome" });
+  }
+  if (_scopeSendsInFlight.has(`${projectId}:${scrId}`)) {
+    throw Object.assign(new Error("This change request is being sent right now."), { code: "scr_send_in_progress" });
+  }
+  return _mutate(projectId, (p) => {
+    const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
     if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-    if (scr.status !== "pending_admin_review") {
-      throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_wrong_state" });
+    const f = scr.sendInFlight;
+    if (!f) throw Object.assign(new Error("There is no interrupted send to settle."), { code: "no_uncertain_send" });
+    const at = nowIso();
+    scr.sendInFlight = null;
+    // The attempt keeps BOTH people and times: who started the send and
+    // when (at/by), and who settled it, when, and what they found
+    // (settledBy/settledAt/outcome).
+    const settled = { interrupted: true, settledBy: by, settledAt: at, outcome: outcome === "sent" ? "confirmed_delivered" : "confirmed_not_delivered" };
+    scr.sendAttempts = [
+      ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+      outcome === "sent"
+        ? { at: f.at || at, by: f.by || by, to: f.to || null, ok: true, reason: `Interrupted send — ${by} confirmed the email arrived`, ...settled }
+        : { at: f.at || at, by: f.by || by, to: f.to || null, ok: false, reason: `Interrupted send — ${by} confirmed it did not arrive`, ...settled }
+    ];
+    if (outcome === "sent" && scr.status === "pending_admin_review") {
+      scr.status = "pending_customer_approval";
+      scr.sentAt = f.at || at;
+      scr.sentBy = f.by || by;
     }
-    scr.status = "pending_customer_approval";
-    scr.sentAt = nowIso();
-    appendHistory(proj, { action: "scope_change_sent", by, note: scrId });
+    appendHistory(p, {
+      action: outcome === "sent" ? "scope_change_send_confirmed" : "scope_change_send_failed",
+      by,
+      note: `${scrId} — interrupted send (started ${f.at || "?"}${f.by ? ` by ${f.by}` : ""}) ${outcome === "sent" ? "confirmed DELIVERED" : "confirmed NOT delivered"} by ${by}`
+    });
     return scr;
   });
 }
+async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver = null } = {}) {
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const current = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+  if (!current) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+  if (current.status !== "pending_admin_review") {
+    throw Object.assign(new Error(`Scope change is already ${current.status}.`), { code: "scr_wrong_state" });
+  }
 
-async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = "" }, { by = "admin" } = {}) {
+  if (current.sendInFlight) throw uncertainSendError(current);
+
+  const to = String(current.draftEmail?.to || "").trim();
+  let failure = null;
+  if (!to) {
+    failure = { code: "no_recipient", reason: "The customer has no email address on this change request — add one, or record their answer by hand." };
+  } else if (typeof deliver !== "function") {
+    failure = { code: "email_not_configured", reason: "Email is not set up on the server, so nothing was sent." };
+  } else {
+    // Claim the send ON DISK before anything leaves (see above). Checked
+    // again inside the lock, so two requests cannot both claim it.
+    const startedAt = nowIso();
+    await _mutate(projectId, (p) => {
+      const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
+      if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+      if (scr.status !== "pending_admin_review") {
+        throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_wrong_state" });
+      }
+      if (scr.sendInFlight) throw uncertainSendError(scr);
+      scr.sendInFlight = { at: startedAt, by, to };
+    });
+    try {
+      await deliver({ ...current.draftEmail, to });
+    } catch (err) {
+      failure = { code: "delivery_failed", reason: `The email did not go: ${String(err?.message || err).slice(0, 300)}` };
+    }
+  }
+
+  const at = nowIso();
+  const updated = await _mutate(projectId, (p) => {
+    const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    scr.sendInFlight = null; // the outcome is known and about to be saved
+    scr.sendAttempts = [
+      ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+      failure ? { at, by, to, ok: false, reason: failure.reason } : { at, by, to, ok: true, reason: null }
+    ];
+    if (failure) {
+      appendHistory(p, { action: "scope_change_send_failed", by, note: `${scrId} — ${failure.reason}` });
+      return scr;
+    }
+    // A concurrent send may have landed first; the attempt is kept either way.
+    if (scr.status === "pending_admin_review") {
+      scr.status = "pending_customer_approval";
+      scr.sentAt = at;
+      scr.sentBy = by;
+      appendHistory(p, { action: "scope_change_sent", by, note: `${scrId} → ${to}` });
+    }
+    return scr;
+  });
+  if (failure) {
+    throw Object.assign(new Error(failure.reason), { code: failure.code, scopeChange: updated });
+  }
+  return updated;
+}
+
+// Withdrawing a change that already went into a revised quote (Patrick,
+// 2026-09-27). Explicit, by where that quote stands:
+//   signed   → REFUSED. The customer signed it; a signed agreement is never
+//              rewritten. Taking the work out needs a new change order (a
+//              reduction) and a new revision for the customer to sign.
+//   unsigned → the revised quote is CANCELLED (retireUnsignedRevision: the
+//              customer's link stops working, the signed agreement stands),
+//              this change is withdrawn, and any OTHER change that was in
+//              the same revised quote goes back to "approved — needs revised
+//              quote", so nothing is dropped silently.
+//   dead     → already out of every price; the change is simply withdrawn.
+// A completed, invoiced job refuses all of it (projectIsClosedForChanges).
+async function _withdrawFromRevision(projectId, scrId, { note = "", by = "admin" } = {}) {
+  const quotes = require("./quotes");
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  if (projectIsClosedForChanges(proj)) {
+    throw Object.assign(new Error("This job is complete and invoiced, so its change orders are closed. A correction is a credit or a new invoice, not a change to this record."), { code: "project_closed" });
+  }
+  const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+  if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+  if (scr.status !== "executed_under_revision") {
+    throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_already_resolved" });
+  }
+  const signedRefusal = (q) => Object.assign(
+    new Error(`This change is in the signed agreement ${q.id} (v${q.version || 1}). A signed agreement is never rewritten — to take this work out, raise a new change order for the reduction and have the customer sign that revision.`),
+    { code: "scr_in_signed_agreement", quoteId: q.id }
+  );
+  const { state, quote } = scopeChangeRevisionState(scr, await resolveProjectQuote(proj));
+  if (state === "signed") throw signedRefusal(quote);
+
+  let cancelledRevisionId = null;
+  if (state === "unsigned") {
+    try {
+      await quotes.retireUnsignedRevision(quote.id, { by, reason: `Change ${scrId} withdrawn by the office` });
+      cancelledRevisionId = quote.id;
+    } catch (err) {
+      // The customer signed while we were deciding: the signature wins.
+      if (err.code === "revision_signed") throw signedRefusal(quote);
+      throw err;
+    }
+  }
+
+  const cleanNote = String(note || "").slice(0, 2000);
+  return _mutate(projectId, (p) => {
+    const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
+    if (!s) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    s.status = "withdrawn";
+    s.resolvedAt = nowIso();
+    s.resolvedAs = "withdrawn_by_office";
+    s.decisionSource = "office";
+    s.recordedBy = by;
+    s.resolutionNote = cleanNote;
+    s.withdrawnFromRevisionQuoteId = s.linkedRevisionQuoteId;
+    appendHistory(p, {
+      action: "scope_change_withdrawn",
+      by,
+      note: `${scrId} — withdrawn by the office${cancelledRevisionId ? `; revised quote ${cancelledRevisionId} cancelled (unsigned)` : "; its revised quote was never signed"}${cleanNote ? `: ${cleanNote.slice(0, 200)}` : ""}`
+    });
+    if (cancelledRevisionId) {
+      for (const other of p.scopeChangeRequests || []) {
+        if (other.id === scrId || other.status !== "executed_under_revision" || other.linkedRevisionQuoteId !== cancelledRevisionId) continue;
+        other.status = "approved";
+        other.linkedRevisionQuoteId = null;
+        appendHistory(p, {
+          action: "scope_change_revision_cancelled",
+          by,
+          note: `${other.id} — back to approved: revised quote ${cancelledRevisionId} was cancelled when ${scrId} was withdrawn. Generate a new revised quote for it.`
+        });
+      }
+    }
+    return s;
+  });
+}
+
+// Record the outcome of a change request.
+//   approved / rejected — the CUSTOMER's decision. `source` says how it
+//     arrived: "recorded_by_office" (the office entered the answer the
+//     customer gave by phone, email or in person — the default, and today
+//     the only path) or "customer" (the customer answered directly).
+//     resolvedAs always says it was the customer's decision; recordedBy
+//     names the person who entered it.
+//   withdrawn — the OFFICE's decision, from any open stage, including an
+//     approved change that has not reached a revised quote yet (so a job
+//     is never stuck on a change nobody will carry out).
+async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = "" }, { by = "admin", source = "recorded_by_office" } = {}) {
   if (!["approved", "rejected", "withdrawn"].includes(resolution)) {
     throw Object.assign(new Error(`Unknown resolution: ${resolution}`), { code: "bad_resolution" });
   }
+  // A change already in a revised quote has its own rules (below). Queued
+  // with revision generation, so a withdrawal and a new revision for the
+  // same job can never interleave.
+  if (resolution === "withdrawn") {
+    const current = await get(projectId);
+    const scr = (current?.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (scr && scr.status === "executed_under_revision") {
+      return onProjectRevisionQueue(projectId, () => _withdrawFromRevision(projectId, scrId, { note, by }));
+    }
+  }
   return _mutate(projectId, (proj) => {
+    if (projectIsClosedForChanges(proj)) {
+      throw Object.assign(new Error("This job is complete and invoiced, so its change orders are closed. A correction is a credit or a new invoice, not a change to this record."), { code: "project_closed" });
+    }
     const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
     if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-    if (scr.status === "approved" || scr.status === "rejected" || scr.status === "withdrawn" || scr.status === "executed_under_revision") {
+    const openForDecision = scr.status === "pending_admin_review" || scr.status === "pending_customer_approval";
+    const openForWithdrawal = openForDecision || (scr.status === "approved" && !scr.linkedRevisionQuoteId);
+    if (resolution === "withdrawn" ? !openForWithdrawal : !openForDecision) {
       throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_already_resolved" });
+    }
+    const cleanNote = String(note || "").slice(0, 2000);
+    // An interrupted send is moot once the answer is recorded; keep it on
+    // record rather than leave a mark that blocks nothing and explains less.
+    if (scr.sendInFlight && !_scopeSendsInFlight.has(`${projectId}:${scrId}`)) {
+      const f = scr.sendInFlight;
+      scr.sendAttempts = [...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+        { at: f.at || nowIso(), by: f.by || by, to: f.to || null, ok: false, reason: "Interrupted send — delivery never confirmed; settled by the recorded decision",
+          interrupted: true, settledBy: by, settledAt: nowIso(), outcome: "unconfirmed_decision_recorded" }];
+      scr.sendInFlight = null;
     }
     scr.status = resolution;
     scr.resolvedAt = nowIso();
-    scr.resolvedAs = resolution === "approved" ? "approved_by_customer"
-      : resolution === "rejected" ? "rejected_by_customer"
-      : "withdrawn_by_admin";
-    scr.resolutionNote = String(note || "").slice(0, 2000);
-    appendHistory(proj, { action: `scope_change_${resolution}`, by, note: scrId });
+    if (resolution === "withdrawn") {
+      scr.resolvedAs = "withdrawn_by_office";
+      scr.decisionSource = "office";
+      scr.recordedBy = by;
+    } else {
+      scr.resolvedAs = resolution === "approved" ? "approved_by_customer" : "rejected_by_customer";
+      scr.decisionSource = source === "customer" ? "customer" : "recorded_by_office";
+      scr.recordedBy = source === "customer" ? null : by;
+    }
+    scr.resolutionNote = cleanNote;
+    const what = resolution === "withdrawn"
+      ? "withdrawn by the office"
+      : `customer ${resolution}${scr.decisionSource === "recorded_by_office" ? " — recorded by the office" : ""}`;
+    appendHistory(proj, {
+      action: `scope_change_${resolution}`,
+      by: scr.decisionSource === "customer" ? "customer" : by,
+      note: `${scrId} — ${what}${cleanNote ? `: ${cleanNote.slice(0, 200)}` : ""}`
+    });
     return scr;
   });
 }
 
-// Generate a Q-vN revision from an approved scope change. Calls
-// quotes.createRevision and seeds the new revision with the original
-// line items + the SCR's suggested line items, then flips the SCR to
-// executed_under_revision. Caller is responsible for sending the
-// revision to the customer for signature.
-async function generateQuoteRevisionFromScopeChange(projectId, scrId, { by = "admin" } = {}) {
-  const proj = await get(projectId);
-  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
-  const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
-  if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-  if (scr.status !== "approved") {
-    throw Object.assign(new Error("Scope change must be approved before revision."), { code: "scr_not_approved" });
-  }
-  if (!proj.sourceQuoteId) {
-    throw Object.assign(new Error("Project has no source quote to revise."), { code: "no_source_quote" });
-  }
+// ---- The signed agreement governing a project ------------------------
+//
+// Which quote the job is billed on, whether a newer revision is still
+// waiting for the customer's signature, and what the next change order
+// builds on — all from ONE walk of the quote chain (quotes.describeChain),
+// so billing, the completion hold and revision generation cannot drift.
+// Where a project's quote chain is entered: the signed revision it moved
+// to (currentQuoteId), else the quote it was converted from. A legacy
+// project written before currentQuoteId existed enters at its source quote;
+// the chain walk then finds any revision signed since.
+function projectQuoteAnchor(proj) {
+  return proj ? (proj.currentQuoteId || proj.sourceQuoteId || null) : null;
+}
 
+// THE rule for which invoices are a project's (Financials Fix B,
+// 2026-09-28). There were three: the workspace looked up deposit/balance
+// invoices on the quote chain, the deposit lifecycle used the quote's own
+// pointers, and the customer portal matched invoice.projectId — which a
+// deposit invoice (made at acceptance, before the project exists) and the
+// held balance invoice never carry. So the portal's project card never
+// showed the deposit, and its "deposit paid" stage could not be reached.
+//
+// An invoice is the project's when:
+//   - it is tagged with the project (projectId) — a tag for ANOTHER
+//     project is final, never overridden;
+//   - it is the project's final invoice (finalInvoiceId); or
+//   - it is a deposit or balance invoice on the project's quote chain
+//     (every version of the quote it was converted from, or — before
+//     acceptance — of its design's linked quote).
+// Void invoices are included — they are the project's history — and every
+// reader that means "owed" excludes them with isLiveInvoice().
+function invoiceBelongsToProject(inv, proj, chainQuoteIds) {
+  if (!inv || !proj) return false;
+  if (inv.projectId) return inv.projectId === proj.id;
+  if (proj.finalInvoiceId && inv.id === proj.finalInvoiceId) return true;
+  return Boolean(
+    inv.quoteId && chainQuoteIds && chainQuoteIds.has(inv.quoteId) &&
+    (inv.invoiceRole === "deposit" || inv.invoiceRole === "balance")
+  );
+}
+
+// A void invoice is dead paper: never owed, never "the" invoice.
+function isLiveInvoice(inv) {
+  return Boolean(inv) && inv.status !== "void";
+}
+
+// The quote ids a project's invoices may hang off: the whole quote chain
+// (back to the original, forward through every revision) of each quote
+// the project names — its billing anchor (currentQuoteId, else
+// sourceQuoteId), and, for a job made in the System Builder before its
+// quote was accepted, the design's linked quote.
+function projectChainQuoteIds(proj, quoteRecords) {
   const quotes = require("./quotes");
-  const revision = await quotes.createRevision(proj.sourceQuoteId, {
-    by,
-    note: `Revision from scope change ${scrId}`
-  });
+  const ids = new Set();
+  const named = [projectQuoteAnchor(proj), proj?.sourceQuoteId, proj?.systemDesign?.linkedQuoteId].filter(Boolean);
+  for (const id of new Set(named)) {
+    ids.add(id);
+    for (const q of quotes.chainFromRecords(quoteRecords, id)) ids.add(q.id);
+  }
+  return ids;
+}
 
-  // Append the SCR's suggested line items to the revision's lineItems.
-  const newLines = [
-    ...(revision.lineItems || []),
-    ...(scr.suggestedLineItems || []).map((li) => quotes.normalizeProposalLineItem(li))
-  ];
-  await quotes.updateProposal(revision.id, { lineItems: newLines }, {
-    by, note: `Scope-change additions from ${scrId}`
-  });
+// Every project's invoices, oldest first, from ONE read of each store.
+// invoiceRecords may be passed by a caller that already holds them.
+async function invoicesForProjects(projs, { invoiceRecords = null } = {}) {
+  const quotes = require("./quotes");
+  const invoices = require("./invoices");
+  const quoteRecords = await quotes.list({ includeDeleted: true });
+  const allInvoices = invoiceRecords || await invoices.list();
+  const out = new Map();
+  for (const p of projs || []) {
+    const chainIds = projectChainQuoteIds(p, quoteRecords);
+    out.set(p.id, allInvoices
+      .filter((inv) => invoiceBelongsToProject(inv, p, chainIds))
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))));
+  }
+  return out;
+}
 
-  // Mark SCR as executed_under_revision.
-  await _mutate(projectId, (p) => {
-    const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
-    if (s) {
-      s.status = "executed_under_revision";
-      s.linkedRevisionQuoteId = revision.id;
-      appendHistory(p, { action: "scope_change_executed", by, note: `${scrId} → ${revision.id}` });
+async function invoicesForProject(proj) {
+  if (!proj) return [];
+  return (await invoicesForProjects([proj])).get(proj.id) || [];
+}
+
+async function resolveProjectQuote(proj) {
+  const quotes = require("./quotes");
+  if (!proj) return { chain: [], governing: null, pending: null, head: null };
+  return quotes.resolveQuoteChain(projectQuoteAnchor(proj));
+}
+
+// The signed agreement for MANY projects — the projects list and the
+// Dashboard (2026-09-27). One read of the quotes store, then, per project,
+// exactly what resolveProjectQuote + describeAgreement do for one (the
+// workspace header and the Change Orders tab): the same anchor, the same
+// chain rule (quotes.describeChain), the same describeAgreement. So the
+// list, the Dashboard and the workspace can never show different contracts.
+async function agreementsForProjects(projs) {
+  const quotes = require("./quotes");
+  const records = await quotes.list({ includeDeleted: true }); // what resolveQuoteChain reads
+  const out = new Map();
+  for (const p of projs || []) {
+    const anchor = projectQuoteAnchor(p);
+    const info = anchor
+      ? quotes.describeChain(quotes.chainFromRecords(records, anchor))
+      : { chain: [], governing: null, pending: null, head: null };
+    out.set(p.id, describeAgreement(info));
+  }
+  return out;
+}
+
+// The Dashboard's "Active contract value", added up HERE — never in the
+// browser — from the signed agreement of every active project, in cents.
+// A project with no signed agreement adds nothing and is counted, so the
+// screen can say so rather than hide it.
+function contractTotals(projs, agreements) {
+  let cents = 0;
+  let activeSigned = 0;
+  let activeUnsigned = 0;
+  for (const p of projs || []) {
+    if (p.status !== "active") continue;
+    const g = agreements.get(p.id)?.governing;
+    if (g) { cents += Math.round((Number(g.total) || 0) * 100); activeSigned += 1; }
+    else activeUnsigned += 1;
+  }
+  return { activeContractValue: cents / 100, activeSigned, activeUnsigned };
+}
+
+// THE signed agreement, as every screen shows it (2026-09-27). ONE server
+// answer for the workspace header's "Contract value" and the Change Orders
+// tab, so React never interprets the chain a second way:
+//   original  — the FIRST signed version (what the job was sold at)
+//   governing — the NEWEST signed version (what the invoice bills)
+//   pending   — an unsigned newer version, never counted as the contract
+//   netChange — governing minus original. Not a sum of revisions: each
+//               signed revision already carries every earlier change, so
+//               adding them would count a change once per later revision.
+//               Unsigned drafts are excluded by construction.
+function describeAgreement(chainInfo) {
+  const quotes = require("./quotes");
+  const info = chainInfo || { chain: [], governing: null, pending: null };
+  const cents = (n) => Math.round((Number(n) || 0) * 100);
+  const summary = (q) => q ? {
+    id: q.id,
+    version: Number(q.version) || 1,
+    status: q.status,
+    acceptedAt: q.acceptedAt || null,
+    subtotal: cents(q.subtotal) / 100,
+    hst: cents(q.hst) / 100,
+    total: cents(q.total) / 100,
+    href: `/admin/quote/${encodeURIComponent(q.id)}/proposal`
+  } : null;
+  const original = (info.chain || []).find(quotes.isSignedAgreement) || null;
+  const governing = info.governing || null;
+  return {
+    original: summary(original),
+    governing: summary(governing),
+    pending: summary(info.pending || null),
+    netChangeSubtotal: original && governing ? (cents(governing.subtotal) - cents(original.subtotal)) / 100 : null,
+    netChangeTotal: original && governing ? (cents(governing.total) - cents(original.total)) / 100 : null
+  };
+}
+
+// What a fixed-price job is billed: the SIGNED AGREEMENT governing it —
+// the newest signed quote in its revision chain. ONE answer for the final
+// invoice (completion-cascade) and the Complete dialog's preview, so the
+// preview can never show a different amount from the invoice.
+//
+// Before 2026-09-27 both read proposalSnapshot, frozen once at conversion,
+// so a change-order revision the customer signed was never billed (a
+// $5,400 job invoiced at $5,000). The snapshot still wins whenever it IS
+// the governing quote, so a job with no signed revision bills exactly as
+// before; the chain only takes over when a newer signed version exists
+// (including legacy projects whose snapshot the old code never moved).
+async function fixedPriceBillingSource(proj) {
+  const toLine = (li) => ({ key: li.sourceKey || "custom", label: li.label, qty: li.qty, price: li.price, lineTotal: li.lineTotal });
+  const pick = (from, note) => ({
+    lineItems: from.lineItems.map(toLine),
+    subtotal: Number(from.subtotal) || 0,
+    hst: Number(from.hst) || 0,
+    total: Number(from.total) || 0,
+    note
+  });
+  const snap = proj && proj.proposalSnapshot;
+  let governing = null;
+  try { governing = (await resolveProjectQuote(proj)).governing; }
+  catch (err) { console.warn("[projects] quote chain read failed:", err?.message); }
+  const snapIsGoverning = !governing || (snap && snap.quoteId === governing.id);
+  if (!snapIsGoverning && Array.isArray(governing.lineItems) && governing.lineItems.length) {
+    return pick(governing, `Fixed price: signed agreement ${governing.id}${Number(governing.version) > 1 ? ` (v${governing.version})` : ""}`);
+  }
+  if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
+    return pick(snap, `Fixed price: from proposal ${snap.quoteId}`);
+  }
+  if (proj && proj.sourceQuoteId) {
+    try {
+      const q = await require("./quotes").get(proj.sourceQuoteId);
+      if (q && Array.isArray(q.lineItems)) return pick(q, `Fixed price: live quote ${q.id}`);
+    } catch (err) { console.warn("[projects] sourceQuote read failed:", err?.message); }
+  }
+  return { lineItems: [], subtotal: 0, hst: 0, total: 0, note: "" };
+}
+
+// The customer has SIGNED a revision: move every project on its chain onto
+// it — the project's current quote and the billing snapshot. Called by
+// quotes.js right after the signature's write lands. Idempotent: a project
+// already on this quote is left alone (a re-sent signature, a retry).
+async function adoptSignedRevision(signed, { by = "system" } = {}) {
+  const quotes = require("./quotes");
+  if (!signed || !signed.id) return [];
+  const info = await quotes.resolveQuoteChain(signed.id);
+  if (!info.governing || info.governing.id !== signed.id) return []; // not the newest signed agreement
+  const ids = new Set(info.chain.map((q) => q.id));
+  const moved = [];
+  for (const p of await readAll()) {
+    if (!(ids.has(p.sourceQuoteId) || ids.has(p.currentQuoteId))) continue;
+    if (p.currentQuoteId === signed.id) continue;
+    await _mutate(p.id, (proj) => {
+      const prev = proj.currentQuoteId || proj.sourceQuoteId;
+      const who = proj.proposalSnapshot || {};
+      proj.currentQuoteId = signed.id;
+      proj.proposalSnapshot = buildProposalSnapshot(signed, {
+        customerName: who.customerName || proj.customerName || "",
+        customerEmail: who.customerEmail || proj.customerEmail || "",
+        customerPhone: who.customerPhone || proj.customerPhone || "",
+        address: who.address || proj.address || ""
+      });
+      appendHistory(proj, { action: "revision_signed", by, note: `${prev} → ${signed.id} (v${signed.version || "?"}) signed — now the governing agreement` });
+    });
+    moved.push(p.id);
+  }
+  return moved;
+}
+
+// One revision job at a time per project. A double click, or a retry while
+// the first request is still running, waits its turn and then finds the
+// revision the first one made (below) instead of making a second.
+const _revisionQueues = new Map();
+function onProjectRevisionQueue(projectId, fn) {
+  const prev = _revisionQueues.get(projectId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  _revisionQueues.set(projectId, tail);
+  tail.then(() => { if (_revisionQueues.get(projectId) === tail) _revisionQueues.delete(projectId); });
+  return run;
+}
+
+// Turn an approved scope change into a revised quote for the customer to
+// sign. It builds on the NEWEST version in the chain, never the original:
+//   - a revision already in flight and still a draft → the change is added
+//     to THAT draft (one offer, not two competing ones);
+//   - otherwise → a new revision of the newest version (the pending one if
+//     the customer has not signed it yet, else the governing agreement).
+// Either way every earlier change is already in the base, so it appears
+// exactly once. Idempotent: a change that already produced a revision
+// returns that revision.
+async function generateQuoteRevisionFromScopeChange(projectId, scrId, { by = "admin" } = {}) {
+  return onProjectRevisionQueue(projectId, async () => {
+    const quotes = require("./quotes");
+    const proj = await get(projectId);
+    if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+    const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+
+    if (scr.linkedRevisionQuoteId) {
+      const existing = await quotes.get(scr.linkedRevisionQuoteId);
+      if (existing) return existing;
     }
-  });
+    if (scr.status !== "approved") {
+      throw Object.assign(new Error("Scope change must be approved before revision."), { code: "scr_not_approved" });
+    }
+    if (!proj.sourceQuoteId) {
+      throw Object.assign(new Error("Project has no source quote to revise."), { code: "no_source_quote" });
+    }
+    const { head } = await resolveProjectQuote(proj);
+    if (!head) {
+      throw Object.assign(new Error("Project has no signed quote to revise."), { code: "no_signed_agreement" });
+    }
 
-  return revision;
+    const target = head.status === "draft"
+      ? head
+      : await quotes.createRevision(head.id, { by, note: `Revision from scope change ${scrId}` });
+
+    const base = await quotes.get(target.id);
+    const newLines = [
+      ...(base.lineItems || []),
+      ...(scr.suggestedLineItems || []).map((li) => quotes.normalizeProposalLineItem(li))
+    ];
+    await quotes.updateProposal(target.id, { lineItems: newLines }, {
+      by, note: `Scope-change additions from ${scrId}`
+    });
+
+    await _mutate(projectId, (p) => {
+      const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
+      if (s) {
+        s.status = "executed_under_revision";
+        s.linkedRevisionQuoteId = target.id;
+        appendHistory(p, { action: "scope_change_executed", by, note: `${scrId} → ${target.id}` });
+      }
+    });
+
+    return quotes.get(target.id);
+  });
 }
 
 // ---- Brief 2: Status updates --------------------------------------
@@ -1579,20 +2389,18 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
     const m = metrics || (await computeProjectMetrics(projectId));
 
     // Recent completed tasks (up to 5).
-    const recentTasks = (proj.tasks || [])
+    const recentTasks = activeTasks(proj)
       .filter((t) => t.status === "done" && t.completedAt)
       .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
       .slice(0, 5);
 
     // Upcoming pending tasks (up to 3).
-    const upcoming = (proj.tasks || [])
+    const upcoming = activeTasks(proj)
       .filter((t) => t.status === "pending")
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .slice(0, 3);
 
-    const pendingScrs = (proj.scopeChangeRequests || []).filter(
-      (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-    );
+    const pendingScrs = openScopeChanges(proj);
 
     // Recent photos (4-6) for the email's photo strip per Brief §3.5.
     const photos = recentPhotos || (await listRecentProjectPhotos(projectId, { limit: 6 }));
@@ -1617,6 +2425,7 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
       pendingScopeChanges: pendingScrs.map((s) => ({
         description: s.description,
         status: s.status,
+        stage: scopeChangeStage(s, proj),
         sentAt: s.sentAt
       })),
       recentPhotos: photos.map((p) => ({
@@ -1686,7 +2495,7 @@ async function completionPreflight(projectId) {
   }
 
   // Tasks
-  const pendingTasks = (proj.tasks || []).filter((t) => t.status !== "done").length;
+  const pendingTasks = activeTasks(proj).filter((t) => t.status !== "done").length;
   if (pendingTasks > 0) {
     checks.warnings.push({
       key: "tasks_pending",
@@ -1697,9 +2506,8 @@ async function completionPreflight(projectId) {
   }
 
   // Scope changes
-  const unresolvedScrs = (proj.scopeChangeRequests || []).filter(
-    (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-  );
+  const openScrs = openScopeChanges(proj);
+  const unresolvedScrs = openScrs.filter((s) => scopeChangeStage(s, proj) !== "awaiting_revision");
   if (unresolvedScrs.length > 0) {
     checks.blockers.push({
       key: "scope_changes_unresolved",
@@ -1707,16 +2515,49 @@ async function completionPreflight(projectId) {
     });
   }
 
-  // Fixed-price + approved SCR without revision = blocker
-  if (proj.billingMode === "fixed_price") {
-    const approvedWithoutRevision = (proj.scopeChangeRequests || []).filter(
-      (s) => s.status === "approved" && !s.linkedRevisionQuoteId
-    );
-    if (approvedWithoutRevision.length > 0) {
+  // Approved on a fixed-price job, revised quote not yet generated. (Not
+  // T&M — that is scopeChangeStage's rule, shared with every reader.)
+  const approvedWithoutRevision = openScrs.filter((s) => scopeChangeStage(s, proj) === "awaiting_revision");
+  if (approvedWithoutRevision.length > 0) {
+    checks.blockers.push({
+      key: "approved_scr_no_revision",
+      message: `${approvedWithoutRevision.length} approved scope change${approvedWithoutRevision.length === 1 ? "" : "s"} need a quote revision before billing (fixed-price). Generate the revision, or withdraw the change.`
+    });
+  }
+
+  // The completion hold (Patrick, 2026-09-27). A fixed-price job is billed
+  // on its signed agreement, so it cannot close while a newer revision is
+  // still waiting for the customer's signature — the invoice would be
+  // written against a scope nobody has agreed to. Rejecting or signing the
+  // revision lifts it; an office override (with a reason) can too.
+  if (proj.billingMode !== "time_and_material") {
+    const { governing, pending } = await resolveProjectQuote(proj);
+    if (pending) {
       checks.blockers.push({
-        key: "approved_scr_no_revision",
-        message: `${approvedWithoutRevision.length} approved scope change${approvedWithoutRevision.length === 1 ? "" : "s"} need a quote revision before billing (fixed-price).`
+        key: "revision_unsigned",
+        message: `Revision ${pending.id} is not signed yet — the job is still on ${governing ? governing.id : "its original quote"}. Get it signed or rejected before billing.`
       });
+    }
+    // A deposit job's balance invoice is built from the quote the deposit
+    // was taken on. Once a later revision is signed, that held invoice is
+    // the wrong amount — and the final invoice REUSES it. Hold the job
+    // rather than under-bill it.
+    if (governing) {
+      try {
+        const ctx = await require("./deposits").depositContextForQuote(proj.sourceQuoteId);
+        const builtFromOlder = ctx && ctx.quote && ctx.quote.id !== governing.id
+          && ((ctx.balanceInvoice && ctx.balanceInvoice.status !== "void") || ctx.depositInvoice);
+        if (builtFromOlder) {
+          checks.blockers.push({
+            key: "deposit_balance_predates_revision",
+            message: ctx.balanceInvoice && ctx.balanceInvoice.status !== "void"
+              ? `The balance invoice ${ctx.balanceInvoice.id} was built from ${ctx.quote.id}, but ${governing.id} is now the signed agreement. Adjust the balance before completing, or override with a reason.`
+              : `The deposit was taken on ${ctx.quote.id}, but ${governing.id} is now the signed agreement, so the balance would be built from the old amount. Settle the balance by hand, or override with a reason.`
+          });
+        }
+      } catch (err) {
+        console.warn("[projects] deposit check failed:", err?.message);
+      }
     }
   }
 
@@ -1739,7 +2580,28 @@ async function completionPreflight(projectId) {
     try {
       const quotesLib = require("./quotes");
       const q = await quotesLib.get(proj.sourceQuoteId);
-      if (q?.deposit?.enabled === true && q.status === "accepted" &&
+      // A deposit invoice marked Paid with its payments short is NOT a
+      // satisfied deposit (payment reconciliation, 2026-09-28): its gap is
+      // neither received nor collectible, and billing the balance on top
+      // of it could charge the customer twice. So completion waits for the
+      // office to reconcile it — record the missing payment or correct the
+      // status — and this blocker is not overridable (HARD_BLOCKERS).
+      let depositRecon = null;
+      if (q?.deposit?.enabled === true && q.deposit.depositInvoiceId) {
+        try {
+          const invoicesLib = require("./invoices");
+          const depInv = await invoicesLib.get(q.deposit.depositInvoiceId);
+          const r = depInv ? invoicesLib.reconciliationFor(depInv) : null;
+          if (r && r.required) depositRecon = { inv: depInv, r };
+        } catch (_) { /* tolerate — read below */ }
+      }
+      const fmt = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (depositRecon) {
+        checks.blockers.push({
+          key: "payment_reconciliation_required",
+          message: `Deposit invoice ${depositRecon.inv.id} is marked Paid, but only ${fmt(depositRecon.r.recorded)} is recorded against ${fmt(depositRecon.r.total)} — ${fmt(depositRecon.r.unresolved)} unresolved. Record the missing payment or correct its status to Partially paid on the invoice page before completing the job.`
+        });
+      } else if (q?.deposit?.enabled === true && q.status === "accepted" &&
           q.deposit.stage !== "deposit_paid" && q.deposit.stage !== "awaiting_balance_payment" && q.deposit.stage !== "closed") {
         checks.blockers.push({
           key: "deposit_unpaid",
@@ -1759,7 +2621,9 @@ async function completionPreflight(projectId) {
 // record creation is done by completion-cascade.js's
 // runProjectFinalCascade(). This function is responsible for the
 // project-side state machine: stamps + status flip + history.
-async function completeProject(projectId, { by = "admin", allowOverride = false, attestationNote = "", deps = {} } = {}) {
+const HARD_BLOCKERS = new Set(["payment_reconciliation_required"]);
+
+async function completeProject(projectId, { by = "admin", allowOverride = false, overrideReason = "", attestationNote = "", deps = {} } = {}) {
   const proj = await get(projectId);
   if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
 
@@ -1770,6 +2634,18 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
 
   // Preflight gates.
   const checks = await completionPreflight(projectId);
+  // Blockers no override can pass: an unreconciled deposit payment
+  // (payment reconciliation, 2026-09-28) — completing would release the
+  // balance invoice against a deposit the ledger doesn't show.
+  const hard = checks.blockers.filter((b) => HARD_BLOCKERS.has(b.key));
+  if (hard.length) {
+    const err = new Error(`Cannot complete project — ${hard.map((b) => b.message).join("; ")}`);
+    err.code = "preflight_blockers";
+    err.blockers = checks.blockers;
+    err.warnings = checks.warnings;
+    err.hardBlockers = hard.map((b) => b.key);
+    throw err;
+  }
   if (checks.blockers.length && !allowOverride) {
     const err = new Error(
       `Cannot complete project — ${checks.blockers.length} blocker${checks.blockers.length === 1 ? "" : "s"}: ` +
@@ -1779,6 +2655,16 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
     err.blockers = checks.blockers;
     err.warnings = checks.warnings;
     throw err;
+  }
+  // Overriding a blocker bills a job the checks say is not ready — only
+  // with a written reason, and it goes on the record (Patrick, 2026-09-27).
+  const overriddenBlockers = checks.blockers.length ? checks.blockers.map((b) => b.key) : [];
+  const reason = String(overrideReason || "").trim();
+  if (overriddenBlockers.length && !reason) {
+    throw Object.assign(
+      new Error("Overriding the completion checks needs a written reason."),
+      { code: "override_reason_required", blockers: checks.blockers }
+    );
   }
 
   // Delegate the actual invoice generation + emails + service record
@@ -1797,10 +2683,19 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
     p.invoiceGeneratedAt = cascadeResult.invoiceId ? nowIso() : null;
     p.finalInvoiceId = cascadeResult.invoiceId || null;
     if (cascadeResult.propertyEditsApplied) p.propertyEditsAppliedAt = nowIso();
+    if (overriddenBlockers.length) {
+      // The override's own entry, separate from the completion, so the
+      // record says plainly who waved which checks through and why.
+      appendHistory(p, {
+        action: "completion_override",
+        by,
+        note: `${reason.slice(0, 1000)} — overrode: ${overriddenBlockers.join(", ")}`
+      });
+    }
     appendHistory(p, {
       action: "project_completed",
       by,
-      note: `invoice=${cascadeResult.invoiceId || "none"}${allowOverride ? " (override)" : ""}${attestationNote ? " — " + attestationNote.slice(0, 200) : ""}`
+      note: `invoice=${cascadeResult.invoiceId || "none"}${overriddenBlockers.length ? " (override)" : ""}${attestationNote ? " — " + attestationNote.slice(0, 200) : ""}`
     });
     return { project: p, invoiceId: cascadeResult.invoiceId, cascade: cascadeResult };
   });
@@ -2349,12 +3244,17 @@ module.exports = {
   listByWorkOrder,
   // Brief 2 — task ops
   seedTasksFromQuote,
+  addProblem,
+  setProblemStatus,
   addTask,
   updateTask,
   removeTask,
   markTaskComplete,
   unmarkTaskComplete,
   addTaskProgress,
+  taskIsArchived,
+  activeTasks,
+  restoreTask,
   // Brief 2 — metrics & billing
   computeProjectMetrics,
   computeTAndMBilling,
@@ -2371,6 +3271,23 @@ module.exports = {
   sendScopeChangeRequest,
   resolveScopeChangeRequest,
   generateQuoteRevisionFromScopeChange,
+  resolveProjectQuote,
+  describeAgreement,
+  projectQuoteAnchor,
+  invoiceBelongsToProject,
+  isLiveInvoice,
+  invoicesForProjects,
+  invoicesForProject,
+  agreementsForProjects,
+  contractTotals,
+  fixedPriceBillingSource,
+  scopeChangeStage,
+  openScopeChanges,
+  scopeChangeRevisionState,
+  projectIsClosedForChanges,
+  resolveUncertainScopeSend,
+  adoptSignedRevision,
+  buildProposalSnapshot,
   // Brief 2 — status updates
   generateStatusUpdate,
   // Brief 2 — project completion

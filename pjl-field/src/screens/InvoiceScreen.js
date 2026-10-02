@@ -27,6 +27,7 @@ import {
 import { READER, useTapToPay } from '../taptopay/useTapToPay';
 import { useTapToPayLocation } from '../taptopay/TapToPayProvider';
 import { money as formatMoney } from '../format';
+import CustomerSummary from './CustomerSummary';
 import { colors, radius, space, type } from '../theme';
 
 // DOLLARS. Every money field on an invoice is dollars, end to end:
@@ -68,6 +69,10 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
     tap.setLocation(locationId);
     tap.warmUp();
   }, [locationId, tap.setLocation, tap.warmUp]);
+
+  // The invoice as the customer reads it — work done, every charge, HST,
+  // paid and owing — for "what am I paying for?" at the card reader.
+  const [showSummary, setShowSummary] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -264,6 +269,11 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   // A draft signed off "Bill later" waits for Patrick's review; the server
   // refuses to open it for payment, so the button is not offered.
   const payableHere = !(invoice?.status === 'draft' && invoice?.paidOnSiteAtCompletion !== true);
+  // A price PJL sets after the visit (PJL-96: a custom size, or a commercial
+  // account without its own price). The server says so; the amount on the
+  // draft is only a suggestion for the office, so it is not shown here and
+  // nothing can be sent, charged or recorded against it yet.
+  const priceUnconfirmed = invoice?.priceUnconfirmed === true;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -277,21 +287,36 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
       <View style={styles.card}>
         <Row label="Customer" value={invoice?.customerName || invoice?.billTo?.name || '—'} />
         <Row label="Property" value={invoice?.address || invoice?.propertyAddress || '—'} />
-        <Row label="Total" value={money(invoice?.total ?? invoice?.amountDue, invoice?.currency)} strong />
+        <Row label="Total" value={priceUnconfirmed ? 'Set by PJL after the visit' : money(invoice?.total ?? invoice?.amountDue, invoice?.currency)} strong />
         {partPaid ? (
           <Row label="Still owing" value={money(invoice?.balanceDue, invoice?.currency)} strong />
         ) : null}
         <Row
           label="Status"
-          value={paid ? 'Paid' : partPaid ? 'Part paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
+          value={paid ? 'Paid' : priceUnconfirmed ? 'Price to be confirmed by the office' : partPaid ? 'Part paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
           last
         />
       </View>
+
+      {invoice?.woId ? (
+        <>
+          <Pressable
+            style={({ pressed }) => [styles.button, styles.buttonGhost, styles.show, pressed && styles.off]}
+            onPress={() => setShowSummary(true)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.buttonGhostText}>Show the customer the invoice</Text>
+          </Pressable>
+          <CustomerSummary visible={showSummary} workOrderId={invoice.woId} onClose={() => setShowSummary(false)} />
+        </>
+      ) : null}
 
       {paid ? (
         <Text style={tapOutcome?.ok ? styles.tapOk : styles.note}>
           {tapOutcome?.ok ? 'Approved — paid by Tap to Pay on iPhone.' : 'This one is already paid. Nothing left to do.'}
         </Text>
+      ) : priceUnconfirmed ? (
+        <Text style={styles.note}>PJL confirms the price for this visit and sends the invoice. Nothing to collect on site.</Text>
       ) : (
         <View style={styles.actions}>
           {/* 5.2 — FIRST in the list of payment options, reachable without
@@ -497,6 +522,7 @@ const styles = StyleSheet.create({
   actions: { gap: space.sm },
   button: { backgroundColor: colors.brand, borderRadius: radius.card, paddingVertical: 15, alignItems: 'center' },
   buttonGhost: { backgroundColor: colors.brandTint },
+  show: { minHeight: 52, justifyContent: 'center' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   buttonGhostText: { color: colors.brand, fontSize: 16, fontWeight: '600' },
   off: { opacity: 0.5 },

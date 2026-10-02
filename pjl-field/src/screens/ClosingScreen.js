@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import {
   AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder, patchProperty,
-  patchWorkOrder, signatureBypass,
+  patchWorkOrder, signatureBypass, removePropertyZone,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
 import { money as formatMoney } from '../format';
@@ -26,7 +26,7 @@ import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
-import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts } from '../offline/field';
+import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts, removeZoneFromProperty } from '../offline/field';
 import { syncNoticeFor } from '../sync-notice';
 
 const STAGES = [
@@ -254,8 +254,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         const go = await new Promise((resolve) => Alert.alert(
           'The price follows the zones',
           fee.atFinish.custom
-            // 16+ residential / 9+ commercial: no flat price exists.
-            ? `${zonesText} → custom quote — Patrick to price. The invoice waits for him; don't take payment on site.`
+            // A price PJL sets after the visit (PJL-96): a custom size (16+
+            // residential / 9+ commercial) or a commercial account without its
+            // own price. No number here — the office confirms it.
+            ? `${zonesText} → ${fee.atFinish.reason === 'commercial_unpriced' ? 'commercial account' : 'custom size'} — PJL confirms the price after the visit. The invoice waits for the office; don't take payment on site.`
             : `${zonesText} → ${formatMoney(fee.atFinish.price) ?? '—'}`
               + ` (booked at ${formatMoney(fee.current?.price) ?? '—'}). The invoice will use the new price.`,
           [
@@ -278,8 +280,11 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       } else if (result.mode === 'customer') {
         data = await completeWorkOrder(workOrderId, {
           // Signed already (the lock landed, the response did not): the
-          // signature is on file — send the completion only.
-          signature: freshBeforeFinish?.signature?.signed ? null : result.signature,
+          // signature is on file — send the completion only. Unless the
+          // work order changed in price after that signature: then the
+          // customer's NEW signature is the one that counts (server rule
+          // workOrders.awaitsNewSignature).
+          signature: freshBeforeFinish?.signature?.signed && freshBeforeFinish?.resignature?.required !== true ? null : result.signature,
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,
         });
@@ -287,7 +292,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         // If the prior attempt lost its response after locking, continue
         // from that accepted state rather than trying to bypass twice.
         const current = await getWorkOrder(workOrderId);
-        if (!current.signatureBypass) await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
+        if (!current.signatureBypass || current.resignature?.required === true) await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
         data = await completeWorkOrder(workOrderId, {
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,
@@ -382,7 +387,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     );
   }
 
-  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri };
+  // The property half of Remove zone (PJL-98): the visit is already saved.
+  const removeZoneOnProperty = (number, why) =>
+    removeZoneFromProperty(field.current.queue, field.current.key, { number, ...why }, removePropertyZone);
+  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty };
   // Only a failed upload or a conflict, never the second a tap spends uploading.
   const notice = syncNoticeFor(syncState);
 

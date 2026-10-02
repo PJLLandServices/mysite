@@ -40,7 +40,8 @@ export const api = {
   post: <T,>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
   patch: <T,>(path: string, body?: unknown) =>
-    request<T>(path, { method: "PATCH", body: body === undefined ? undefined : JSON.stringify(body) })
+    request<T>(path, { method: "PATCH", body: body === undefined ? undefined : JSON.stringify(body) }),
+  del: <T,>(path: string) => request<T>(path, { method: "DELETE" })
 };
 
 /* ── Shapes, as the existing endpoints actually return them ──────── */
@@ -59,8 +60,15 @@ export interface ProjectSummary {
   billingMode?: "fixed_price" | "time_and_material" | null;
   sourceQuoteId?: string | null;
   workOrderIds?: string[];
-  tasks?: Array<{ id: string; status: string }>;
+  /* `percentComplete` is the server's cumulative per-task figure, and
+     `status` follows it. Reading status alone reports a task logged at
+     60% as not started — see projectPercentComplete() in format.ts. */
+  tasks?: Array<{ id: string; status: string; percentComplete?: number; archivedAt?: string | null }>;
   proposalSnapshot?: { quoteId?: string; version?: number; total?: number; acceptedAt?: string } | null;
+  /** The signed agreement (server: projects.agreementsForProjects → the
+      same describeAgreement the workspace header uses). The list shows
+      this; the snapshot above is a frozen copy and is never a contract value. */
+  agreement?: Agreement | null;
   updatedAt?: string;
   createdAt?: string;
 }
@@ -86,6 +94,49 @@ export interface LinkedQuote {
   chain?: Array<{ id: string; version: number }>;
 }
 
+export interface AgreementQuote {
+  id: string;
+  version: number;
+  status: string;
+  acceptedAt: string | null;
+  subtotal: number;
+  hst: number;
+  total: number;
+  href: string;
+}
+
+/* projects.describeAgreement: original (first signed), governing (newest
+   signed — what the invoice bills), pending (unsigned, never the
+   contract), and the net change between original and governing. */
+export interface Agreement {
+  original: AgreementQuote | null;
+  governing: AgreementQuote | null;
+  pending: AgreementQuote | null;
+  netChangeSubtotal: number | null;
+  netChangeTotal: number | null;
+}
+
+/** The job's billing in one line (server: financials-view billingSummary).
+    kind: none — nothing invoiced; owed — money owed on sent invoices;
+    settled — nothing owed now, more still to invoice or send; paid. */
+export interface BillingSummary {
+  kind: "reconcile" | "none" | "owed" | "settled" | "paid";
+  owed: number;
+  received: number;
+  /** Marked Paid with payments short: unresolved, never received or owed. */
+  unresolved: number;
+  hint: string;
+  actionInvoice: InvoiceSummary | null;
+}
+
+export interface ContractTotals {
+  /** Sum of the signed agreements of every active project, in dollars. */
+  activeContractValue: number;
+  activeSigned: number;
+  /** Active projects with no signed agreement — they add nothing. */
+  activeUnsigned: number;
+}
+
 export interface InvoiceSummary {
   id: string;
   status: string;
@@ -94,6 +145,10 @@ export interface InvoiceSummary {
   amountPaid?: number;
   balanceDue?: number;
   paidAt?: string | null;
+  /** Marked Paid with its recorded payments short (server: invoices.
+      reconciliationFor) — nothing to collect until the office reconciles. */
+  reconciliationRequired?: boolean;
+  unresolved?: number;
 }
 
 /* Three different counts, and they are not interchangeable.
@@ -144,14 +199,496 @@ export function systemBuilderHref(projectId: string): string {
   return `/app/projects/${encodeURIComponent(projectId)}/design/build`;
 }
 
+/* A task on a job. `percentComplete` leads and `status` follows it —
+ * see projectPercentComplete() in format.ts. `completedByWoId` names the
+ * VISIT that finished it, and is null when it was closed out from the
+ * office, which is a real distinction and not a missing value. */
+export interface ProjectTask {
+  id: string;
+  description: string;
+  status: "pending" | "in_progress" | "done";
+  percentComplete?: number;
+  notes?: string;
+  order?: number;
+  sourceLineItemId?: string | null;
+  completedAt?: string | null;
+  completedByWoId?: string | null;
+  /* Set when the task was taken off the list but KEPT, because the crew's
+     daily logs or photos point at its id. It stops counting everywhere;
+     nothing that references it is left dangling. */
+  archivedAt?: string | null;
+  archivedBy?: string | null;
+  archivedReason?: string | null;
+}
+
+/* What the server computes about a job. Displayed, never recomputed —
+ * `percentComplete` here is the figure, and a screen that works out its
+ * own is the progress-bar bug of 2026-09-25. */
+export interface ProjectMetrics {
+  totalTasks: number;
+  doneTasks: number;
+  percentComplete: number;
+  daysLogged: number;
+  totalPersonHours: number;
+  photoCount: number;
+  pendingScopeChanges: number;
+  lastWorkDate?: string | null;
+  buildWoIds?: string[];
+}
+
+export const tasksApi = {
+  add: (projectId: string, body: { description: string; notes?: string }) =>
+    api.post<{ task: ProjectTask }>(`/api/projects/${encodeURIComponent(projectId)}/tasks`, body),
+  update: (projectId: string, taskId: string, patch: { description?: string; notes?: string; order?: number }) =>
+    api.patch<{ task: ProjectTask }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, patch),
+  /* Removing is archive-or-delete, decided by the server: a task anything
+     has ever referenced is kept and stops counting; one nothing ever
+     touched is really gone. The response says which happened and why. */
+  remove: (projectId: string, taskId: string) =>
+    api.del<{ removed: string | null; archived: string | null; reasons: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`),
+  /* The office door onto the same record the field app writes. `percent`
+     is absolute — what a person means by "set it to 60" — and the server
+     converts it to the cumulative delta its mutator takes. */
+  setProgress: (projectId: string, taskId: string, percent: number) =>
+    api.post<{ task: ProjectTask; metrics: ProjectMetrics }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/progress`, { percent }),
+  /* Put an archived task back on the list. Nothing is reconstructed —
+     archiving never removed the progress, the crew's daily-log lines,
+     their photos or the recorded hours, so this only clears the fields
+     archiving added. Both entries stay in the audit trail. */
+  restore: (projectId: string, taskId: string) =>
+    api.post<{ task: ProjectTask; metrics: ProjectMetrics }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/restore`),
+  seedFromQuote: (projectId: string) =>
+    api.post<{ project: ProjectDetail }>(`/api/projects/${encodeURIComponent(projectId)}/tasks/seed`)
+};
+
+export const metricsApi = {
+  get: (projectId: string) =>
+    api.get<{ metrics: ProjectMetrics }>(`/api/projects/${encodeURIComponent(projectId)}/metrics`)
+      .then((d) => d.metrics)
+};
+
 export const projectsApi = {
   list: () => api.get<{ projects: ProjectSummary[] }>("/api/projects").then((d) => d.projects || []),
+  /* The Dashboard: the same list, plus the totals the SERVER added up
+     (projects.contractTotals) — the browser never sums money. */
+  listWithTotals: () =>
+    api.get<{ projects: ProjectSummary[]; totals: ContractTotals }>("/api/projects").then((d) => ({
+      projects: d.projects || [],
+      totals: d.totals
+    })),
   get: (id: string) =>
     api.get<{
       project: ProjectDetail;
       materialLists?: Array<{ id: string; name?: string; status: string; totals?: { lineCount?: number } }>;
       linkedQuote?: LinkedQuote | null;
+      /** The signed agreement (server: projects.describeAgreement) — the
+          same answer the Change Orders tab shows. Contract value reads
+          this and nothing else. */
+      agreement?: Agreement | null;
       invoiceSummary?: InvoiceSummary | null;
       siteBuilderSummary?: SiteBuilderSummary | null;
+      /** The header's Billing card (server: financials-view billingSummary)
+          — the same model the Financials tab shows. */
+      billing?: BillingSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
+};
+
+/* ---- Daily Records -------------------------------------------------
+ *
+ * Every figure here is calculated on the server (lib/daily-records.js
+ * over lib/session-hours.js). The screen renders these; it never works
+ * out hours of its own. On a screen where every number is money, a
+ * second opinion in React is a second answer.
+ */
+
+export interface SessionTimes {
+  inAt: string | null;
+  outAt: string | null;
+  labourersOnSite: number;
+}
+
+export interface SessionCorrection {
+  at: string | null;
+  by: string | null;
+  reason: string;
+  field: string | null;
+  from: string | number | null;
+  to: string | number | null;
+}
+
+export interface DailySession {
+  id: string;
+  startedBy: string | null;
+  note: string;
+  open: boolean;
+  corrected: boolean;
+  /* Which fields moved, so the clock and the crew count are marked
+     independently rather than flagging the whole row. */
+  correctedFields: string[];
+  recorded: SessionTimes;   // what the crew logged
+  effective: SessionTimes;  // what bills
+  corrections: SessionCorrection[];
+  personHours: number;
+  recordedPersonHours: number;
+}
+
+export interface DayPhoto {
+  n: number;
+  kind: "image" | "pdf";
+  caption: string;
+  takenAt: string | null;
+  taskId: string | null;
+  url: string;
+}
+
+export type ProblemStatus = "open" | "monitoring" | "resolved";
+
+export interface ProjectProblem {
+  id: string;
+  title: string;
+  description: string;
+  status: ProblemStatus;
+  /* From the ONE rule in lib/project-problems.js. The page never tests
+     the status itself — "monitoring" is not resolved, and a second copy
+     of that test is how the two answers drift apart. */
+  needsAttention: boolean;
+  discovery: { at: string | null; onWoId: string | null; workDate: string | null; reportedBy: string | null };
+  resolution: { at: string; by: string | null; note: string } | null;
+  links: { taskId: string | null; photoRef: string | null; scopeChangeId: string | null };
+}
+
+export interface DailyRecordDay {
+  woId: string;
+  workDate: string | null;
+  locked: boolean;
+  /* The server decides whether a correction is allowed and supplies the
+     sentence saying why not — it depends on the work order's signature
+     state, and a greyed-out button with no explanation is how somebody
+     concludes the system is broken. */
+  canCorrect: boolean;
+  lockReason: string | null;
+  signedOff: boolean;
+  sessions: DailySession[];
+  personHours: number;
+  recordedPersonHours: number;
+  hoursCorrected: boolean;
+  anyCorrection: boolean;
+  openSession: boolean;
+  notes: string;
+  tasksDoneToday: number;
+  materialsUsed: number;
+  photoCount: number;
+  photos: DayPhoto[];
+  /* Problems DISCOVERED on this day — the fact about the day. They show
+     their CURRENT status, because resolving one later does not rewrite
+     the day it was found on. */
+  problemsFound: ProjectProblem[];
+}
+
+export interface DailyRecords {
+  days: DailyRecordDay[];
+  totalPersonHours: number;
+  daysLogged: number;
+  correctedDays: number;
+  problems: ProjectProblem[];
+  openProblems: number;
+}
+
+export const dailyRecordsApi = {
+  get: (projectId: string) =>
+    api.get<DailyRecords>(`/api/projects/${encodeURIComponent(projectId)}/daily-records`),
+
+  /* An office correction to a session's clock. A reason is required —
+     the server refuses without one, and so does the form, so nobody
+     discovers the rule only after typing the times. */
+  correctTimes: (
+    woId: string,
+    sessionId: string,
+    body: { inAt?: string; outAt?: string; reason: string }
+  ) =>
+    api.patch<{ ok: boolean }>(
+      `/api/work-orders/${encodeURIComponent(woId)}/sessions/${encodeURIComponent(sessionId)}/times`,
+      body
+    ),
+
+  /* The crew count. Same treatment: the original survives, the
+     correction is stamped with who, when and why. */
+  correctLabourers: (woId: string, sessionId: string, body: { count: number; reason: string }) =>
+    api.patch<{ ok: boolean }>(
+      `/api/work-orders/${encodeURIComponent(woId)}/sessions/${encodeURIComponent(sessionId)}/labourers`,
+      body
+    ),
+
+  /* Raise a problem against the PROJECT, linked to the day it was
+     found on. */
+  addProblem: (projectId: string, body: {
+    title: string; description?: string; discoveredOnWoId?: string | null; discoveredWorkDate?: string | null;
+  }) => api.post<{ problem: ProjectProblem }>(`/api/projects/${encodeURIComponent(projectId)}/problems`, body),
+
+  /* open / monitoring / resolved. Resolving needs a note — the server
+     refuses without one, and so does the form. */
+  setProblemStatus: (projectId: string, problemId: string, body: { status: ProblemStatus; note?: string }) =>
+    api.patch<{ problem: ProjectProblem }>(
+      `/api/projects/${encodeURIComponent(projectId)}/problems/${encodeURIComponent(problemId)}`, body)
+};
+
+/* ---- Materials ------------------------------------------------------
+ *
+ * Three sections, and the split is the point (Patrick, 2026-09-27):
+ *
+ *   planning   — each list SEPARATELY with its own totals. Required
+ *                quantities and dollars are NEVER summed across lists,
+ *                because a later design list repeats the earlier BOM.
+ *   stock      — physical facts, so safe to aggregate project-wide.
+ *   exceptions — mismatches for the office; they never block the crew.
+ *
+ * Every figure is computed server-side. Nothing here is re-added in
+ * React — that rule came out of the progress bar and the person-hours,
+ * and `computeTotals` still exists twice in this repo as a warning.
+ */
+
+export interface MaterialListSummary {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  notes: string;
+  totals: {
+    lineCount: number; needCount: number; orderedCount: number; haveCount: number;
+    unknownSkuCount: number; priceUnavailableCount: number;
+    needSubtotalCents: number; haveSubtotalCents: number;
+    orderedSubtotalCents: number; grandSubtotalCents: number;
+  };
+  lineCount: number;
+  poIds: string[];
+  href: string;
+}
+
+export interface StockRow {
+  sku: string;
+  name: string | null;
+  known: boolean;
+  /* 0 = on no list. A number = that one list's figure. null with
+     requiredAmbiguous = on several lists, so there is no single answer
+     and the per-list figures are shown instead of an invented total. */
+  required: number | null;
+  requiredAmbiguous: boolean;
+  requiredByList: Array<{ listId: string; listName: string; qty: number; status: string; poId: string | null }>;
+  received: number;
+  receivedFromPoIds: string[];
+  usedOnsite: number;
+  usedEntries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
+  projectBalance: number;
+}
+
+export type MaterialExceptionKind = "unplanned" | "over_consumed" | "unknown_sku" | "price_unavailable";
+
+export interface MaterialException {
+  kind: MaterialExceptionKind;
+  sku: string;
+  name: string | null;
+  detail: string;
+  qty: number;
+  entries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
+}
+
+export interface ProjectMaterials {
+  planning: MaterialListSummary[];
+  stock: StockRow[];
+  exceptions: MaterialException[];
+  summary: {
+    listCount: number; skuCount: number;
+    receivedUnits: number; usedUnits: number; balanceUnits: number; exceptionCount: number;
+  };
+}
+
+export const materialsApi = {
+  get: (projectId: string) =>
+    api.get<ProjectMaterials>(`/api/projects/${encodeURIComponent(projectId)}/materials`)
+};
+
+/* ── Change Orders (GET /api/projects/:id/change-orders) ──────────────
+   Read-only. Every figure and sentence below is the server's
+   (server/lib/change-orders-view.js): the phase, the "what happens
+   next" line, which changes are open (the one shared rule), the signed
+   agreement and the completion holds. The tab displays; it does not
+   decide. */
+
+export type ChangePhase =
+  | "in_review"
+  | "awaiting_customer"
+  | "awaiting_revision"
+  | "awaiting_signature"
+  | "signed"
+  | "revision_declined"
+  | "revision_missing"
+  | "rejected"
+  | "withdrawn"
+  | "approved_tm";
+
+export interface AgreementVersion {
+  id: string;
+  version: number;
+  status: string;
+  role: string;
+  signed: boolean;
+  acceptedAt: string | null;
+  subtotal: number;
+  total: number;
+  href: string;
+}
+
+export interface ChangeOrder {
+  id: string;
+  description: string;
+  status: string;
+  phase: ChangePhase;
+  phaseLabel: string;
+  next: string;
+  open: boolean;
+  capturedBy: string | null;
+  capturedAt: string | null;
+  capturedFromWoId: string | null;
+  photos: Array<{ n: string; href: string | null }>;
+  lineItems: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+  estimatedTotal: number;
+  sent: { at: string; by: string | null; to: string | null } | null;
+  sendAttempts: Array<{ at: string | null; by: string | null; to: string | null; ok: boolean; reason: string | null }>;
+  decision: {
+    as: string | null;
+    source: "recorded_by_office" | "customer" | "office" | null;
+    recordedBy: string | null;
+    at: string;
+    note: string;
+  } | null;
+  revision: { id: string; version: number | null; status: string | null; signed: boolean; href: string } | null;
+}
+
+export interface ProjectChangeOrders {
+  projectId: string;
+  billingMode: string | null;
+  agreement: {
+    original: AgreementVersion | null;
+    governing: AgreementVersion | null;
+    pending: AgreementVersion | null;
+    netChangeSubtotal: number | null;
+    netChangeTotal: number | null;
+    versions: AgreementVersion[];
+  };
+  /** Set on a deposit job whose balance predates the signed revision. */
+  billingBlocked: { key: string; message: string } | null;
+  summary: {
+    total: number;
+    open: number;
+    awaitingOffice: number;
+    awaitingCustomer: number;
+    awaitingSignature: number;
+    signed: number;
+  };
+  holds: Array<{ key: string; message: string }>;
+  changes: ChangeOrder[];
+  classicHref: string | null;
+}
+
+export const changeOrdersApi = {
+  get: (projectId: string) =>
+    api.get<ProjectChangeOrders>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
+};
+
+/* The Financials tab (2026-09-28): everything comes from the server
+   (lib/financials-view.js). The screen adds up nothing. */
+export interface FinancialsPayment {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  method: string;
+  methodLabel: string;
+  receivedAt: string | null;
+}
+
+export interface FinancialsInvoice {
+  id: string;
+  role: string;
+  roleLabel: string;
+  status: string;
+  statusLabel: string;
+  live: boolean;
+  issued: boolean;
+  held: boolean;
+  total: number;
+  amountPaid: number;
+  /** What is still owed on it — 0 for a void invoice; null (not
+      determined) while it is in payment reconciliation. */
+  owed: number | null;
+  createdAt: string | null;
+  sentAt: string | null;
+  paidAt: string | null;
+  needsReconciliation: boolean;
+  /** Marked Paid, recorded payments short: payment reconciliation. */
+  reconciliationRequired: boolean;
+  /** The unresolved gap — neither received nor owed. 0 otherwise. */
+  unresolved: number;
+  lastReconciliation: { at: string | null; by: string | null; resolution: string | null } | null;
+  payments: FinancialsPayment[];
+  note: string | null;
+  href: string;
+}
+
+export interface ProjectFinancials {
+  projectId: string;
+  billingMode: "fixed_price" | "time_and_material";
+  billingModeLabel: string;
+  contract: { id: string; version: number; subtotal: number; total: number; href: string } | null;
+  pendingRevision: { id: string; total: number } | null;
+  totals: {
+    invoiced: number;
+    received: number;
+    owed: number;
+    /** Fixed price with a signed contract only; null otherwise. */
+    notYetInvoiced: number | null;
+    drafts: { count: number; total: number };
+    issuedCount: number;
+    voidCount: number;
+    unresolved: number;
+    /** false while any invoice is in reconciliation: what the customer
+        owes is not determined until it is reconciled. */
+    owedDetermined: boolean;
+  };
+  deposit: {
+    amount: number;
+    stage: string;
+    stageLabel: string;
+    counted: boolean;
+    invoiceId: string | null;
+    balanceInvoiceId: string | null;
+    sentence: string;
+  } | null;
+  invoices: FinancialsInvoice[];
+  payments: FinancialsPayment[];
+  reconcile: string[];
+  reconciliation: Array<{ invoiceId: string; total: number; received: number; unresolved: number; status: string; customerOwes: string; sentence: string }>;
+  preview: {
+    billingMode: string | null;
+    subtotal?: number;
+    hst?: number;
+    total?: number;
+    totalHours?: number | null;
+    rate?: number | null;
+    unknownSkus?: string[];
+    lineItems?: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+    note?: string | null;
+    error?: string;
+  } | null;
+  holds: Array<{ key: string; message: string }>;
+  classicHref: string | null;
+}
+
+export const financialsApi = {
+  get: (projectId: string) =>
+    api.get<ProjectFinancials>(`/api/projects/${encodeURIComponent(projectId)}/financials`)
 };

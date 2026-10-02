@@ -155,7 +155,7 @@ ok("the SMS body carries the customer's REAL appointment link, not a placeholder
   wire.smses.some((s) => s.smsBody.includes(`/a/${p1.assignment.outreach.token}`))
   && !wire.smses.some((s) => s.smsBody.includes("[appointment-link]")));
 ok("the email goes out with the appointment-page button",
-  wire.emails.every((e) => e.ctaLabel === "Open your appointment page"));
+  wire.emails.every((e) => e.ctaLabel === "Confirm or change my appointment"));
 
 // Decision I at the send: the silent booking is skipped BY NAME with its
 // own reason — not lumped into no_contact — and carries no step marks.

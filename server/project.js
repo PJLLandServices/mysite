@@ -165,13 +165,48 @@
   }
 
   // ---- Boot ---------------------------------------------------------
+  // The signed-in ACCOUNT's role, not the device, decides which change-
+  // request buttons show (Patrick, 2026-09-27). Fail closed: until the
+  // role is known a technician's view is shown; the server enforces it
+  // independently (403) either way.
+  let viewerIsAdmin = false;
+  async function resolveViewerRole() {
+    try {
+      const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+      const data = await r.json().catch(() => ({}));
+      viewerIsAdmin = data?.role === "admin";
+    } catch (_) { viewerIsAdmin = false; }
+    if (state.project) renderScopeChanges();
+  }
+
   async function boot() {
     state.projectId = getProjectIdFromUrl();
     if (!state.projectId) { showError("No project id in URL."); return; }
+    resolveViewerRole();
     // Point the "Design system" button at the Sprinkler System Builder,
     // pre-linked to this install so the saved design attaches here.
     const dsl = document.getElementById("projDesignSystemLink");
     if (dsl) dsl.href = `/admin/sitebuilder?project=${encodeURIComponent(state.projectId)}`;
+
+    // Workspace handoff (2026-09-26). The rebuilt Tasks and System Design
+    // screens live at /app/projects/<id>; this page had no way of saying
+    // so, which is how a shipped change looked like nothing had happened.
+    //
+    // The band points at the workspace root rather than a tab, so it
+    // cannot rot when tabs are added. The Tasks link goes straight to the
+    // tab, because that is the specific difference the reader is standing
+    // in front of.
+    //
+    // Shown as soon as the id is known — not gated on the project
+    // loading, since the whole point is that it is visible immediately.
+    const wsBase = `/app/projects/${encodeURIComponent(state.projectId)}`;
+    const band = document.getElementById("projWorkspaceBand");
+    const bandLink = document.getElementById("projWorkspaceLink");
+    if (bandLink) bandLink.href = wsBase;
+    if (band) band.hidden = false;
+    const tasksWs = document.getElementById("projTasksWorkspaceLink");
+    if (tasksWs) tasksWs.href = `${wsBase}/tasks`;
+
     await loadProject();
   }
 
@@ -513,9 +548,14 @@
         ? `<button type="button" class="proj-task-delete" data-task-id="${escapeHtml(t.id)}" aria-label="Remove">×</button>`
         : "";
       const photos = photosByTask.get(t.id) || [];
+      // SINGULAR /photo/:n — that is the GET route that serves the file.
+      // The plural /photos/:n is the DELETE route, so a GET to it falls
+      // through to a 404 and every thumbnail here rendered broken.
+      // This page is admin-gated, so the staff session cookie rides
+      // along and the authenticated route is the correct one to use.
       const photoStrip = photos.length
         ? `<div class="proj-task-photos">${photos.slice(0, 4).map((p) =>
-            `<a href="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" target="_blank" rel="noopener" title="From ${escapeHtml(p.woId)}"><img src="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" alt=""></a>`
+            `<a href="/api/work-orders/${encodeURIComponent(p.woId)}/photo/${encodeURIComponent(p.n)}" target="_blank" rel="noopener" title="From ${escapeHtml(p.woId)}"><img src="/api/work-orders/${encodeURIComponent(p.woId)}/photo/${encodeURIComponent(p.n)}" alt=""></a>`
           ).join("")}${photos.length > 4 ? `<span class="proj-task-photos-more">+${photos.length - 4}</span>` : ""}</div>`
         : "";
       return `
@@ -1285,7 +1325,10 @@
           .catch(() => null))
       );
       state.exec.buildWos = all
-        .map((d) => d?.workOrder)
+        // personHours is a SIBLING of workOrder in the response, not a
+        // field on it — carry it across or the day list silently reads
+        // 0.00 hours for every day.
+        .map((d) => (d?.workOrder ? { ...d.workOrder, personHours: d.personHours } : null))
         .filter((w) => w && w.type === "build")
         .sort((a, b) => String(b.dailyLog?.workDate || b.createdAt).localeCompare(String(a.dailyLog?.workDate || a.createdAt)));
     } catch (err) { console.warn("[buildWos] load failed:", err?.message); }
@@ -1315,12 +1358,12 @@
     list.innerHTML = wos.map((w) => {
       const dl = w.dailyLog || {};
       const sessions = Array.isArray(dl.sessions) ? dl.sessions : [];
-      let totalH = 0;
-      for (const s of sessions) {
-        if (!s.inAt) continue;
-        const out = s.outAt || new Date().toISOString();
-        totalH += (new Date(out) - new Date(s.inAt)) / 3600000 * (Number(s.labourersOnSite) || 1);
-      }
+      // The server calculates this (GET /api/work-orders/:id → personHours,
+      // from lib/session-hours.js). This page used to run its own copy of
+      // the loop, which meant a third answer to "how many hours" and the
+      // only one that could not see an office correction. Read, never
+      // re-derive.
+      const totalH = Number(w.personHours) || 0;
       const dateStr = dl.workDate ? new Date(dl.workDate + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "—";
       const tasksToday = (dl.tasksCompletedToday || []).length;
       const matsToday = (dl.materialsConsumed || []).length;
@@ -1381,17 +1424,45 @@
         withdrawn: "Withdrawn",
         executed_under_revision: "Executed (revision)"
       }[s.status] || s.status;
+      // Office-only actions (the server refuses them to a technician too).
       const actions = [];
-      if (s.status === "pending_admin_review") {
-        actions.push(`<button type="button" data-action="send-scr" data-scr-id="${escapeHtml(s.id)}">Send to customer</button>`);
-        actions.push(`<button type="button" data-action="withdraw-scr" data-scr-id="${escapeHtml(s.id)}">Withdraw</button>`);
-      } else if (s.status === "pending_customer_approval") {
-        actions.push(`<button type="button" data-action="approve-scr" data-scr-id="${escapeHtml(s.id)}">Mark approved</button>`);
-        actions.push(`<button type="button" data-action="reject-scr" data-scr-id="${escapeHtml(s.id)}">Mark rejected</button>`);
-        actions.push(`<button type="button" data-action="withdraw-scr" data-scr-id="${escapeHtml(s.id)}">Withdraw</button>`);
-      } else if (s.status === "approved" && !s.linkedRevisionQuoteId && state.project.billingMode === "fixed_price") {
-        actions.push(`<button type="button" data-action="revise-scr" data-scr-id="${escapeHtml(s.id)}">Generate quote revision</button>`);
+      const btn = (action, label) => `<button type="button" data-action="${action}" data-scr-id="${escapeHtml(s.id)}">${label}</button>`;
+      if (viewerIsAdmin) {
+        if (s.status === "pending_admin_review" && s.sendInFlight) {
+          // An interrupted send: nobody knows whether the email arrived.
+          actions.push(btn("send-outcome-sent", "It arrived — mark sent"));
+          actions.push(btn("send-outcome-not-sent", "It didn't arrive"));
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "pending_admin_review") {
+          actions.push(btn("send-scr", "Send to customer"));
+          // A customer with no email, or who answered by phone first.
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "pending_customer_approval") {
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "approved" && !s.linkedRevisionQuoteId && state.project.billingMode !== "time_and_material") {
+          actions.push(btn("revise-scr", "Generate quote revision"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "executed_under_revision") {
+          actions.push(btn("withdraw-revised-scr", "Withdraw"));
+        }
       }
+      // A send that did not go stays visible until one does.
+      const attempts = Array.isArray(s.sendAttempts) ? s.sendAttempts : [];
+      const lastAttempt = attempts[attempts.length - 1];
+      const sendProblem = s.sendInFlight && s.status === "pending_admin_review"
+        ? `<p class="proj-scope-meta proj-scope-send-failed">⚠ Delivery uncertain: a send to ${escapeHtml(s.sendInFlight.to || "the customer")} started ${escapeHtml(new Date(s.sendInFlight.at).toLocaleString("en-CA"))} was interrupted before its result was saved. Check the sent mail or ask the customer, then record whether it arrived. It will not be sent again until you do.</p>`
+        : lastAttempt && lastAttempt.ok === false && s.status === "pending_admin_review"
+        ? `<p class="proj-scope-meta proj-scope-send-failed">⚠ Not sent (${escapeHtml(new Date(lastAttempt.at).toLocaleDateString("en-CA"))}): ${escapeHtml(lastAttempt.reason || "unknown reason")}</p>`
+        : "";
+      const decidedBy = s.recordedBy && (s.status === "approved" || s.status === "rejected" || s.status === "withdrawn" || s.status === "executed_under_revision")
+        ? ` · ${s.decisionSource === "office" ? "withdrawn by" : "recorded by"} ${escapeHtml(s.recordedBy)}`
+        : "";
       const revisionLink = s.linkedRevisionQuoteId
         ? `<a href="/admin/quote/${encodeURIComponent(s.linkedRevisionQuoteId)}/proposal" class="proj-scope-revision">↗ ${escapeHtml(s.linkedRevisionQuoteId)}</a>`
         : "";
@@ -1403,7 +1474,8 @@
             ${revisionLink}
           </header>
           <p class="proj-scope-description">${escapeHtml(s.description)}</p>
-          <p class="proj-scope-meta">${escapeHtml(dateStr)} · est. $${Number(s.estimatedTotal || 0).toFixed(2)}${s.sentAt ? " · sent " + escapeHtml(new Date(s.sentAt).toLocaleDateString("en-CA")) : ""}</p>
+          <p class="proj-scope-meta">${escapeHtml(dateStr)} · est. $${Number(s.estimatedTotal || 0).toFixed(2)}${s.capturedBy ? " · by " + escapeHtml(s.capturedBy) : ""}${s.sentAt ? " · sent " + escapeHtml(new Date(s.sentAt).toLocaleDateString("en-CA")) : ""}${decidedBy}</p>
+          ${sendProblem}
           ${actions.length ? `<div class="proj-scope-actions">${actions.join(" ")}</div>` : ""}
         </li>
       `;
@@ -1419,10 +1491,15 @@
       if (action === "send-scr") {
         if (!await askConfirm("Send to customer?", "Email this scope addition to the customer for approval. The proposal will move to 'awaiting customer'.", { okLabel: "Send" })) return;
         const r = await fetch(`${base}/send`, { method: "POST" });
-        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Send failed.", { variant: "error" }); return; }
-        showToast("Scope addition sent to customer.", { variant: "success" });
+        if (!r.ok) {
+          // Not sent — the reason is on the change request now; show it.
+          showToast((await r.json().catch(() => ({}))).errors?.[0] || "Not sent.", { variant: "error", durationMs: 8000 });
+          await refreshProject();
+          return;
+        }
+        showToast("Scope addition emailed to the customer.", { variant: "success" });
       } else if (action === "approve-scr") {
-        if (!await askConfirm("Mark approved?", "Mark this scope change as approved by the customer. For fixed-price projects, generate a quote revision next.", { okLabel: "Mark approved" })) return;
+        if (!await askConfirm("Customer approved?", "Record that the customer approved this change. It is saved as the customer's decision, recorded by you. For a fixed-price job, generate the quote revision next.", { okLabel: "Record approval" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1431,7 +1508,7 @@
         if (!r.ok) { showToast((await r.json()).errors?.[0] || "Approve failed.", { variant: "error" }); return; }
         showToast("Scope change approved.", { variant: "success" });
       } else if (action === "reject-scr") {
-        if (!await askConfirm("Mark rejected?", "Mark this scope change as rejected by the customer. Work does not proceed.", { okLabel: "Mark rejected" })) return;
+        if (!await askConfirm("Customer declined?", "Record that the customer declined this change. It is saved as the customer's decision, recorded by you. Work does not proceed.", { okLabel: "Record decline" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1448,6 +1525,28 @@
         });
         if (!r.ok) { showToast((await r.json()).errors?.[0] || "Withdraw failed.", { variant: "error" }); return; }
         showToast("Scope change withdrawn.", { variant: "success" });
+      } else if (action === "send-outcome-sent" || action === "send-outcome-not-sent") {
+        const sent = action === "send-outcome-sent";
+        if (!await askConfirm(sent ? "The email arrived?" : "The email did not arrive?",
+          sent ? "Record that the customer received this change request. It moves to 'awaiting customer'."
+               : "Record that the email never arrived. The change stays a draft and you can send it again.",
+          { okLabel: sent ? "It arrived" : "It didn't arrive" })) return;
+        const r = await fetch(`${base}/send-outcome`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ outcome: sent ? "sent" : "not_sent" })
+        });
+        if (!r.ok) { showToast((await r.json().catch(() => ({}))).errors?.[0] || "Couldn't record it.", { variant: "error", durationMs: 8000 }); return; }
+        showToast(sent ? "Recorded as sent." : "Recorded as not sent — you can send it again.", { variant: "success" });
+      } else if (action === "withdraw-revised-scr") {
+        if (!await askConfirm("Withdraw a change that is in a revised quote?",
+          "If the customer has NOT signed the revised quote: that revised quote is cancelled (their link stops working), the signed agreement stays as it is, and any other change in it goes back to 'approved — needs revised quote'. If the customer HAS signed it, this is refused: a signed agreement is never rewritten — raise a new change order for the reduction instead.",
+          { okLabel: "Withdraw" })) return;
+        const r = await fetch(`${base}/resolve`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ resolution: "withdrawn" })
+        });
+        if (!r.ok) { showToast((await r.json().catch(() => ({}))).errors?.[0] || "Withdraw failed.", { variant: "error", durationMs: 10000 }); return; }
+        showToast("Change withdrawn. See the project history for what happened to its revised quote.", { variant: "success", durationMs: 7000 });
       } else if (action === "revise-scr") {
         if (!await askConfirm("Generate revision?", "Create a Q-vN containing the original line items plus the approved additions. Customer will need to sign the new revision.", { okLabel: "Generate" })) return;
         const r = await fetch(`${base}/generate-revision`, { method: "POST" });
@@ -1794,6 +1893,8 @@
       // Override checkbox visible only when blockers exist.
       document.getElementById("cpOverrideWrap").hidden = checks.blockers.length === 0;
       document.getElementById("cpAllowOverride").checked = false;
+      document.getElementById("cpOverrideReason").value = "";
+      document.getElementById("cpOverrideReasonWrap").hidden = true;
       document.getElementById("cpAttestationNote").value = "";
       // Invoice preview
       const invHtml = (billing.lineItems || []).map((li) =>
@@ -1814,11 +1915,17 @@
   async function confirmCompleteProject() {
     const allowOverride = document.getElementById("cpAllowOverride").checked;
     const attestationNote = document.getElementById("cpAttestationNote").value.trim();
+    const overrideReason = allowOverride ? document.getElementById("cpOverrideReason").value.trim() : "";
+    if (allowOverride && !overrideReason) {
+      showToast("Say why you are overriding the checks — it goes in the project history.", { variant: "error" });
+      document.getElementById("cpOverrideReason").focus();
+      return;
+    }
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/complete`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ allowOverride, attestationNote })
+        body: JSON.stringify({ allowOverride, overrideReason, attestationNote })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -1898,6 +2005,9 @@
     document.getElementById("projCompleteBtn")?.addEventListener("click", openCompleteProjectModal);
     document.getElementById("cpCancel")?.addEventListener("click", () => closeModal("completeProjectModal"));
     document.getElementById("cpConfirm")?.addEventListener("click", confirmCompleteProject);
+    document.getElementById("cpAllowOverride")?.addEventListener("change", (e) => {
+      document.getElementById("cpOverrideReasonWrap").hidden = !e.target.checked;
+    });
 
     // Final WO
     document.getElementById("projSetFinalWoBtn")?.addEventListener("click", setFinalWo);

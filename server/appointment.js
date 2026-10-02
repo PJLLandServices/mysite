@@ -56,6 +56,23 @@
     }
   }
 
+  // "It worked" — said WHERE THE CUSTOMER IS LOOKING. The badge at the
+  // top of the card is off-screen on a phone by the time they reach the
+  // buttons, so an action's success message sits right above the actions
+  // and is scrolled to. Without it a successful tap looked like nothing
+  // happened (2026-09-25: two customers phoned to say Confirm was broken).
+  function showDone(text) {
+    const note = el("doneNote");
+    note.textContent = text;
+    note.hidden = false;
+    try { note.scrollIntoView({ block: "center", behavior: "smooth" }); } catch { note.scrollIntoView(); }
+    try { note.focus({ preventScroll: true }); } catch { /* old browsers */ }
+  }
+
+  function whenOf(a) {
+    return a.freeBucket ? a.dateLabel : `${a.dateLabel}, ${a.bucketLabel}`;
+  }
+
   function render(a) {
     el("loading").hidden = true;
     el("error").hidden = true;
@@ -72,6 +89,7 @@
     }
 
     el("details").hidden = false;
+    el("doneNote").hidden = true;
     el("hello").textContent = `Hi ${a.name},`;
     el("service").textContent = a.serviceLabel;
     el("dateLabel").textContent = a.dateLabel;
@@ -89,6 +107,7 @@
         ? "Free bucket — our technician will call with a time"
         : a.respondedVia === "reschedule" ? "Rescheduled — you're all set"
         : a.respondedVia === "window" ? "Timing saved — you're all set"
+        : a.respondedVia === "sms_reply" ? "Confirmed by text — you're all set"
         : "Confirmed — you're all set";
       el("confirmBtn").hidden = true;   // already answered
     } else {
@@ -206,6 +225,7 @@
     try {
       const data = await post("/confirm");
       render(data.appointment);
+      showDone(`✓ You're confirmed for ${whenOf(data.appointment)}. Nothing else to do — see you then!`);
     } catch (error) { fail(error.message); }
     finally { el("confirmBtn").disabled = false; }
   });
@@ -240,6 +260,7 @@
             try {
               const done = await post("/reschedule", { start: slot.start });
               render(done.appointment);
+              showDone(`✓ Moved — you're now booked for ${whenOf(done.appointment)}.`);
             } catch (error) { fail(error.message); }
           });
           list.appendChild(b);
@@ -263,6 +284,7 @@
     try {
       const data = await post("/free-bucket");
       render(data.appointment);
+      showDone("✓ You're in the Free Bucket — our technician will call you with an arrival time.");
     } catch (error) { fail(error.message); }
     finally { el("freeBucketBtn").disabled = false; }
   });
@@ -287,6 +309,7 @@
         notAfter: el("windowBefore").value || ""
       });
       render(data.appointment);
+      showDone("✓ Timing saved — we'll plan your stop around it.");
     } catch (error) { fail(error.message); }
     finally { el("windowSave").disabled = false; }
   });
@@ -311,6 +334,7 @@
     try {
       const data = await post("/zones", { zoneCount: Number(picked) });
       render(data.appointment);
+      showDone("✓ Thanks — we've updated your zone count.");
     } catch (error) { fail(error.message); }
     finally { el("zonesSave").disabled = false; }
   });

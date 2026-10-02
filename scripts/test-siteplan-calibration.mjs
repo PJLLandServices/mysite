@@ -55,7 +55,9 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-siteplan-test-"));
 const SANDBOX_LIB = path.join(SANDBOX, "lib");
 fs.mkdirSync(SANDBOX_LIB, { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
-for (const file of ["projects.js", "site-plan-calibration.js"]) {
+// session-hours.js joined the pair when project metrics and T&M billing
+// stopped each keeping their own copy of the person-hours loop.
+for (const file of ["projects.js", "site-plan-calibration.js", "session-hours.js"]) {
   fs.copyFileSync(path.join(__dirname, "..", "server", "lib", file), path.join(SANDBOX_LIB, file));
 }
 

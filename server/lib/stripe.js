@@ -416,6 +416,25 @@ async function deactivatePaymentLink(paymentLinkId) {
   return data;
 }
 
+// What a stored PaymentIntent means for starting another charge — the ONE
+// rule the Tap to Pay route decides by (item 4, 2026-09-27):
+//   collectable  it can still be paid, and hasn't taken money: reuse it
+//                (or cancel it, if the balance it was made for changed)
+//   in_flight    money may be moving (processing / requires_capture): start
+//                nothing, cancel nothing — its own outcome decides it
+//   succeeded    money moved: finalize it, start nothing
+//   canceled     it can never be paid: a fresh attempt is safe
+// Anything Stripe adds later reads as in flight: never charge beside a state
+// we don't understand.
+const COLLECTABLE_INTENT_STATUSES = new Set(["requires_payment_method", "requires_confirmation", "requires_action"]);
+function intentPhase(intent) {
+  const status = intent?.status;
+  if (COLLECTABLE_INTENT_STATUSES.has(status)) return "collectable";
+  if (status === "succeeded") return "succeeded";
+  if (status === "canceled") return "canceled";
+  return "in_flight";
+}
+
 // Flatten an intent into the fields the invoice attempt log records.
 function summarizeIntent(intent, requestId = null) {
   const charge = intent?.latest_charge && typeof intent.latest_charge === "object"
@@ -560,6 +579,7 @@ module.exports = {
   TAP_TO_PAY_SOURCE,
   resolveTerminalLocationId,
   summarizeIntent,
+  intentPhase,
   cardFactsFrom,
   verifyWebhookSignature,
   // Exported for the unit tests in scripts/test-stripe.mjs.

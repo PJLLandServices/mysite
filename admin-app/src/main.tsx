@@ -8,6 +8,11 @@ import { Dashboard } from "./routes/Dashboard";
 import { ProjectsList } from "./routes/ProjectsList";
 import { PendingTab, ProjectOverviewTab, ProjectWorkspace } from "./routes/ProjectOverview";
 import { SystemDesignTab } from "./routes/SystemDesign";
+import { TasksTab } from "./routes/Tasks";
+import { DailyRecordsTab } from "./routes/DailyRecords";
+import { MaterialsTab } from "./routes/Materials";
+import { ChangeOrdersTab } from "./routes/ChangeOrders";
+import { FinancialsTab } from "./routes/Financials";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,26 +50,11 @@ createRoot(document.getElementById("root")!).render(
                   />
                 }
               />
-              <Route
-                path="tasks"
-                element={<PendingTab title="Tasks" body="The task list and per-visit completion, rebuilt for the field." />}
-              />
-              <Route
-                path="materials"
-                element={<PendingTab title="Materials" body="Material lists and parts for this job." />}
-              />
-              <Route
-                path="records"
-                element={<PendingTab title="Daily records" body="Day-by-day hours, notes and photos from each visit." />}
-              />
-              <Route
-                path="changes"
-                element={<PendingTab title="Change orders" body="Scope additions, customer approval and the revision they produce." />}
-              />
-              <Route
-                path="financials"
-                element={<PendingTab title="Financials" body="Deposit, balance, payments and the invoice handoff." />}
-              />
+              <Route path="tasks" element={<TasksTab />} />
+              <Route path="materials" element={<MaterialsTab />} />
+              <Route path="records" element={<DailyRecordsTab />} />
+              <Route path="changes" element={<ChangeOrdersTab />} />
+              <Route path="financials" element={<FinancialsTab />} />
               <Route
                 path="closeout"
                 element={<PendingTab title="Closeout" body="Completion review, final invoice and the service record." />}

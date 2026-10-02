@@ -50,7 +50,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { writeJsonAtomic } = require("./atomic-json");
+const { writeJsonAtomic, serialize } = require("./atomic-json");
 
 const FILE = path.join(__dirname, "..", "data", "quotes.json");
 const ATTACHMENTS_DIR = path.join(__dirname, "..", "data", "quote-attachments");
@@ -1698,12 +1698,13 @@ function computeProposalTotals(lineItems) {
 // Mark a quote accepted. Bookings auto-create on acceptance per spec §4.1
 // — but the booking creation itself happens upstream in the lead/booking
 // handler. This function just flips the status and logs.
-async function accept(id, { leadId = null, bookingId = null, by = "customer", note = "" } = {}) {
+async function _acceptLocked(id, { leadId = null, bookingId = null, by = "customer", note = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted") return q; // idempotent
+  assertSignable(records, q);
 
   q.status = "accepted";
   q.acceptedAt = nowIso();
@@ -1711,7 +1712,18 @@ async function accept(id, { leadId = null, bookingId = null, by = "customer", no
   if (bookingId && !q.bookingId) q.bookingId = bookingId;
   q.history.push({ ts: nowIso(), action: "accepted", by, note });
   records[idx] = q;
+  // Same write: a signed revision retires the versions it replaces.
+  supersedeOlderVersions(records, q, by);
   await writeAll(records);
+  return q;
+}
+
+// Queued on the quotes store with createRevision, so a signature and a
+// revision can never interleave their read/write. The project follows
+// the newly signed agreement once the quote write has landed.
+async function accept(...args) {
+  const q = await serialize(FILE, () => _acceptLocked(...args));
+  await afterAgreementSigned(q, (q && Array.isArray(q.history) && q.history.length && q.history[q.history.length - 1].by) || "system");
   return q;
 }
 
@@ -1719,7 +1731,7 @@ async function accept(id, { leadId = null, bookingId = null, by = "customer", no
 // from accept() in that it ALSO writes the signature block + decisions
 // snapshot, and supports a "partially_accepted" status when some lines
 // were declined. Server fills ip + userAgent (never trusts the client).
-async function acceptWithSignature(id, {
+async function _acceptWithSignatureLocked(id, {
   customerName,
   imageData,
   decisions,
@@ -1734,6 +1746,7 @@ async function acceptWithSignature(id, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.signature && q.signature.signed) return q; // idempotent — already signed
+  assertSignable(records, q);
 
   const ts = nowIso();
   q.status = partial ? "partially_accepted" : "accepted";
@@ -1754,7 +1767,18 @@ async function acceptWithSignature(id, {
     note: note || (partial ? "Customer accepted some line items, declined others." : "")
   });
   records[idx] = q;
+  // Same write: a signed revision retires the versions it replaces.
+  supersedeOlderVersions(records, q, by);
   await writeAll(records);
+  return q;
+}
+
+// Queued on the quotes store with createRevision, so a signature and a
+// revision can never interleave their read/write. The project follows
+// the newly signed agreement once the quote write has landed.
+async function acceptWithSignature(...args) {
+  const q = await serialize(FILE, () => _acceptWithSignatureLocked(...args));
+  await afterAgreementSigned(q, (q && Array.isArray(q.history) && q.history.length && q.history[q.history.length - 1].by) || "system");
   return q;
 }
 
@@ -1765,7 +1789,7 @@ async function acceptWithSignature(id, {
 // signature. The signed copy itself lives on the work order (evidenceRef
 // points to it). Idempotent — a quote already accepted (any method) is
 // returned untouched.
-async function recordOfflineAcceptance(id, {
+async function _recordOfflineAcceptanceLocked(id, {
   customerName = "",
   decisions,
   acceptedAt,
@@ -1780,6 +1804,7 @@ async function recordOfflineAcceptance(id, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted" || (q.signature && q.signature.signed)) return q; // idempotent
+  assertSignable(records, q);
 
   const ts = nowIso();
   const acceptedIso = acceptedAt || ts;
@@ -1807,7 +1832,18 @@ async function recordOfflineAcceptance(id, {
     note: note ? `Accepted offline (signed copy) — ${note}` : "Accepted offline — customer returned a signed copy."
   });
   records[idx] = q;
+  // Same write: a signed revision retires the versions it replaces.
+  supersedeOlderVersions(records, q, recordedBy);
   await writeAll(records);
+  return q;
+}
+
+// Queued on the quotes store with createRevision, so a signature and a
+// revision can never interleave their read/write. The project follows
+// the newly signed agreement once the quote write has landed.
+async function recordOfflineAcceptance(...args) {
+  const q = await serialize(FILE, () => _recordOfflineAcceptanceLocked(...args));
+  await afterAgreementSigned(q, (q && Array.isArray(q.history) && q.history.length && q.history[q.history.length - 1].by) || "system");
   return q;
 }
 
@@ -2175,36 +2211,228 @@ function isSuperseded(q) {
 // stale — project.systemDesign.linkedQuoteId names whichever quote
 // System Builder generated, which stays the ORIGINAL even after two
 // revisions replace it — so a reader can't just trust the id it's
-// holding. Walks backward via revisionOf to the root (v1), then forward
-// via supersededBy collecting every version in order; the last one (no
-// supersededBy) is current. Missing/deleted quotes in the chain are
-// skipped rather than breaking the walk. Returns null if anchorId itself
-// doesn't resolve to a real quote.
+// holding. Collects every version linked by revisionOf, oldest first
+// (chainFromRecords); a missing quote in the chain is skipped rather than
+// breaking the walk. Returns null if anchorId itself doesn't resolve to a
+// real quote.
 async function resolveRevisionChain(anchorId) {
-  const anchor = await get(anchorId);
-  if (!anchor) return null;
+  const records = await readAll();
+  if (!records.some((q) => q.id === anchorId)) return null;
+  // One chain walk for every reader (describeChain below). The old forward
+  // walk along supersededBy stopped at a signed original whose revision is
+  // still a draft — it keeps no supersededBy until the revision is signed —
+  // so the panel would have hidden the revision in progress.
+  const info = describeChain(chainFromRecords(records, anchorId));
+  // "Current" is the version the office is working on: the revision in
+  // flight, else the governing agreement, else (nothing signed or live) the
+  // newest version, as the forward walk returned.
+  const current = info.head || info.chain[info.chain.length - 1];
+  return { current, chain: info.chain };
+}
 
-  let root = anchor;
-  let hops = 0;
-  while (root.revisionOf && hops < 25) {
-    const parent = await get(root.revisionOf);
-    if (!parent) break;
-    root = parent;
-    hops += 1;
+// ---- The agreement governing a job, and the revision in flight -------
+//
+// Patrick's lifecycle (2026-09-27). A quote's status is operational data:
+// it says which agreement governs the job RIGHT NOW. So:
+//
+//   revision draft created   → the signed original stays Accepted
+//   customer rejects/abandons → the signed original stays Accepted
+//   customer signs revision  → previous agreement → Superseded, revision →
+//                              Accepted, the project follows it
+//
+// These helpers answer the three questions every reader needs, from ONE
+// walk of the chain, so billing, the completion hold and the change-order
+// revision builder can never disagree about which quote is which.
+//
+// The chain is found through revisionOf (child → parent), not supersededBy:
+// an Accepted original with an unsigned draft has no supersededBy yet, and
+// a forward walk along supersededBy would never see the draft.
+
+// Evidence that the customer actually agreed to this quote — whatever its
+// status says now. Legacy chains matter here: the OLD createRevision
+// flipped a signed original to "superseded" the moment a draft existed, so
+// a status test alone would lose a genuinely signed agreement.
+function hasAcceptanceRecord(q) {
+  if (!q) return false;
+  return Boolean(
+    q.acceptedAt ||
+    // Evidence counts only once an acceptance METHOD is recorded. Every quote
+    // starts with acceptanceMethod "pending" (blankQuote), and a customer's
+    // uploaded PDF is STAGED evidence (status pending_admin_attestation)
+    // until the office attests it — neither is a signature (2026-09-27).
+    (q.acceptanceEvidence && q.acceptanceEvidence.method && q.acceptanceMethod &&
+      q.acceptanceMethod !== "pending" && q.status !== "pending_admin_attestation") ||
+    (q.signature && q.signature.signed) ||
+    q.offlineAcceptance
+  );
+}
+
+// A signed agreement that still counts: signed, and not later declined or
+// cancelled. Superseded does NOT disqualify it — newest-signed decides.
+function isSignedAgreement(q) {
+  return hasAcceptanceRecord(q) && q.status !== "declined" && q.status !== "cancelled";
+}
+
+// An unsigned version still in play — something the customer could yet sign.
+const UNSIGNED_LIVE_STATUSES = new Set(["draft", "sent", "pending_admin_attestation"]);
+function isUnsignedLive(q) {
+  // A trashed draft is not waiting for anyone: it must not hold completion
+  // or collect the next change order's lines.
+  return !!q && !q.deletedAt && UNSIGNED_LIVE_STATUSES.has(q.status) && !hasAcceptanceRecord(q);
+}
+
+function versionOrder(a, b) {
+  const va = Number(a.version) || 1, vb = Number(b.version) || 1;
+  if (va !== vb) return va - vb;
+  return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+}
+
+// Every version of the chain containing anchorId, oldest first. Pure: works
+// on a records array so a writer can use it inside its own read/write.
+function chainFromRecords(records, anchorId) {
+  const byId = new Map(records.map((q) => [q.id, q]));
+  let root = byId.get(anchorId);
+  if (!root) return [];
+  for (let hops = 0; root.revisionOf && byId.has(root.revisionOf) && hops < 50; hops += 1) {
+    root = byId.get(root.revisionOf);
   }
-
-  const chain = [root];
-  let cur = root;
-  hops = 0;
-  while (cur.supersededBy && hops < 25) {
-    const next = await get(cur.supersededBy);
-    if (!next) break;
-    chain.push(next);
-    cur = next;
-    hops += 1;
+  const children = new Map();
+  for (const q of records) {
+    if (q.revisionOf) {
+      if (!children.has(q.revisionOf)) children.set(q.revisionOf, []);
+      children.get(q.revisionOf).push(q);
+    }
   }
+  const out = [];
+  const seen = new Set();
+  const stack = [root];
+  while (stack.length && out.length < 200) {
+    const q = stack.pop();
+    if (seen.has(q.id)) continue;
+    seen.add(q.id);
+    out.push(q);
+    for (const c of children.get(q.id) || []) stack.push(c);
+  }
+  return out.sort(versionOrder);
+}
 
-  return { current: chain[chain.length - 1], chain };
+// The three answers, from one chain.
+//   governing — the newest signed agreement: what the job is billed on.
+//   pending   — an unsigned version NEWER than it: the completion hold.
+//   head      — what the next change order builds on: the pending
+//               revision if there is one (so its lines carry forward and
+//               appear once), otherwise the governing agreement.
+function describeChain(chain) {
+  const signed = chain.filter(isSignedAgreement);
+  const governing = signed.length ? signed[signed.length - 1] : null;
+  const newer = governing ? chain.filter((q) => versionOrder(q, governing) > 0) : chain;
+  const pendingList = newer.filter(isUnsignedLive);
+  const pending = pendingList.length ? pendingList[pendingList.length - 1] : null;
+  return { chain, governing, pending, head: pending || governing || null };
+}
+
+// ---- May this quote be signed right now? (2026-09-27) -----------------
+//
+// The customer approval ROUTES refuse a superseded quote, but the signing
+// functions themselves did not look — so any other caller, or a withdrawal
+// racing a signature, could sign a quote that is no longer the offer. This
+// is the domain-level rule, checked by all five acceptance writers INSIDE
+// the quotes-store lock they share with retireUnsignedRevision, so a
+// withdrawal and a signature on the same revision resolve to exactly one
+// outcome: whichever takes the lock first wins, and the other is refused.
+//
+// Signable means: not trashed, not cancelled or superseded, and not
+// replaced — no NEWER version of the same job that is still live or has
+// been signed. So the only version of a chain the customer can sign is the
+// current offer. (Already-signed quotes keep each writer's own idempotent
+// early return, which runs before this.)
+function signingRefusal(records, q) {
+  if (!q) return "Quote not found.";
+  if (q.deletedAt) return `Quote ${q.id} has been removed and can no longer be signed.`;
+  if (q.status === "cancelled") return `Quote ${q.id} has been cancelled and can no longer be signed.`;
+  if (q.status === "superseded") return `Quote ${q.id} has been replaced${q.supersededBy ? ` (see ${q.supersededBy})` : ""} and can no longer be signed.`;
+  const newer = chainFromRecords(records, q.id).filter((x) =>
+    x.id !== q.id && versionOrder(x, q) > 0 && !x.deletedAt &&
+    (isSignedAgreement(x) || (UNSIGNED_LIVE_STATUSES.has(x.status) && !hasAcceptanceRecord(x))));
+  if (newer.length) {
+    const latest = newer[newer.length - 1];
+    return `Quote ${q.id} has been replaced by ${latest.id} (v${Number(latest.version) || 1}) and can no longer be signed.`;
+  }
+  return null;
+}
+function assertSignable(records, q) {
+  const why = signingRefusal(records, q);
+  if (why) throw Object.assign(new Error(why), { code: "quote_not_signable", quoteId: q ? q.id : null });
+}
+
+async function resolveQuoteChain(anchorId) {
+  if (!anchorId) return { chain: [], governing: null, pending: null, head: null };
+  return describeChain(chainFromRecords(await readAll(), anchorId));
+}
+
+// Called INSIDE every acceptance writer, on the same records array it is
+// about to write, so the switch lands in ONE atomic file write: the newly
+// signed quote becomes the agreement and every older live version in its
+// chain — the previous agreement and any abandoned drafts — is Superseded
+// by it. A quote with no chain (the usual case) is left alone.
+function supersedeOlderVersions(records, signed, by) {
+  if (!signed || !signed.revisionOf) return [];
+  const chain = chainFromRecords(records, signed.id);
+  const changed = [];
+  for (const q of chain) {
+    if (q.id === signed.id || versionOrder(q, signed) >= 0) continue;
+    if (q.status === "superseded" && q.supersededBy) continue; // already retired
+    if (q.status === "declined" || q.status === "cancelled" || q.status === "expired") continue;
+    q.status = "superseded";
+    q.supersededBy = signed.id;
+    (q.history ||= []).push({ ts: nowIso(), action: "superseded", by, note: `Replaced by signed revision ${signed.id} (v${signed.version || "?"})` });
+    changed.push(q.id);
+  }
+  return changed;
+}
+
+// Retire an UNSIGNED revision because the change it carried was withdrawn
+// (2026-09-27). It is marked superseded — pointing back at the signed
+// agreement that keeps governing — because "superseded" is what every
+// customer approval route already refuses (the Q-2026-0078 dead-link
+// protection), so the customer can no longer sign it. Queued on the quotes
+// store with the signature writers: if the customer signed first, this
+// refuses (code revision_signed) and the signed agreement stands.
+async function retireUnsignedRevision(id, { by = "admin", reason = "" } = {}) {
+  return serialize(FILE, async () => {
+    const records = await readAll();
+    const q = records.find((x) => x.id === id);
+    if (!q) throw Object.assign(new Error(`Quote ${id} not found.`), { code: "quote_not_found" });
+    if (hasAcceptanceRecord(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} has already been signed.`), { code: "revision_signed" });
+    }
+    if (!isUnsignedLive(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} is ${q.status} — nothing to retire.`), { code: "revision_not_live" });
+    }
+    const info = describeChain(chainFromRecords(records, id));
+    q.status = "superseded";
+    q.supersededBy = info.governing ? info.governing.id : null;
+    (q.history ||= []).push({
+      ts: nowIso(), action: "revision_withdrawn", by,
+      note: `${reason || "Withdrawn by the office"} — the customer can no longer sign it${info.governing ? `; ${info.governing.id} (v${info.governing.version || 1}) stands` : ""}.`
+    });
+    await writeAll(records);
+    return q;
+  });
+}
+
+// After the quote write: bring any project on this chain onto the newly
+// signed agreement (current quote + billing snapshot). Lazy require —
+// projects.js already requires this module.
+async function afterAgreementSigned(signed, by) {
+  if (!signed || !signed.revisionOf) return;
+  try {
+    await require("./projects").adoptSignedRevision(signed, { by });
+  } catch (err) {
+    // Billing and the hold both re-derive from the chain, so a failure here
+    // cannot mis-bill — but it must be loud.
+    console.warn(`[quotes] could not move project(s) onto signed revision ${signed.id}:`, err?.message);
+  }
 }
 
 // Look up a quote by its approval token. Returns the matching quote OR
@@ -2782,7 +3010,7 @@ async function snapshotRatesFromCustomer(quoteId, customerId) {
 // existing acceptWithSignature path; recordPdfReturnAcceptance is the
 // new admin-attestation step.
 
-async function recordPortalSignAcceptance(quoteId, {
+async function _recordPortalSignAcceptanceLocked(quoteId, {
   customerName,
   imageData,
   ip,
@@ -2802,6 +3030,7 @@ async function recordPortalSignAcceptance(quoteId, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.acceptanceMethod === "portal_esign" && q.status === "accepted") return q; // idempotent
+  assertSignable(records, q);
 
   const ts = nowIso();
   q.status = "accepted";
@@ -2843,7 +3072,18 @@ async function recordPortalSignAcceptance(quoteId, {
       : "Accepted via portal e-sign")
   });
   records[idx] = q;
+  // Same write: a signed revision retires the versions it replaces.
+  supersedeOlderVersions(records, q, by);
   await writeAll(records);
+  return q;
+}
+
+// Queued on the quotes store with createRevision, so a signature and a
+// revision can never interleave their read/write. The project follows
+// the newly signed agreement once the quote write has landed.
+async function recordPortalSignAcceptance(...args) {
+  const q = await serialize(FILE, () => _recordPortalSignAcceptanceLocked(...args));
+  await afterAgreementSigned(q, (q && Array.isArray(q.history) && q.history.length && q.history[q.history.length - 1].by) || "system");
   return q;
 }
 
@@ -2892,12 +3132,13 @@ async function stagePdfReturn(quoteId, { buffer, filename, senderEmail = "" } = 
   return q;
 }
 
-async function recordPdfReturnAcceptance(quoteId, { adminUser, adminNote = "", senderEmailOverride = "" } = {}) {
+async function _recordPdfReturnAcceptanceLocked(quoteId, { adminUser, adminNote = "", senderEmailOverride = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === quoteId);
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted" && q.acceptanceMethod === "pdf_return") return q; // idempotent
+  assertSignable(records, q);
   if (!q.acceptanceEvidence || q.acceptanceEvidence.method !== "pdf_return") {
     throw new Error("No PDF return is staged for this quote.");
   }
@@ -2921,7 +3162,18 @@ async function recordPdfReturnAcceptance(quoteId, { adminUser, adminNote = "", s
     note: adminNote || "Accepted via PDF-return — admin attested"
   });
   records[idx] = q;
+  // Same write: a signed revision retires the versions it replaces.
+  supersedeOlderVersions(records, q, adminUser || "admin");
   await writeAll(records);
+  return q;
+}
+
+// Queued on the quotes store with createRevision, so a signature and a
+// revision can never interleave their read/write. The project follows
+// the newly signed agreement once the quote write has landed.
+async function recordPdfReturnAcceptance(...args) {
+  const q = await serialize(FILE, () => _recordPdfReturnAcceptanceLocked(...args));
+  await afterAgreementSigned(q, (q && Array.isArray(q.history) && q.history.length && q.history[q.history.length - 1].by) || "system");
   return q;
 }
 
@@ -2934,7 +3186,7 @@ async function recordPdfReturnAcceptance(quoteId, { adminUser, adminNote = "", s
 // attachments are copied (new ids, same files duplicated on disk), and
 // the chain extends (v3 → v2 → v1).
 
-async function createRevision(originalId, { by = "admin", note = "" } = {}) {
+async function _createRevisionLocked(originalId, { by = "admin", note = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === originalId);
   if (idx === -1) throw new Error(`Quote ${originalId} not found.`);
@@ -2945,8 +3197,20 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
   if (original.status === "draft") {
     throw new Error("Original is still a draft — edit it directly rather than creating a revision.");
   }
-  if (original.status === "superseded") {
+  const chainInfo = describeChain(chainFromRecords(records, original.id));
+  // A superseded quote can only be revised when it is still the signed
+  // agreement governing the job — a legacy chain where the OLD code retired
+  // a signed original for a draft the customer then rejected.
+  if (original.status === "superseded" && !(chainInfo.governing && chainInfo.governing.id === original.id)) {
     throw new Error("Original has already been superseded.");
+  }
+  // One revision in flight at a time. A second draft branched off the same
+  // agreement would leave two competing offers and lose one's changes.
+  if (chainInfo.pending && chainInfo.pending.id !== original.id) {
+    throw Object.assign(
+      new Error(`Revision ${chainInfo.pending.id} is already in progress — edit or send that one instead.`),
+      { code: "revision_in_progress", pendingId: chainInfo.pending.id }
+    );
   }
 
   const year = new Date().getUTCFullYear();
@@ -3037,18 +3301,41 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
 
   records.unshift(revision);
 
-  // Flip the original to superseded.
-  original.status = "superseded";
-  original.supersededBy = newId;
-  original.history.push({
-    ts: nowIso(),
-    action: "superseded",
-    by,
-    note: note || `Replaced by revision ${newId} (v${revision.version})`
-  });
+  if (hasAcceptanceRecord(original)) {
+    // A SIGNED agreement keeps governing the job until the customer signs
+    // the revision (Patrick, 2026-09-27): creating an unsigned draft must
+    // not erase it. Its status, lines, signature and frozen PDF are left
+    // exactly as they are; supersedeOlderVersions() retires it at signing.
+    original.history.push({
+      ts: nowIso(),
+      action: "revision_drafted",
+      by,
+      note: note || `Revision ${newId} (v${revision.version}) drafted — this signed agreement governs until it is signed`
+    });
+  } else {
+    // An UNSIGNED offer is retired now, as before: its approval link must
+    // stop working so the customer can never sign the out-of-date version
+    // (the Q-2026-0078 dead-link fix depends on this).
+    original.status = "superseded";
+    original.supersededBy = newId;
+    original.history.push({
+      ts: nowIso(),
+      action: "superseded",
+      by,
+      note: note || `Replaced by revision ${newId} (v${revision.version})`
+    });
+  }
 
   await writeAll(records);
   return revision;
+}
+
+// Queued on the quotes store: two revisions (a double click, or the office
+// and a change order at once) can never both read the same records and
+// take the same next quote number — which, before this, let the second
+// write silently overwrite the first.
+async function createRevision(...args) {
+  return serialize(FILE, () => _createRevisionLocked(...args));
 }
 
 // ---- Deposit lifecycle (server-managed) ------------------------------
@@ -3304,6 +3591,14 @@ module.exports = {
   getByApprovalToken,
   isSuperseded,
   resolveRevisionChain,
+  hasAcceptanceRecord,
+  isSignedAgreement,
+  isUnsignedLive,
+  retireUnsignedRevision,
+  signingRefusal,
+  chainFromRecords,
+  describeChain,
+  resolveQuoteChain,
   remove,
   softDelete,
   restore,

@@ -18,6 +18,9 @@ Jul 29. The Amex still failed with an opaque `HTTP 400: Bad request`, so on
 Patrick's instruction the card rail was **migrated to Stripe** (Jul 30).
 QuickBooks was **kept as the accounting ledger** — invoices still push to QBO
 and every successful Stripe charge still creates a QBO Payment record.
+*Amended 2026-09-28:* for exactly the amount the invoice ledger applied, never
+the processor charge; an excess stays a PJL payment exception, and a charge
+with nothing applied posts nothing.
 Follow-up work through Aug 2: Apple Pay (one-tap via Express Checkout
 Element), form slimmed to required fields only, Link removed, webhook
 delivery fixed (307-redirect — see §5), and integration with the
@@ -107,7 +110,18 @@ The two features merged cleanly — this is already DONE, do not redo it:
    in `server/pay.js`. Adding a method (Link, Klarna, ACH) is a deliberate
    two-file change plus a thanks-page verification pass — never a toggle.
 4. **The server never trusts the browser about money.** Finalize re-reads the
-   intent from Stripe and verifies invoice id, amount, currency, status.
+   intent from Stripe and verifies invoice id, currency, status.
+   *Amended 2026-09-27 (Patrick, payment exceptions):* the amount is no
+   longer a reason to refuse a succeeded charge — refusing hid real money.
+   `invoices.recordProcessorPayment` decides each Stripe payment ONCE,
+   inside the invoice lock, keyed on its payment id: up to what is owed goes
+   on the ledger, any excess becomes an open payment exception (flagged in
+   the office, one admin alert). The ledger never exceeds the total, so the
+   balance never goes negative.
+   *Amended 2026-09-27 (S6):* reversing a Stripe payment off the ledger keeps
+   its ids in `reversedProcessorPayments[]` for good. The same payment
+   arriving again (it stays "succeeded" at Stripe after a refund) is
+   recognised as reversed: nothing recorded, sent or flagged, one audit line.
 5. **Charge `balanceDue`, never `total`.**
 6. **The webhook URL keeps its `www`.** And the webhook handler acks before it
    works — don't move slow work back in front of the response.

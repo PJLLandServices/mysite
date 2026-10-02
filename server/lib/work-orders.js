@@ -41,6 +41,65 @@ const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
 const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
+const sessionHours = require("./session-hours");
+const EventEmitter = require("node:events");
+
+// "resignature" fires with the saved WO whenever awaitsNewSignature(wo)
+// starts or stops being true — whichever route made the edit. server.js
+// listens once and holds or releases the WO's invoice (invoices.scopeHold),
+// so no scope-editing route can forget to.
+const events = new EventEmitter();
+
+// AWAITED, deliberately. `events.emit()` calls each listener
+// synchronously but does NOT wait for the promise a listener returns —
+// so the original `emit` here started the invoice-hold write and
+// returned immediately, and the route replied to the client before the
+// hold existed on disk. On a fast machine the write usually won that
+// race; under load it lost, and for that window an invoice the system
+// had just reported as held was still payable.
+//
+// That is the defect this replaces. Patrick: "The system must never
+// report that an invoice hold was applied before the hold actually
+// exists."
+//
+// So: collect what the listeners return and await it. A listener that
+// returns nothing costs nothing; one that returns a promise is now part
+// of the write.
+//
+// A FAILED hold is propagated, not logged and swallowed. A swallowed
+// failure reports success with no hold, which breaks the same rule the
+// race did — just less often, which is worse, not better. The work
+// order itself is already written by the time this runs, so the caller
+// sees an error against an edit that landed; that is recoverable and
+// safe to retry, because setScopeHold() is idempotent (it returns early
+// when the hold is already in the state asked for). Silently leaving an
+// invoice unheld is neither.
+// The transition a mutator saw, handed to the wrapper below so the
+// announcement runs AFTER this store's lock is released.
+//
+// WHY NOT JUST AWAIT IT IN PLACE. Because that would hold two store
+// locks at once, and atomic-json's withStoreLocks() says in as many
+// words why that is unsafe: "Acquired in a fixed (sorted) order; no lib
+// mutator ever holds two, so no deadlock." Sorted order puts
+// invoices.json BEFORE work-orders.json, so the property merge takes
+// invoices first and work-orders second. A mutator here that held
+// work-orders and then reached for invoices would be the exact reverse
+// — and the two together deadlock: the merge waiting for work-orders,
+// the mutator waiting for invoices, neither ever letting go.
+//
+// Keyed by the returned object rather than by id, so two concurrent
+// writes to the same work order cannot collect each other's
+// transition, and nothing is added to what gets persisted.
+const pendingResignature = new WeakMap();
+
+async function announceResignature(before, after) {
+  if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
+  const pending = [];
+  for (const listener of events.listeners("resignature")) {
+    pending.push(listener(after));   // sync throws reject the await below
+  }
+  await Promise.all(pending);
+}
 
 const TEMPLATES = {
   spring_opening: { label: "Spring Opening", scaffoldFromProperty: true },
@@ -221,6 +280,20 @@ async function writeAll(records) {
   await writeJsonAtomic(FILE, records);
 }
 const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Same, for the mutators that must publish the invoice hold. The write
+// happens under this store's lock; the hold is written once that lock is
+// released and BEFORE the caller is resolved — so a route still cannot
+// reply ahead of the hold, and no two store locks are ever held at once.
+const withStoreLockThenAnnounce = (fn) => async (...args) => {
+  const result = await serialize(FILE, () => fn(...args));
+  if (result && pendingResignature.has(result)) {
+    const before = pendingResignature.get(result);
+    pendingResignature.delete(result);
+    await announceResignature(before, result);
+  }
+  return result;
+};
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -731,13 +804,26 @@ const SCOPE_PROTECTED_FIELDS = [
 const WO_TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 function workOrderForLeadBooking(lead, wos) {
   if (!lead) return null;
-  const mine = (Array.isArray(wos) ? wos : [])
+  let mine = (Array.isArray(wos) ? wos : [])
     .filter((w) => w && w.leadId === lead.id && !w.deletedAt && !w.archivedAt);
   if (!mine.length) return null;
   const envelopeId = lead.booking?.workOrder?.id || null;
+  // A previous visit's WO is refused even when the envelope names it: an
+  // old April booking rescheduled to October keeps April's envelope id,
+  // and the fall card opened April's completed job (PJL-97). The test is
+  // bookings.isPreviousVisitWo, the same one every booking-record reader
+  // asks. Required here, not at the top: several suites load this file
+  // alone from a sandbox and never call this function.
+  const { isPreviousVisitWo } = require("./bookings");
   if (envelopeId) {
     const exact = mine.find((w) => w.id === envelopeId);
-    if (exact) return exact;
+    if (exact && !isPreviousVisitWo(exact, lead.booking?.start)) return exact;
+    if (exact) {
+      // The refused WO must not come straight back through the steps below
+      // (its createdAt passes the envelope-timestamp test by construction).
+      mine = mine.filter((w) => w.id !== exact.id);
+      if (!mine.length) return null;
+    }
   }
   const bookedType = lead.booking?.serviceKey ? templateForServiceKey(lead.booking.serviceKey) : null;
   const sameType = mine.filter((w) => !bookedType || w.type === bookedType);
@@ -775,6 +861,65 @@ function workOrderForLeadBooking(lead, wos) {
 // unlocked, which is every WO in the store before this shipped.
 function isScopeFrozen(wo) {
   return wo?.locked === true;
+}
+
+// ---- Re-signing after a priced-scope change (Patrick, 2026-09-26) -------
+//
+// An accepted work order (drawn signature, or signature bypass) that an
+// admin unlocks and then changes in a way that affects what the customer
+// pays must be signed again. The original acceptance is never erased: it
+// moves to `priorAcceptances` when the new one lands, and the history
+// keeps every step. Changes that don't touch price (tech notes, photos,
+// zone labels, checklist) never need a new signature.
+//
+//   pricedScopeKey(wo)       what the customer is paying for, comparable
+//   awaitsNewSignature(wo)   THE rule every gate reads: completion, the
+//                            cascade and create-invoice (server.js), and
+//                            the invoice's payment hold (invoices.scopeHold)
+//
+// The state is `wo.resignature = { required, flaggedAt, flaggedBy,
+// acceptedScopeKey, pricedAtRelock, satisfiedAt, satisfiedBy }`. It is set
+// in update() (the one write every scope edit goes through) and satisfied
+// by a new drawn signature or a new admin bypass. When the revised scope is
+// re-locked, the fee is re-priced and frozen (server.js relock route), and
+// the new signature is still required.
+function hasAcceptance(wo) {
+  return wo?.signature?.signed === true || !!wo?.signatureBypass;
+}
+function scopeLine(l) {
+  if (!l || typeof l !== "object") return null;
+  const raw = l.overridePrice != null ? l.overridePrice
+    : l.originalPrice != null ? l.originalPrice
+      : l.unitPrice != null ? l.unitPrice : l.price;
+  const cents = raw == null || raw === "" || !Number.isFinite(Number(raw)) ? null : Math.round(Number(raw) * 100);
+  return [String(l.key || l.itemKey || l.label || l.description || l.name || ""), Number(l.qty ?? l.quantity ?? 1) || 0, cents, l.priceStatus || ""];
+}
+function pricedScopeKey(wo) {
+  if (!wo) return "";
+  const seasonal = wo.type === "fall_closing" || wo.type === "spring_opening";
+  const list = (v) => (Array.isArray(v) ? v : []).map(scopeLine);
+  return JSON.stringify({
+    type: wo.type || "",
+    builder: list(wo.onSiteQuote?.builderLineItems),
+    lines: list(wo.lineItems),
+    repairs: list(wo.additionalRepairs),
+    // A seasonal fee is priced from the number of zones (pricing.js counts
+    // kind "zone"), so adding or removing one changes the price.
+    zones: seasonal ? (Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0) : null,
+    waived: wo.serviceFeeWaiver?.waived === true,
+    warranty: wo.warrantyClaim?.claimId ? `${wo.warrantyClaim.claimId}:${wo.warrantyClaim.converted ? 1 : 0}` : null
+  });
+}
+function awaitsNewSignature(wo) {
+  return wo?.resignature?.required === true;
+}
+function archivedAcceptance(current, at, why) {
+  return {
+    archivedAt: at,
+    why,
+    signature: current.signature && current.signature.signed === true ? { ...current.signature } : null,
+    signatureBypass: current.signatureBypass ? { ...current.signatureBypass } : null
+  };
 }
 
 // Returns the protected field path that a payload would touch on a
@@ -988,12 +1133,16 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
   }
   const current = records[idx];
 
-  if (current.signature && current.signature.signed === true) {
+  // Awaiting a new signature on a revised scope: the admin override can
+  // stand in for it, like it can for the first one. The earlier acceptance
+  // is archived below, never overwritten.
+  const reAccepting = awaitsNewSignature(current);
+  if (!reAccepting && current.signature && current.signature.signed === true) {
     const err = new Error("Work order is already signed — bypass not available.");
     err.code = "already_signed";
     throw err;
   }
-  if (current.signatureBypass) {
+  if (!reAccepting && current.signatureBypass) {
     const err = new Error("Signature bypass already recorded for this work order.");
     err.code = "already_bypassed";
     throw err;
@@ -1033,6 +1182,12 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   const now = new Date().toISOString();
   const next = { ...current };
+  if (reAccepting) {
+    next.priorAcceptances = [...(Array.isArray(current.priorAcceptances) ? current.priorAcceptances : []),
+      archivedAcceptance(current, now, "priced scope changed; the revised work order was accepted by admin bypass")];
+    next.signature = null;
+    next.resignature = { ...current.resignature, required: false, satisfiedAt: now, satisfiedBy: "bypass" };
+  }
   next.signatureBypass = {
     reason: safeReason,
     note: trimmedNote.slice(0, 2000),
@@ -1053,6 +1208,10 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
   next.updatedAt = now;
 
   if (!Array.isArray(next.history)) next.history = [];
+  if (reAccepting) {
+    next.history.push({ ts: now, action: "resignature_captured", by: bypassedBy || "admin",
+      note: "Revised scope accepted by admin bypass — the earlier acceptance is kept in priorAcceptances" });
+  }
   next.history.push({
     ts: now,
     action: "signature_bypassed",
@@ -1075,6 +1234,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -1171,7 +1331,7 @@ async function unlockWorkOrder(woId, { reason, unlockedBy } = {}, { ip, userAgen
 // file. A WO with no acceptance record on it was never locked by a
 // customer-facing event, so there's nothing to restore and this refuses;
 // use the signature or bypass path instead.
-async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}) {
+async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { ip, userAgent } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) {
@@ -1198,19 +1358,29 @@ async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}
   const next = { ...current };
   next.locked = true;
   next.updatedAt = now;
+  // The revised scope, frozen: its price is set now (the route passes the
+  // re-priced quote), and the customer's new signature is still required.
+  const revised = awaitsNewSignature(current);
+  if (revised) {
+    if (onSiteQuote && typeof onSiteQuote === "object") next.onSiteQuote = onSiteQuote;
+    next.resignature = { ...current.resignature, pricedAtRelock: now };
+  }
 
   if (!Array.isArray(next.history)) next.history = [];
   next.history.push({
     ts: now,
     action: "wo_relocked",
     by: relockedBy || "admin",
-    note: "Re-locked after admin edit — scope frozen again against the acceptance already on file",
+    note: revised
+      ? "Re-locked with a revised scope — its price is frozen now, and the customer must sign the revised work order before it can be completed or paid"
+      : "Re-locked after admin edit — scope frozen again against the acceptance already on file",
     before: { locked: false },
     after: { locked: true, ip: ip || "", userAgent: userAgent || "" }
   });
 
   records[idx] = next;
   await writeAll(records);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -1276,6 +1446,33 @@ async function appendReportSnapshot(id, snapshot) {
 // only logs status transitions). Mirrors invoices.appendHistory(). Used
 // by every WO-mutating dispatcher endpoint to log a one-line audit
 // breadcrumb. Returns the updated WO record, or null if not found.
+// PJL-100 #4 — stamp findings as copied to the property, on the FRESH
+// record under the store lock, touching nothing but `deferredId` on the
+// findings named. The defer routes used to write back the whole zones
+// array from a copy read before the property writes, erasing any zone edit
+// saved in between. `stamps` = [{ zone, issueId, deferredId }]; a finding
+// already stamped keeps its first stamp, one no longer there is skipped.
+// Returns the updated WO, or null if it is gone.
+async function stampDeferredIds(id, stamps) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const want = new Map((stamps || []).filter((s) => s && s.issueId && s.deferredId)
+    .map((s) => [`${Number(s.zone)}|${s.issueId}`, String(s.deferredId)]));
+  const next = { ...records[idx] };
+  next.zones = (next.zones || []).map((z) => ({
+    ...z,
+    issues: (z.issues || []).map((i) => {
+      const d = want.get(`${Number(z.number)}|${i.id}`);
+      return d && !i.deferredId ? { ...i, deferredId: d } : i;
+    })
+  }));
+  next.updatedAt = new Date().toISOString();
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 async function appendHistory(id, entry) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
@@ -1627,7 +1824,7 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch, { ifMatch = null } = {}) {
+async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
@@ -1763,10 +1960,13 @@ async function update(id, patch, { ifMatch = null } = {}) {
     // defer would copy the same finding to the property twice.
     const stamped = new Map();
     for (const z of current.zones || []) for (const i of z.issues || []) if (i.id && i.deferredId) stamped.set(i.id, i.deferredId);
-    if (stamped.size) {
-      for (const z of next.zones) for (const i of z.issues || []) {
-        if (!i.deferredId && stamped.has(i.id)) i.deferredId = stamped.get(i.id);
-      }
+    // …and the stamp is ALWAYS the server's (PJL-100 nit): a client can't
+    // mark a finding "already copied" with an id the server never wrote —
+    // it would then never reach the property — nor replace the server's.
+    // Only stampDeferredIds() (after a successful copy) sets a new one.
+    for (const z of next.zones) for (const i of z.issues || []) {
+      if (stamped.has(i.id)) i.deferredId = stamped.get(i.id);
+      else delete i.deferredId;
     }
   }
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
@@ -1802,7 +2002,28 @@ async function update(id, patch, { ifMatch = null } = {}) {
   if (patch.serviceChecklist && typeof patch.serviceChecklist === "object") {
     next.serviceChecklist = { ...patch.serviceChecklist };
   }
-  if (patch.signature && typeof patch.signature === "object") {
+  // A new acceptance on a work order that already has one — the customer
+  // signing the revised scope, or an unlocked WO signed again — replaces
+  // the record on file only after archiving it (never an overwrite).
+  const replacingAcceptance = Boolean(patch.signature && typeof patch.signature === "object"
+    && patch.signature.signed === true && typeof patch.signature.signedAt === "string"
+    && patch.signature.signedAt !== current.signature?.signedAt && hasAcceptance(current));
+  if (replacingAcceptance) {
+    const at = new Date().toISOString();
+    const awaited = awaitsNewSignature(current);
+    next.priorAcceptances = [...(Array.isArray(current.priorAcceptances) ? current.priorAcceptances : []),
+      archivedAcceptance(current, at, awaited ? "priced scope changed; the customer signed the revised work order" : "replaced by a new signature")];
+    next.signature = { ...patch.signature };
+    next.signatureBypass = null;
+    if (awaited) next.resignature = { ...current.resignature, required: false, satisfiedAt: at, satisfiedBy: "signature" };
+    if (!Array.isArray(next.history)) next.history = [];
+    next.history.push({
+      ts: at,
+      action: awaited ? "resignature_captured" : "signature_replaced",
+      by: patch.__by || "tech",
+      note: `${awaited ? "New signature on the revised scope" : "New signature"}${patch.signature.customerName ? ` by ${patch.signature.customerName}` : ""} — the earlier acceptance is kept in priorAcceptances`
+    });
+  } else if (patch.signature && typeof patch.signature === "object") {
     next.signature = { ...current.signature, ...patch.signature };
   }
   // Service-call fee waiver — set (validated object) or clear (explicit
@@ -1824,6 +2045,27 @@ async function update(id, patch, { ifMatch = null } = {}) {
     next.warrantyClaim = (patch.warrantyClaim && typeof patch.warrantyClaim === "object" && patch.warrantyClaim.claimId)
       ? { ...patch.warrantyClaim }
       : null;
+  }
+  // Re-signing (Patrick, 2026-09-26): an accepted WO that is unlocked and
+  // changed in what it bills now needs the customer's new signature. A
+  // system write (the cascade's own correction, the GET self-heal) is not a
+  // scope change by anyone; changing the scope back to what was signed
+  // clears the requirement.
+  if (!systemWrite && !replacingAcceptance && current.locked !== true && hasAcceptance(current)) {
+    const at = new Date().toISOString();
+    const before = pricedScopeKey(current);
+    const after = pricedScopeKey(next);
+    if (!awaitsNewSignature(current) && after !== before) {
+      next.resignature = { required: true, flaggedAt: at, flaggedBy: patch.__by || "admin", acceptedScopeKey: before, pricedAtRelock: null, satisfiedAt: null, satisfiedBy: null };
+      if (!Array.isArray(next.history)) next.history = [];
+      next.history.push({ ts: at, action: "resignature_required", by: patch.__by || "admin",
+        note: "The priced scope changed after the customer accepted it. A new signature is needed before this visit can be completed or paid. The earlier acceptance is kept." });
+    } else if (awaitsNewSignature(current) && current.resignature.acceptedScopeKey && after === current.resignature.acceptedScopeKey) {
+      next.resignature = { ...current.resignature, required: false, satisfiedAt: at, satisfiedBy: "scope_restored" };
+      if (!Array.isArray(next.history)) next.history = [];
+      next.history.push({ ts: at, action: "resignature_cleared", by: patch.__by || "admin",
+        note: "The scope is back to what the customer signed — no new signature needed." });
+    }
   }
   next.updatedAt = new Date().toISOString();
 
@@ -1867,6 +2109,7 @@ async function update(id, patch, { ifMatch = null } = {}) {
 
   records[idx] = next;
   await writeAll(records);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2092,7 +2335,52 @@ async function endSession(woId, sessionId, { by = "admin" } = {}) {
   return { workOrder: wo, session: sess };
 }
 
-async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin" } = {}) {
+// ---- Office corrections to a field record -------------------------
+//
+// Patrick's rule, verbatim: "Preserve the original value. Record the
+// corrected value, who changed it, when and why. Calculate billing from
+// the effective corrected value. Never represent an office correction as
+// a new field work session."
+//
+// So a correction never invents a session and never quietly replaces a
+// number. It stamps session.original ONCE — the field's own answer,
+// frozen — and appends to session.corrections, which is append-only.
+// The live field carries the effective value so every reader, including
+// ones written before this existed, bills the corrected figure.
+//
+// Why original is stamped once and not per-field: "the original" means
+// what the crew recorded, not what the last correction happened to
+// overwrite. Correcting the count twice must still show the count the
+// technician entered on site.
+function _stampCorrection(wo, sess, { field, from, to, by, reason, ts }) {
+  if (!sess.original) {
+    sess.original = {
+      inAt: sess.inAt ?? null,
+      outAt: sess.outAt ?? null,
+      labourersOnSite: Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1))
+    };
+  }
+  const entry = {
+    at: ts,
+    by: String(by || "admin").slice(0, 80),
+    reason: String(reason || "").slice(0, 400),
+    field,
+    from: from ?? null,
+    to: to ?? null
+  };
+  sess.corrections = [...(sess.corrections || []), entry];
+  // The WO history gets its own line so the audit trail reads in order
+  // alongside every other change to this work order.
+  wo.history.push({
+    ts,
+    action: "session_corrected",
+    by,
+    note: `${sess.id} ${field}: ${from ?? "(none)"} → ${to ?? "(none)"}${entry.reason ? " — " + entry.reason : ""}`
+  });
+  return entry;
+}
+
+async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin", reason = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
@@ -2102,16 +2390,115 @@ async function setLabourersForSession(woId, sessionId, count, note = "", { by = 
   if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
   const safeCount = Math.max(1, Math.floor(Number(count) || 1));
   const ts = new Date().toISOString();
+  const previous = Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1));
+
+  // A correction is a CHANGE. Re-sending the same count from the field
+  // app (or a double tap) must not manufacture an audit entry claiming
+  // somebody corrected something — a log full of 3 → 3 is how a real
+  // correction gets lost.
+  const corrections = [];
+  if (safeCount !== previous) {
+    corrections.push(_stampCorrection(wo, sess, {
+      field: "labourersOnSite", from: previous, to: safeCount, by, reason: reason || note, ts
+    }));
+  }
   sess.labourersOnSite = safeCount;
   if (typeof note === "string") sess.labourerNote = note.slice(0, 400);
+
+  // The original line stays in history regardless, so nothing that reads
+  // for "session_labourers_set" today stops working.
   wo.history.push({
     ts, action: "session_labourers_set", by,
-    note: `${sessionId} count=${safeCount}${note ? " — " + note : ""}`
+    note: `${sessionId} count=${safeCount} (was ${previous})${note ? " — " + note : ""}`
   });
   wo.updatedAt = ts;
   records[idx] = wo;
   await writeAll(records);
   return wo;
+}
+
+// Fix a wrong clock-in or clock-out. Until now there was NO way to do
+// this: a technician who forgot to clock out at 3pm and remembered at
+// 7pm left four phantom person-hours on a T&M invoice, and the only
+// remedy was editing the JSON by hand.
+//
+// Refusals are deliberate and loud, because every one of them is an
+// invoice that would otherwise be wrong in a way nobody notices:
+//   - no reason                → you cannot audit "why" later
+//   - locked work order        → already invoiced; reopen it instead
+//   - out before in            → negative hours
+//   - either time in the future → nobody worked tomorrow
+//   - over 24h                 → a year or month typed wrong, which
+//                                bills thousands of hours
+async function correctSessionTimes(woId, sessionId, { inAt = null, outAt = null, reason = "", by = "admin" } = {}) {
+  const cleanReason = String(reason || "").trim();
+  if (cleanReason.length < 3) {
+    throw Object.assign(new Error("A reason is required for a clock-time correction."), { code: "reason_required" });
+  }
+  if (inAt == null && outAt == null) {
+    throw Object.assign(new Error("Supply a corrected clock-in time, clock-out time, or both."), { code: "nothing_to_correct" });
+  }
+
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo); // also refuses a locked (invoiced) work order
+  const sess = (wo.dailyLog.sessions || []).find((s) => s.id === sessionId);
+  if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
+
+  const ts = new Date().toISOString();
+  const nowMs = Date.parse(ts);
+
+  const parse = (value, label) => {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) {
+      throw Object.assign(new Error(`${label} is not a valid date and time.`), { code: "bad_timestamp" });
+    }
+    if (ms > nowMs + 60000) { // a minute of clock skew, not a workday
+      throw Object.assign(new Error(`${label} is in the future.`), { code: "future_timestamp" });
+    }
+    return new Date(ms).toISOString();
+  };
+
+  const nextIn = inAt == null ? sess.inAt : parse(inAt, "Clock-in");
+  const nextOut = outAt == null ? sess.outAt : parse(outAt, "Clock-out");
+
+  if (!nextIn) {
+    throw Object.assign(new Error("This session has no clock-in time to correct against."), { code: "bad_timestamp" });
+  }
+  if (nextOut) {
+    const spanMs = Date.parse(nextOut) - Date.parse(nextIn);
+    if (spanMs <= 0) {
+      throw Object.assign(new Error("Clock-out must be after clock-in."), { code: "inverted_times" });
+    }
+    if (spanMs / sessionHours.MS_PER_HOUR > sessionHours.MAX_SESSION_HOURS) {
+      throw Object.assign(
+        new Error(`That session would be longer than ${sessionHours.MAX_SESSION_HOURS} hours. Check the date.`),
+        { code: "implausible_duration" }
+      );
+    }
+  }
+
+  const applied = [];
+  if (inAt != null && nextIn !== sess.inAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "inAt", from: sess.inAt, to: nextIn, by, reason: cleanReason, ts }));
+    sess.inAt = nextIn;
+  }
+  if (outAt != null && nextOut !== sess.outAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "outAt", from: sess.outAt, to: nextOut, by, reason: cleanReason, ts }));
+    sess.outAt = nextOut;
+  }
+  if (!applied.length) {
+    // Nothing actually moved. Say so rather than writing an audit entry
+    // for a correction that corrected nothing.
+    return { workOrder: wo, session: sess, corrections: [], changed: false };
+  }
+
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, session: sess, corrections: applied, changed: true };
 }
 
 // Mark a task done in today's daily log. ALSO flips the project's
@@ -2337,23 +2724,28 @@ module.exports = {
   canAdoptDeclaredZones,
   canBuildOnSiteQuote,
   isScopeFrozen,
+  events,
+  hasAcceptance,
+  pricedScopeKey,
+  awaitsNewSignature,
   workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
-  captureSignatureBypass: withStoreLock(captureSignatureBypass),
+  captureSignatureBypass: withStoreLockThenAnnounce(captureSignatureBypass),
   unlockWorkOrder: withStoreLock(unlockWorkOrder),
-  relockWorkOrder: withStoreLock(relockWorkOrder),
+  relockWorkOrder: withStoreLockThenAnnounce(relockWorkOrder),
   recordOfflineQuoteAcceptance: withStoreLock(recordOfflineQuoteAcceptance),
   attachSignedCopyRef: withStoreLock(attachSignedCopyRef),
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
   patchReportSnapshot: withStoreLock(patchReportSnapshot),
   appendHistory: withStoreLock(appendHistory),
+  stampDeferredIds: withStoreLock(stampDeferredIds),
   list,
   get,
   listByProperty,
   listByLead,
   create: withStoreLock(create),
-  update: withStoreLock(update),
+  update: withStoreLockThenAnnounce(update),
   completeBackdated: withStoreLock(completeBackdated),
   remove: withStoreLock(remove),
   softDelete: withStoreLock(softDelete),
@@ -2367,6 +2759,7 @@ module.exports = {
   startSession: withStoreLock(startSession),
   endSession: withStoreLock(endSession),
   setLabourersForSession: withStoreLock(setLabourersForSession),
+  correctSessionTimes: withStoreLock(correctSessionTimes),
   markTaskDoneToday: withStoreLock(markTaskDoneToday),
   unmarkTaskDoneToday: withStoreLock(unmarkTaskDoneToday),
   addTaskProgressToday: withStoreLock(addTaskProgressToday),

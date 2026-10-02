@@ -8,7 +8,8 @@ import {
   PROJECT_STATUS_TONES,
   money,
   relativeDay,
-  taskProgress
+  taskProgress,
+  projectPercentComplete
 } from "../lib/format";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, EmptyState, ErrorNote, LoadingRows, StatusPill, TextInput, cx } from "../ui/primitives";
@@ -26,7 +27,9 @@ const FILTERS: Array<{ key: ProjectStatus | "all"; label: string }> = [
 function ProgressCell({ project }: { project: ProjectSummary }) {
   const { done, total } = taskProgress(project.tasks);
   if (!total) return <span className="text-ink-muted">—</span>;
-  const pct = Math.round((done / total) * 100);
+  // The COUNT labels the row; the PERCENTAGE draws the bar, and it is the
+  // server's own figure — a task at 60% moves it, which done/total cannot.
+  const pct = projectPercentComplete(project.tasks);
   return (
     <div className="min-w-[104px]">
       <div className="flex items-baseline justify-between gap-2">
@@ -47,7 +50,9 @@ function ProgressCell({ project }: { project: ProjectSummary }) {
 
 function ProjectRow({ project }: { project: ProjectSummary }) {
   const status = (project.status || "planning") as ProjectStatus;
-  const total = project.proposalSnapshot?.total;
+  // The signed contract — the server's describeAgreement, the same answer
+  // the workspace header shows. Never the frozen proposalSnapshot.
+  const total = project.agreement?.governing?.total;
 
   return (
     <Link
@@ -81,16 +86,19 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
           <ProgressCell project={project} />
           {/* The contract value has its own column on desktop; on a phone
               it rides alongside progress rather than disappearing. */}
-          {total ? (
-            <span className="lg:hidden font-display text-[16px] font-bold text-brand-700">{money(total)}</span>
-          ) : null}
+          {total !== undefined && total !== null ? (
+            <span className="lg:hidden font-display text-[16px] font-bold text-brand-700" data-testid="contract-value">{money(total)}</span>
+          ) : (
+            <span className="lg:hidden text-[13px] text-ink-muted" data-testid="contract-value-empty">Not signed</span>
+          )}
         </div>
 
         <div className="hidden lg:block text-right lg:text-left">
-          {total ? (
-            <span className="font-display text-[17px] font-bold text-brand-700">{money(total)}</span>
+          {/* Nothing signed says so, rather than "$0" or a bare dash. */}
+          {total !== undefined && total !== null ? (
+            <span className="font-display text-[17px] font-bold text-brand-700" data-testid="contract-value">{money(total)}</span>
           ) : (
-            <span className="text-ink-muted">—</span>
+            <span className="text-[13px] text-ink-muted" data-testid="contract-value-empty">Not signed</span>
           )}
         </div>
 

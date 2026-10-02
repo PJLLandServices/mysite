@@ -113,7 +113,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services confirming we've received your request. " +
       "Patrick personally reviews every inquiry — you'll hear back within one business day. " +
       "If it's urgent, call (905) 960-0181.",
-    sms: "{namePrefix}PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl}"
+    sms: "{namePrefix}PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   reviewed: {
     subject: "PJL Land Services has reviewed your request",
@@ -121,7 +121,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, Patrick at PJL Land Services has reviewed your request and will reach out " +
       "to walk through next steps. Your project details are saved in your portal.",
-    sms: "{namePrefix}PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl}"
+    sms: "{namePrefix}PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   quoted: {
     subject: "Your PJL quote is ready",
@@ -129,7 +129,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, your PJL Land Services quote is ready to review. Open your portal to see the " +
       "scope, the price, and accept the quote when you're ready. Estimated total: {total}.",
-    sms: "{namePrefix}your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl}"
+    sms: "{namePrefix}your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
 
   // --- Service track (confirmed bookings from /book.html) ---
@@ -140,7 +140,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services {serviceLabel} on {dateStr} at {timeStr} is confirmed. " +
       "Your work order ({workOrderId}) is available in your customer portal. If we run into any issues on our end, " +
       "we'll reach out directly. To make changes, use your portal or call us at (905) 960-0181.",
-    sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   site_visit: {
     subject: "Your PJL site visit is scheduled — {dateStr}",
@@ -149,7 +149,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services site visit is scheduled for {dateStr} at {timeStr}. " +
       "Patrick will walk your property, scope the work, and follow up with a written quote. " +
       "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
-    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   // Sent when a booking is rescheduled — fires regardless of who
   // initiated (customer self-serve via portal, or Patrick from the CRM).
@@ -163,7 +163,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services {serviceLabel} has been moved to {dateStr} at {timeStr}. " +
       "Your work order ({workOrderId}) is up to date in your portal. " +
       "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
-    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? (905) 960-0181"
+    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? Call or text (905) 960-0181 (please don't reply to this automated text)"
   },
   // Day-before reminder for SELF-BOOKED appointments (Patrick,
   // 2026-09-02: assignment customers get a D−1 text from the cadence;
@@ -178,7 +178,7 @@ const TEMPLATES = {
       "Hi {firstName}, a friendly reminder that PJL Land Services comes tomorrow, {dateStr}, " +
       "for your {serviceLabel} — {timeStr}. Please make sure we can reach what we need to. " +
       "If anything has changed, call or text (905) 960-0181.",
-    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? (905) 960-0181. Details: {portalUrl}"
+    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? Call or text (905) 960-0181 (please don't reply to this automated text). Details: {portalUrl}"
   },
   // "First available" — the customer joined the open bucket instead of
   // picking a day. No date exists yet, so no {dateStr}/{timeStr}; the
@@ -192,7 +192,7 @@ const TEMPLATES = {
       "The next time our crew is working in your neighbourhood, we'll fit you in and confirm your " +
       "exact day ahead of time — usually within a couple of weeks. Nothing else to do for now. " +
       "If any dates absolutely don't work, reply here or call (905) 960-0181 and we'll plan around them.",
-    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl}"
+    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
@@ -204,7 +204,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services. Patrick is on his way to your property for your " +
       "{serviceLabel}. We'll see you soon — if you need to flag anything (gate codes, dogs, parking), " +
       "just call or text (905) 960-0181.",
-    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? (905) 960-0181"
+    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? Call or text (905) 960-0181 (please don't reply to this automated text)"
   }
 };
 
@@ -454,9 +454,17 @@ function eventForTransition(fromStatus, toStatus) {
 
 // Public API — fire-and-forget. The caller doesn't await this; failures are
 // logged but never block the user-facing CRM action.
+//
+// Some events are a text and nothing else. "On the way" is read at the door
+// on a phone, minutes before the truck arrives; an email of it is noise
+// (Patrick, 2026-10-01: "I don't need an email, just a text message works").
+// The routes that send one refuse up front when there's no phone on file.
+const TEXT_ONLY_EVENTS = new Set(["on_route"]);
+const isTextOnlyEvent = (event) => TEXT_ONLY_EVENTS.has(event);
+
 function notifyCustomer(event, lead) {
   return Promise.allSettled([
-    sendCustomerEmail(event, lead),
+    isTextOnlyEvent(event) ? Promise.resolve({ ok: false, skipped: true, reason: "text-only event" }) : sendCustomerEmail(event, lead),
     sendCustomerSms(event, lead)
   ]);
 }
@@ -776,7 +784,12 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
 
   const { html: htmlTpl, text: textTpl } = loadReceiptTemplate();
   const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
-  const totalFormatted = moneyTextCurrency(invoice.total);
+  // A payment that brought in more than the invoice still owed (a payment
+  // exception): the receipt is for what was charged, and says so neutrally
+  // — no refund is promised. Every other receipt is unchanged.
+  const over = opts.overpayment && Number(opts.overpayment.charged) > 0 ? opts.overpayment : null;
+  const overNotice = over ? require("./invoices").OVERPAYMENT_CUSTOMER_MESSAGE.replace(/^Payment received\. /, "") : "";
+  const totalFormatted = moneyTextCurrency(over ? over.charged : invoice.total);
   const paidDate = invoice.paidAt
     ? new Date(invoice.paidAt).toLocaleDateString("en-CA", {
         timeZone: "America/Toronto",
@@ -804,7 +817,10 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       chargeId: escapeHtml(chargeId)
     },
     confirmationVisible,
-    publicBaseUrl: escapeHtml(publicBaseUrl)
+    publicBaseUrl: escapeHtml(publicBaseUrl),
+    overpaymentNoticeHtml: over
+      ? `<p style="margin:0 0 16px;padding:12px 14px;background:#FFF8E6;border:1px solid #E8D9A8;border-radius:8px;">${escapeHtml(overNotice)}</p>`
+      : ""
   };
   const textVars = {
     customer: { firstName },
@@ -815,7 +831,8 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       chargeId
     },
     confirmationLineText,
-    publicBaseUrl
+    publicBaseUrl,
+    overpaymentNoticeText: over ? `\n${overNotice}\n` : ""
   };
 
   const html = renderTemplate(htmlTpl, vars);
@@ -1389,6 +1406,70 @@ async function sendPortalMessageAlertEmail(lead, message) {
   }
 }
 
+// Office alert for a new payment exception (Patrick, 2026-09-27): money a
+// card processor took that the invoice did not owe. Sent ONCE, by the call
+// that opened the exception — invoices.recordProcessorPayment decides each
+// Stripe payment once, so a webhook retry or a racing confirm never gets
+// here. Same recipient as the new-lead alerts.
+async function sendPaymentExceptionAlert(invoice, exception) {
+  const transporter = getTransporter();
+  if (!transporter) return { ok: false, skipped: true, error: "Email is not configured" };
+  const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
+  if (!to) return { ok: false, skipped: true, error: "no admin email configured" };
+  const m = (n) => moneyTextCurrency(n);
+  const card = [exception.cardBrand ? String(exception.cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : null, exception.cardLast4 ? `••${exception.cardLast4}` : null].filter(Boolean).join(" ");
+  const method = `${exception.methodLabel || "Card"}${card ? ` — ${card}` : ""}`;
+  const arrived = new Date(exception.detectedAt || Date.now()).toLocaleString("en-CA", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" });
+  const invoiceUrl = `${resolvePublicBaseUrl()}/admin/invoice/${encodeURIComponent(invoice.id)}`;
+  const rows = [
+    ["Invoice", invoice.id],
+    ["Work order", invoice.woId || "—"],
+    ["Customer", [invoice.customerName, invoice.customerEmail, invoice.customerPhone].filter(Boolean).join(" · ") || "—"],
+    ["Address", invoice.address || "—"],
+    ["Total charge", m(exception.chargedTotal)],
+    ["Applied to invoice", m(exception.applied)],
+    ["Excess — needs attention", m(exception.excess)],
+    ["Method / card", method],
+    ["Stripe payment", `${exception.paymentIntentId}${exception.chargeId ? ` (charge ${exception.chargeId})` : ""}`],
+    ["Arrived", `${arrived} via ${exception.via || "—"}`],
+    ["Why", exception.reasonNote || exception.reason || "—"]
+  ];
+  const { html, text } = brandedEmail({
+    headline: "Refund / reconciliation needed",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">A card payment brought in <strong>${escapeHtml(m(exception.excess))}</strong> more than invoice <strong>${escapeHtml(invoice.id)}</strong> owed. Nothing has been refunded. The invoice is flagged until you mark it refunded or reconciled.</p>
+      <table cellpadding="0" cellspacing="0" border="0" style="font-size: 14px; margin: 0 0 16px;">
+        ${rows.map(([k, v]) => `<tr><td style="padding: 3px 12px 3px 0; color: #666; vertical-align: top;">${escapeHtml(k)}</td><td style="padding: 3px 0;"><strong>${escapeHtml(v)}</strong></td></tr>`).join("")}
+      </table>
+    `,
+    bodyText: [
+      `A card payment brought in ${m(exception.excess)} more than invoice ${invoice.id} owed. Nothing has been refunded. The invoice is flagged until you mark it refunded or reconciled.`,
+      "",
+      ...rows.map(([k, v]) => `${k}: ${v}`),
+      "",
+      `Open the invoice: ${invoiceUrl}`
+    ].join("\n"),
+    ctaLabel: "Open the invoice",
+    ctaUrl: invoiceUrl,
+    footerNote: `Exception ${escapeHtml(exception.id)}`
+  });
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Payments" <${process.env.GMAIL_USER}>`,
+      to,
+      subject: `REFUND / RECONCILIATION NEEDED — ${m(exception.excess)} extra on invoice ${invoice.id} — ${invoice.customerName || "customer"}`,
+      html,
+      text
+    });
+    await logSend({ kind: "other", to, ok: true, refId: invoice.id });
+    return { ok: true, to, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[payment-exception] alert failed for ${invoice.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: invoice.id });
+    return { ok: false, to, error: error.message };
+  }
+}
+
 // Customer-side email when the admin replies to a portal message.
 // Notifies the customer that there's a new message waiting in their
 // portal. Body includes the reply text inline so the customer doesn't
@@ -1512,7 +1593,11 @@ async function sendOutreachEmail({
   // Without it an outreach failure is an address and nothing else, which
   // is not enough to make good on it.
   refId = "",
-  resendOf = ""
+  resendOf = "",
+  // The footer's "or reply to this email". Seasonal outreach keeps it;
+  // the appointment cadence turns it off, because a reply there does NOT
+  // confirm the appointment and the body now says so (2026-09-26).
+  invitesReply = true
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -1570,7 +1655,7 @@ async function sendOutreachEmail({
     ${bodyHtml}
     ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">${escapeHtml(ctaLabel)}</a></p>` : ""}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
-      Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
+      Questions? Call${invitesReply ? "" : " or text"} <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a>${invitesReply ? " or reply to this email" : ""}.
     </p>
     ${footerHtml}
   </div>
@@ -1581,7 +1666,7 @@ async function sendOutreachEmail({
 
   const text = [
     renderedBody,
-    portalLink ? `\nOpen your portal: ${portalLink}` : "",
+    portalLink ? `\n${ctaLabel}: ${portalLink}` : "",
     "",
     "Questions? Call (905) 960-0181.",
     footerText,
@@ -1887,6 +1972,26 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "already_sent" };
   }
 
+  // PJL-96: an invoice whose price PJL sets is never texted automatically
+  // — not before Confirm price (the number isn't his yet) and not after
+  // (confirming and telling the customer are separate; the office uses
+  // Send). One rule, invoices.isPriceSetByPjl; the cascade doesn't
+  // schedule these, and this catches a record scheduled before the rule.
+  // The history records it once, not every sweep.
+  // The work order awaits the customer's new signature on a revised
+  // scope (invoices.scopeHold): nothing about this invoice goes out yet.
+  if (invoice.scopeHold?.since) return { ok: true, skipped: "awaiting_signature" };
+  if (invoices.isPriceSetByPjl(invoice)) {
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_not_sent_price_set_by_pjl")) {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_not_sent_price_set_by_pjl",
+        by: "system",
+        note: "No automatic invoice text — PJL sets this price; the office sends the invoice."
+      });
+    }
+    return { ok: true, skipped: invoices.isPriceUnconfirmed(invoice) ? "price_unconfirmed" : "price_set_by_pjl" };
+  }
+
   // Nothing to pay — never text "your invoice is ready" for $0
   // (fall-closing fix #8). The completion cascade no longer drafts a $0
   // invoice, but one can still be made by hand.
@@ -1922,6 +2027,23 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
       note: "Invoice paid before SMS fired"
     });
     return { ok: true, skipped: "paid" };
+  }
+
+  // The body says the invoice "has been emailed" — so it goes only for one
+  // that has been (sentAt). A Bill-later invoice is a draft until the
+  // office Sends it, and Send texts the customer itself (the junk-mail
+  // warning). Clearing the schedule stops the sweep retrying; the history
+  // records it once, however often a cascade re-run reschedules it.
+  if (!invoice.sentAt) {
+    await invoices.update(invoiceId, { customerSmsScheduledAt: null });
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_skipped_not_emailed")) {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_skipped_not_emailed",
+        by: "system",
+        note: "No invoice text — the invoice hasn't been emailed yet. Send emails it and texts the customer."
+      });
+    }
+    return { ok: true, skipped: "not_emailed" };
   }
 
   const allowed = await resolveSmsAllowed(invoice);
@@ -2160,6 +2282,13 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   }
   if (invoice.status === "paid") {
     return { ok: false, error: "paid" };
+  }
+  // PJL-96: nothing to chase while Patrick has not confirmed the price.
+  if (invoice.scopeHold?.since) {
+    return { ok: false, error: "awaiting_signature" };
+  }
+  if (invoices.isPriceUnconfirmed(invoice)) {
+    return { ok: false, error: "price_unconfirmed" };
   }
 
   // Rate limit — minimum 1 hour between reminders, computed from the
@@ -2470,6 +2599,7 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
   if (invoice.status === "void") return { ok: false, error: "voided" };
   if (invoice.status === "paid") return { ok: false, error: "paid" };
+  if (invoices.isPriceUnconfirmed(invoice)) return { ok: false, error: "price_unconfirmed" };
 
   if (!force) {
     // Redundancy with the auto-fire "invoice ready" SMS — if it landed
@@ -2624,6 +2754,7 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
 module.exports = {
   notifyCustomer,
+  isTextOnlyEvent,
   // Exposed for tests — the customer-facing wording is contract.
   TEMPLATES,
   eventForTransition,
@@ -2632,6 +2763,7 @@ module.exports = {
   sendPortalReplyToCustomer,
   sendInvoiceToCustomer,
   sendPaymentReceipt,
+  sendPaymentExceptionAlert,
   sendCustomerLoginLink,
   sendQuoteAcceptedConfirmation,
   sendFinancingLinkEmail,

@@ -62,7 +62,20 @@ const write = (n, v) => fs.writeFileSync(path.join(DATA, `${n}.json`), JSON.stri
 // Real coordinates: the towns from the day Patrick photographed.
 const NEWMARKET = { lat: 44.056, lng: -79.462, source: "google" };
 const THORNHILL = { lat: 43.815, lng: -79.420, source: "google" };
-const DAY = "2026-09-30";
+// A weekday a few days out, never a fixed date: a fixed one passes into the
+// past and the booking engine (rightly) stops offering it. Started on
+// 2026-09-30; that date went stale on 2026-10-01 and turned CI red.
+const DAY = (() => {
+  const d = new Date(Date.now() + 3 * 864e5);
+  while ([0, 6].includes(new Date(`${d.toISOString().slice(0, 10)}T12:00:00Z`).getUTCDay())) d.setTime(d.getTime() + 864e5);
+  return d.toISOString().slice(0, 10);
+})();
+// Toronto's UTC offset on DAY (-04:00 in summer time, -05:00 after November).
+const OFF = (() => {
+  const m = /GMT([+-]\d+)/.exec(new Date(`${DAY}T12:00:00Z`).toLocaleString("en-US", { timeZone: "America/Toronto", timeZoneName: "shortOffset" }));
+  const h = m ? Number(m[1]) : -4;
+  return `${h < 0 ? "-" : "+"}${String(Math.abs(h)).padStart(2, "0")}:00`;
+})();
 
 const lead = (id, town, coords, hhmm, name) => ({
   id,
@@ -70,8 +83,8 @@ const lead = (id, town, coords, hhmm, name) => ({
   propertyId: `P-${id}`,
   contact: { name, firstName: name, lastName: "Test", address: `${id} Test St, ${town}, ON`, town },
   booking: {
-    start: `${DAY}T${hhmm}:00.000-04:00`,
-    end: `${DAY}T${hhmm}:35.000-04:00`,
+    start: `${DAY}T${hhmm}:00.000${OFF}`,
+    end: `${DAY}T${hhmm}:35.000${OFF}`,
     serviceKey: "fall_close_4z",
     serviceLabel: "Fall winterization",
     status: "confirmed",

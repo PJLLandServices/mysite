@@ -107,6 +107,49 @@ check('the System Builder\'s calculation engine is gated like the page it serves
   );
 });
 
+check('part photos are fenced — images, overview, writes and the admin page', () => {
+  // P-PJL-35. Every one of these would fall through to "open" if the
+  // prefix rule were missing. Writes additionally require requireAdmin()
+  // in the handler (the lock checks below cover that shape).
+  const hash = 'a'.repeat(64);
+  assert.equal(needsAuth('GET', `/api/part-photos/${hash}/160.webp`), 'user');
+  assert.equal(needsAuth('GET', '/api/part-photos'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photos/405010/photo'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photos/405010/link'), 'user');
+  assert.equal(needsAuth('DELETE', '/api/part-photo-groups/PG-0001/photo'), 'user');
+  assert.equal(needsAuth('GET', '/admin/part-photos'), 'user');
+  // M2a: the fitting default and supplier logos.
+  assert.equal(needsAuth('POST', '/api/part-photo-groups/PG-0001/default'), 'user');
+  // M3b: the Photo Review queue and its actions.
+  assert.equal(needsAuth('GET', '/api/part-photo-review'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/405010/approve'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/405010/reject'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/fittings/A%7CB'), 'user');
+  // M3c: the calibration run's plan and its start / pause / resume.
+  assert.equal(needsAuth('GET', '/api/part-photo-backfill/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/calibration'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/pause'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/resume'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/probe'), 'user');
+  assert.equal(needsAuth('GET', '/api/part-photo-backfill/wave-plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/wave'), 'user');
+  assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
+  assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
+  assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
+});
+
+check('M2a writes require the admin role in the handler, not just a session', () => {
+  // The fence above lets any staff session reach these; the handler must
+  // then insist on admin. Shape check on the real source: the handler's
+  // first statement is requireAdmin with its result checked.
+  for (const marker of ['partPhotoDefaultMatch && req.method === "POST"', 'supplierLogoMatch && (req.method === "POST" || req.method === "DELETE")']) {
+    const at = SRC.indexOf(marker);
+    assert.ok(at > 0, `handler not found: ${marker}`);
+    const head = SRC.slice(at, at + 400);
+    assert.match(head, /const session = await requireAdmin\(req\);\s*\n\s*if \(!session\) return sendJson\(res, 403/, `${marker} must reject non-admins`);
+  }
+});
+
 check('the admin surfaces around it did not move', () => {
   assert.equal(needsAuth('GET', '/api/users'), 'admin');
   assert.equal(needsAuth('GET', '/api/admin/territory-export'), 'admin');
@@ -172,6 +215,56 @@ check('the three routes that had the no-op gate now check the answer', () => {
   }
 });
 
+check('Photo Review writes (M3b) and backfill actions (M3c) check the admin answer', () => {
+  for (const marker of [
+    'photoReviewSkuMatch && req.method === "POST"',
+    'photoReviewFittingMatch && req.method === "POST"',
+    'backfillActionMatch && req.method === "POST"',
+    'pathname === "/api/part-photo-backfill/probe"',
+    'pathname === "/api/part-photo-backfill/wave"',
+  ]) {
+    const at = SRC.indexOf(marker);
+    assert.ok(at > 0, `route not found: ${marker}`);
+    const block = SRC.slice(at, at + 600);
+    assert.match(block, /const session = await requireAdmin\(req\);/, `${marker}: binds the result`);
+    assert.match(block, /if \(!session\) return sendJson\(res, 403/, `${marker}: rejects when it is null`);
+  }
+});
+
+check('the only start door is the hard-limited calibration (M3c): no general start, no full catalog, nothing at boot', () => {
+  // startCalibration() fixes the SKU list (the approved 15-part sample),
+  // forces auto-approve OFF and refuses while a run is active. The general
+  // start()/kick()/retry() must never be reachable from a route.
+  assert.ok(!/photoBackfill\.(start|kick|retry)\(/.test(SRC), 'server.js calls the general start/kick/retry');
+  assert.equal((SRC.match(/photoBackfill\.startCalibration\(/g) || []).length, 1, 'exactly one startCalibration call site');
+  // The re-run door (approved 2026-09-27) is limited by the engine to the
+  // last calibration's parts that still have no live photo.
+  assert.equal((SRC.match(/photoBackfill\.startCalibrationRerun\(/g) || []).length, 1, 'exactly one startCalibrationRerun call site');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/rerun-unresolved'), 'user');
+  const at = SRC.indexOf('backfillActionMatch && req.method === "POST"');
+  const block = SRC.slice(at, at + 2500);
+  assert.ok(!/autoApprove\s*:\s*true/.test(block), 'the route must never pass autoApprove: true');
+  assert.ok(!/skus\s*:/.test(block), 'the route must never choose its own SKU list');
+  // The re-run may narrow to a subset (`only`), but the engine intersects it
+  // with the unresolved calibration parts and refuses anything outside.
+  assert.match(block, /startCalibrationRerun\(\{ by, only \}\)/, 'the re-run passes only a subset request, never a SKU list of its own');
+  assert.ok(!/part-photo-backfill\/(full|catalog|all|run)/.test(SRC), 'a full-catalog route exists');
+  // The wave (≤30 unprocessed parts): exactly one start site, and the route
+  // only relays the list Patrick confirmed — the engine refuses any list
+  // that isn't the plan it would run now.
+  assert.equal((SRC.match(/photoBackfill\.startWave\(/g) || []).length, 1, 'exactly one startWave call site');
+  const wat = SRC.indexOf('pathname === "/api/part-photo-backfill/wave"');
+  const wblock = SRC.slice(wat, wat + 1800);
+  assert.ok(!/autoApprove\s*:\s*true/.test(wblock), 'the wave route must never pass autoApprove: true');
+  assert.match(wblock, /startWave\(\{ by, skus: Array\.isArray\(payload && payload\.skus\)/, 'the wave route passes only the confirmed list');
+  assert.ok(!/size\s*:/.test(wblock), 'the wave route must not widen the size');
+  // Nothing starts when the process boots: the client is created lazily and
+  // the runner is only ever kicked from startCalibration()/resume().
+  const boot = SRC.slice(SRC.indexOf('const photoAi = (() => {'), SRC.indexOf('const { buildReviewQueues }'));
+  assert.match(boot, /real \|\|= photoAiLib\.createPhotoAI\(\{ client: photoAiLib\.createAnthropicClient\(\) \}\)/, 'the Claude client is created lazily, not at boot');
+  assert.ok(!/photoBackfill\.(resume|startCalibration|load)\(\)/.test(boot), 'the backfill is touched at boot');
+});
+
 check('the check catches the exact bug it was written for', () => {
   // Without this, a green run could mean the matcher never fires.
   const bare = ['  try {', '    await requireAdmin(req);', '    doTheThing();']
@@ -182,3 +275,32 @@ check('the check catches the exact bug it was written for', () => {
 
 console.log(`\nadmin-gates: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+// The benchmark-plan route parses its own query (the handler has no `url`
+// binding in scope — production answered "url is not defined", 2026-09-28).
+{
+  const at = SRC.indexOf('pathname === "/api/part-photo-backfill/benchmark-plan"');
+  const block = SRC.slice(at, at + 900);
+  assert.ok(!/[^.\w]url\.searchParams/.test(block), 'benchmark-plan must not use an out-of-scope `url`');
+  assert.match(block, /new URL\(req\.url, "http:\/\/localhost"\)\.searchParams\.get\("skus"\)/, 'benchmark-plan parses its query from req.url');
+  passed++;
+}
+
+// Quality upgrade of live photos (Patrick, Sep 28 2026): every write is
+// admin-gated, the apply route passes only the confirmed hash list, and
+// the plan never runs on its own.
+{
+  assert.equal(needsAuth('GET', '/api/part-photo-quality/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/upgrade'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/review/PG-0001'), 'user');
+  for (const p of ['pathname === "/api/part-photo-quality/plan"', 'pathname === "/api/part-photo-quality/upgrade"']) {
+    const at = SRC.indexOf('req.method === "POST" && ' + p);
+    assert.ok(at > 0, `POST route for ${p} exists`);
+    assert.match(SRC.slice(at, at + 400), /requireAdmin\(req\)/, `${p} POST requires admin`);
+  }
+  assert.equal((SRC.match(/photoQuality\.apply\(/g) || []).length, 1, 'exactly one apply call site');
+  assert.match(SRC, /photoQuality\.apply\(\{ by, hashes: Array\.isArray\(payload && payload\.hashes\)/, 'apply passes only the confirmed list');
+  assert.equal((SRC.match(/photoQuality\.buildPlan\(/g) || []).length, 1, 'the plan is built only from its admin route');
+  passed++;
+}

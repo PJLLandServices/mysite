@@ -198,6 +198,24 @@ const IN_WINDOW = at(9, 20, 10);
     uiSrc.includes("confirmControl(stop.confirmation)") && uiSrc.includes("confirmControl(b.confirmation)"));
   ok("the button posts to the route the server serves",
     uiSrc.includes("/send-confirmation"));
+
+  // 2026-09-25: the tag said "confirmed Sep 19" the moment WE messaged the
+  // customer, which read as their answer, and there was no way on the
+  // plan to record a "yes" given by phone. The payload now carries the
+  // customer's answer separately, and the panel says which is which.
+  ok("the plan payload carries the customer's ANSWER, not just our send",
+    /respondedAt: o\.respondedAt/.test(serverSrc) && /responseVia: o\.responseVia/.test(serverSrc));
+  ok("a sent-but-unanswered stop says so, instead of 'confirmed'",
+    uiSrc.includes("no reply yet") && !/`confirmed \$\{when/.test(uiSrc));
+  ok("the customer's own confirmation is its own tag",
+    uiSrc.includes("customer confirmed"));
+  ok("the plan offers Mark confirmed, posting to the manual-response route",
+    uiSrc.includes("Mark confirmed") && uiSrc.includes("/mark-responded")
+    && serverSrc.includes("/mark-responded$/"));
+  const bookingsLib = require(path.join(ROOT, "server/lib/bookings.js"));
+  ok("every way a customer can answer has words for the tooltip",
+    ["confirm", "sms_reply", "manual", "reschedule", "window", "free_bucket"]
+      .every((v) => typeof bookingsLib.responseLabel === "function" && bookingsLib.responseLabel(v).length > 0));
 }
 
 if (failures.length) {

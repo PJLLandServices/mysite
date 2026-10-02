@@ -20,6 +20,8 @@
 //     phone: "905-555-1234",         // optional
 //     address: "1 Yard Rd, ...",     // optional; printed on PO header
 //     notes: "",                     // free-form internal notes
+//     shortName: "SiteOne",          // picker supplier chip (P-PJL-35 M2a)
+//     logo: { hash, width, height }, // official company logo, server/data/supplier-logos/<hash>.png
 //     archived: false,               // true hides from default lists
 //     createdAt, updatedAt
 //   }
@@ -68,6 +70,8 @@ function hydrate(s) {
     phone: typeof s?.phone === "string" ? s.phone : "",
     address: typeof s?.address === "string" ? s.address : "",
     notes: typeof s?.notes === "string" ? s.notes : "",
+    shortName: typeof s?.shortName === "string" ? s.shortName : "",
+    logo: s?.logo && /^[a-f0-9]{64}$/.test(String(s.logo.hash || "")) ? { hash: s.logo.hash, width: Number(s.logo.width) || null, height: Number(s.logo.height) || null } : null,
     archived: s?.archived === true,
     createdAt: s?.createdAt || nowIso(),
     updatedAt: s?.updatedAt || nowIso()
@@ -101,7 +105,8 @@ function normalizePayload(payload) {
     email: cap(payload?.email, 254).toLowerCase(),
     phone: cap(payload?.phone, 40),
     address: cap(payload?.address, 400),
-    notes: cap(payload?.notes, 2000)
+    notes: cap(payload?.notes, 2000),
+    shortName: cap(payload?.shortName, 24)
   };
 }
 
@@ -145,6 +150,9 @@ async function update(id, payload) {
   const current = records[idx];
   const fields = normalizePayload(payload);
   if (!fields.name) throw new Error("Supplier name is required.");
+  // A caller that doesn't send shortName (an older form, a script) must
+  // not erase it. The logo is never set through update() — see setLogo().
+  if (!payload || !Object.prototype.hasOwnProperty.call(payload, "shortName")) delete fields.shortName;
   const next = {
     ...current,
     ...fields,
@@ -168,7 +176,19 @@ async function setArchived(id, archived) {
   return records[idx];
 }
 
+// Set (or clear, with null) the company logo. Kept out of update() so an
+// ordinary edit can never drop it.
+async function setLogo(id, logo) {
+  const records = await readAll();
+  const idx = records.findIndex((s) => s.id === id);
+  if (idx === -1) return null;
+  records[idx] = hydrate({ ...records[idx], logo: logo || null, updatedAt: nowIso() });
+  await writeAll(records);
+  return records[idx];
+}
+
 module.exports = {
+  setLogo,
   list,
   get,
   create,

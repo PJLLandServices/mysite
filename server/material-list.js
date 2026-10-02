@@ -90,7 +90,10 @@
     parentCache: { project: null, work_order: null, quote: null },
 
     // Copy-from-past state. Cache the lists index after first open.
-    copyCache: null
+    copyCache: null,
+
+    // Supplier records by id, for the picker chip and panel (M2a).
+    suppliersById: {}
   };
 
   const PARENT_TYPE_LABELS = {
@@ -176,11 +179,13 @@
     try {
       // Load catalog + list in parallel — the catalog is used by every
       // render path so blocking on it is fine.
-      const [catalog, listRes] = await Promise.all([
+      const [catalog, listRes, suppliersById] = await Promise.all([
         fetchCatalog(),
-        fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, { cache: "no-store" }).then((r) => r.json())
+        fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, { cache: "no-store" }).then((r) => r.json()),
+        fetchSuppliers()
       ]);
       state.catalog = catalog;
+      state.suppliersById = suppliersById;
       if (!listRes || !listRes.ok || !listRes.list) {
         showError((listRes && listRes.errors && listRes.errors[0]) || "Couldn't load this material list.");
         return;
@@ -200,6 +205,32 @@
     els.loading.hidden = true;
     els.error.hidden = false;
     els.error.textContent = message;
+  }
+
+  // Suppliers for the picker's supplier chip and panel (names, short names,
+  // logos, archived). Archived ones are included so an old assignment still
+  // shows who it was — greyed and not addable. If this fails the picker
+  // still works; chips fall back to lettered badges.
+  async function fetchSuppliers() {
+    try {
+      const r = await fetch("/api/suppliers?includeArchived=1", { cache: "no-store" });
+      const data = await r.json();
+      const map = {};
+      for (const sp of (data && data.suppliers) || []) map[sp.id] = sp;
+      return map;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  // One row per real fitting (P-PJL-35 M2a): window.PickerRows groups
+  // verified same-fitting part numbers. Rebuilt per render; rowByKey lets
+  // the click handler find the row a button belongs to.
+  let rowByKey = new Map();
+  function pickerRows(parts) {
+    const rows = window.PickerRows.buildRows(parts);
+    for (const r of rows) rowByKey.set(r.key, r);
+    return rows;
   }
 
   async function fetchCatalog() {
@@ -330,12 +361,12 @@
   function renderCatalogTree() {
     if (!state.catalog) return;
     const cats = state.catalog.categories || [];
+    rowByKey = new Map();
     const partsByCat = new Map();
-    for (const part of Object.values(state.catalog.parts || {})) {
-      if (!part || !part.sku) continue;
-      const key = part.category || "other";
+    for (const row of pickerRows(Object.values(state.catalog.parts || {}))) {
+      const key = row.defaultPart.category || "other";
       if (!partsByCat.has(key)) partsByCat.set(key, []);
-      partsByCat.get(key).push(part);
+      partsByCat.get(key).push(row);
     }
     // Sort within each category by subcategory + numeric size for predictable order.
     function sizeRank(s) {
@@ -343,13 +374,16 @@
       return m ? parseFloat(m[0]) : 999;
     }
     for (const list of partsByCat.values()) {
-      list.sort((a, b) => (a.subcategory || "").localeCompare(b.subcategory || "") || sizeRank(a.size) - sizeRank(b.size));
+      list.sort((ra, rb) => {
+        const a = ra.defaultPart, b = rb.defaultPart;
+        return (a.subcategory || "").localeCompare(b.subcategory || "") || sizeRank(a.size) - sizeRank(b.size);
+      });
     }
-    const inListSkus = new Set((state.list.lineItems || []).map((l) => l.sku));
+    const lines = state.list.lineItems || [];
     els.catalogTree.innerHTML = cats.map((cat) => {
       const items = partsByCat.get(cat.key) || [];
       if (!items.length) return "";
-      const inListCount = items.filter((p) => inListSkus.has(p.sku)).length;
+      const inListCount = items.filter((r) => window.PickerRows.qtyInList(r, lines) > 0).length;
       return `
         <details class="mlb-browse-cat">
           <summary>
@@ -357,27 +391,333 @@
             <span class="mlb-browse-cat-meta">${items.length}${inListCount ? ` · ${inListCount} in list` : ""}</span>
           </summary>
           <div class="mlb-browse-list">
-            ${items.map((p) => renderResult(p, inListSkus.has(p.sku))).join("")}
+            ${items.map((r) => renderResult(r, window.PickerRows.qtyInList(r, lines) > 0)).join("")}
           </div>
         </details>
       `;
     }).join("");
   }
 
-  function renderResult(part, isInList) {
+  // ---- Part photos (P-PJL-35) -----------------------------------------
+  // The server decides whether a photo may show (lib/part-photos.js,
+  // photoStateFor) and sends `photo` only when it is verified. This code
+  // never second-guesses that: no photo → the explicit "No photo" tile,
+  // never a stand-in image. The photo is identity, not decoration.
+  const NO_PHOTO_TITLE = {
+    none: "No verified photo yet",
+    tbd: "No verified photo yet",
+    changed: "No verified photo yet",
+    not_confident: "No reliable photo found"
+  };
+  const NO_PHOTO_REASON = {
+    none: "This part hasn't been given a verified photo yet.",
+    tbd: "A possible photo is waiting on the review screen. It stays hidden here until it's approved.",
+    changed: "This part's number or description changed after its photo was matched, so the photo is hidden until it's reconfirmed.",
+    not_confident: "No photo could be verified for this exact part, so none is shown rather than a guess."
+  };
+  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  const ICON_NO_PHOTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h3l2-2.5h6L17 7h3v11.5H4z"/><circle cx="12" cy="12.5" r="3.5"/><path d="M3 3l18 18"/></svg>';
+
+  function hasVerifiedPhoto(part) {
+    return !!(part && part.photoState === "verified" && part.photo && part.photo.thumb);
+  }
+  function noPhotoState(part) {
+    const s = part && part.photoState;
+    return NO_PHOTO_TITLE[s] ? s : "none";
+  }
+  function renderPartThumb(part) {
+    const desc = escapeHtml(part.description || part.sku);
+    if (hasVerifiedPhoto(part)) {
+      return `<button type="button" class="mlb-thumb is-verified" data-action="photo" aria-label="View larger photo of ${desc}" title="Verified photo">
+          <img src="${escapeHtml(part.photo.thumb)}"${part.photo.thumb2x ? ` srcset="${escapeHtml(part.photo.thumb)} 1x, ${escapeHtml(part.photo.thumb2x)} 2x"` : ""} alt="" width="64" height="64" loading="lazy" decoding="async">
+          <span class="mlb-thumb-badge">${ICON_CHECK}</span>
+        </button>`;
+    }
+    const title = NO_PHOTO_TITLE[noPhotoState(part)];
+    return `<button type="button" class="mlb-thumb is-nophoto" data-action="photo" aria-label="${title} for ${desc}. Show why" title="${title}">
+        <span class="mlb-noph">${ICON_NO_PHOTO}<span>No photo</span></span>
+      </button>`;
+  }
+
+  // row: from window.PickerRows.buildRows. Everything shown — description,
+  // part #, price, supplier chip — and the main Add come from the fitting's
+  // default part (chosen on the Part photos page).
+  function renderResult(row, isInList) {
+    const part = row.defaultPart;
     const sizeBadge = part.size ? `<span class="crm-parts-size">${escapeHtml(part.size)}</span>` : "";
+    const noReliable = part.photoState === "not_confident" ? ` &middot; <span class="mlb-noreli">No reliable photo</span>` : "";
+    const others = row.members.length - 1;
+    const alsoAs = others > 0 ? ` &middot; <span class="mlb-alsoas" title="${escapeHtml(row.members.slice(1).map((p) => p.sku).join(", "))}">+${others} part #${others === 1 ? "" : "s"}</span>` : "";
     return `
-      <div class="mlb-result" data-sku="${escapeHtml(part.sku)}">
+      <div class="mlb-result" data-sku="${escapeHtml(part.sku)}" data-row="${escapeHtml(row.key)}">
+        ${renderPartThumb(part)}
         <div class="mlb-result-info">
           <div class="mlb-result-desc">${sizeBadge} ${escapeHtml(part.description || part.sku)}</div>
           <div class="mlb-result-meta">
             <span class="mlb-line-sku">${escapeHtml(part.sku)}</span>
-            &middot; ${fmtCents(part.priceCents)} / ${escapeHtml(part.unit || "each")}
+            &middot; ${fmtCents(part.priceCents)} / ${escapeHtml(part.unit || "each")}${alsoAs}${noReliable}
           </div>
+          <div class="mlb-result-sup">${renderSupplierChip(row)}</div>
         </div>
         <button type="button" class="mlb-result-add ${isInList ? "is-added" : ""}" data-action="add" aria-label="Add ${escapeHtml(part.sku)}">${isInList ? "+1" : "Add"}</button>
       </div>
     `;
+  }
+
+  // ---- Photo viewer ----------------------------------------------------
+  // Desktop: a centred dialog. Phone (≤640px): a bottom sheet with a drag
+  // handle. Closes on ×, Esc, a click outside, a swipe down, or the
+  // browser/phone Back button (the viewer pushes a history entry). It
+  // shows the photo and who verified it; it has no Add button, so looking
+  // at a part can never add it.
+  let viewer = null;
+  function fmtDay(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+  function trustHtml(part) {
+    if (!hasVerifiedPhoto(part)) {
+      const s = noPhotoState(part);
+      return `<div class="mlb-pv-trust is-none">${ICON_NO_PHOTO}<div><b>${NO_PHOTO_TITLE[s]}</b>${escapeHtml(NO_PHOTO_REASON[s])}<br>You can still add this part. Pick it by part #.</div></div>`;
+    }
+    const p = part.photo;
+    const who = p.approvedBy ? escapeHtml(p.approvedBy) : "staff";
+    const when = fmtDay(p.approvedAt);
+    let line;
+    if (p.method === "url") line = `From ${escapeHtml(p.sourceDomain || "the web")}, approved by ${who}${when ? ` on ${when}` : ""}.`;
+    else if (p.method === "upload") line = `Photo set by ${who}${when ? ` on ${when}` : ""}.`;
+    else line = `Passed the automated photo checks${when ? ` on ${when}` : ""}.`;
+    return `<div class="mlb-pv-trust is-verified"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 12.5l3 3 6-6.5"/></svg><div><b>Verified photo</b>${line}</div></div>`;
+  }
+  // ---- Suppliers (P-PJL-35 M2a) ----------------------------------------
+  // The chip shows the fitting's default part's default supplier; the
+  // panel lists every supplier offer behind the row. The grouping, default
+  // and offer rules live in /crm/picker-rows.js (window.PickerRows), shared
+  // with scripts/test-picker-rows.mjs.
+  function supplierName(s) { return s ? (s.shortName || s.name || s.id) : "No supplier"; }
+  function logoHtml(s, cls) {
+    if (s && s.logo && s.logo.hash) {
+      return `<img class="${cls} mlb-suplogo" src="/api/supplier-logos/${escapeHtml(s.logo.hash)}.png" alt="${escapeHtml(supplierName(s))}" data-mono="${escapeHtml(window.PickerRows.monogram(s))}" loading="lazy" decoding="async">`;
+    }
+    return `<span class="${cls} mlb-supmono" aria-hidden="true">${escapeHtml(window.PickerRows.monogram(s))}</span><span class="mlb-supname">${escapeHtml(supplierName(s))}</span>`;
+  }
+  function renderSupplierChip(row) {
+    const chip = window.PickerRows.chipFor(row, state.suppliersById);
+    const name = chip.supplierId ? supplierName(chip.supplier) : "No supplier set";
+    return `<button type="button" class="mlb-supchip${chip.supplier && chip.supplier.archived ? " is-archived" : ""}" data-action="suppliers" aria-haspopup="dialog" aria-expanded="false"
+        aria-label="Default supplier: ${escapeHtml(name)}${chip.more ? `, and ${chip.more} more` : ""}. Show suppliers" title="Suppliers for this ${row.members.length > 1 ? "fitting" : "part"}">
+        ${chip.supplierId ? logoHtml(chip.supplier, "mlb-supchip-logo") : `<span class="mlb-supname">No supplier</span>`}
+        ${chip.more ? `<span class="mlb-supchip-more">+${chip.more}</span>` : ""}
+        <svg class="mlb-supchip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>`;
+  }
+  function offerPrice(o, unit) {
+    return o.priceCents == null ? `<span class="mlb-offer-noquote">No quote</span>` : `<b>${fmtCents(o.priceCents)}</b> / ${escapeHtml(unit || "each")}`;
+  }
+  // withAdd: the supplier panel (true) or the read-only photo viewer (false).
+  function offersHtml(row, { withAdd }) {
+    const offers = window.PickerRows.offersFor(row, state.suppliersById);
+    const partsBySku = Object.fromEntries(row.members.map((p) => [p.sku, p]));
+    const count = new Set(offers.map((o) => o.supplierId || "none:" + o.sku)).size;
+    const heading = row.members.length > 1
+      ? `Same fitting from ${count} supplier${count === 1 ? "" : "s"} · one photo`
+      : `${count} supplier${count === 1 ? "" : "s"}`;
+    const items = offers.map((o) => {
+      const part = partsBySku[o.sku];
+      const theirNo = o.supplierSku && o.supplierSku !== o.sku
+        ? `their # <span class="mlb-line-sku">${escapeHtml(o.supplierSku)}</span> · our # <span class="mlb-line-sku">${escapeHtml(o.sku)}</span>`
+        : `<span class="mlb-line-sku">${escapeHtml(o.sku)}</span>`;
+      const badge = o.isDefault ? ` <span class="mlb-offer-default">Default</span>` : "";
+      let action = "";
+      if (withAdd) {
+        action = o.canAdd
+          ? `<button type="button" class="mlb-offer-add" data-action="add-offer" data-offer-sku="${escapeHtml(o.sku)}" aria-label="Add ${escapeHtml(o.sku)} from ${escapeHtml(supplierName(o.supplier))}">Add</button>`
+          : `<span class="mlb-offer-na"><button type="button" class="mlb-offer-add" disabled aria-disabled="true">Add</button><span>${escapeHtml(o.reason || "")}</span></span>`;
+      }
+      return `<div class="mlb-offer${o.canAdd ? "" : " is-disabled"}">
+          <span class="mlb-offer-logo">${o.supplierId ? logoHtml(o.supplier, "mlb-offer-logo-img") : `<span class="mlb-supname">No supplier set</span>`}</span>
+          <span class="mlb-offer-info"><span class="mlb-offer-name">${escapeHtml(o.supplierId ? (o.supplier ? o.supplier.name : o.supplierId) : "No supplier set")}${badge}</span><span class="mlb-offer-no">${theirNo}</span></span>
+          <span class="mlb-offer-price">${offerPrice(o, part && part.unit)}</span>
+          ${action}
+        </div>`;
+    }).join("");
+    const note = row.members.length > 1 ? `<p class="mlb-offer-note">Each supplier keeps its own part number and price.</p>` : "";
+    return `<div class="mlb-offers"><h3>${heading}</h3>${note}${items}</div>`;
+  }
+
+  // ---- Overlay (photo viewer + supplier sheet) -------------------------
+  // Desktop: a centred dialog. Phone (≤640px): a bottom sheet with a drag
+  // handle. Closes on ×, Esc, a click outside, a swipe down, or the
+  // browser/phone Back button (the overlay pushes a history entry).
+  function mountOverlay({ label, headHtml, bodyHtml, trigger, onClick }) {
+    closePhotoViewer(true);
+    closeSupplierPopover();
+    const overlay = document.createElement("div");
+    overlay.className = "mlb-pv";
+    overlay.innerHTML = `
+      <div class="mlb-pv-dlg" role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}">
+        <div class="mlb-pv-handle" aria-hidden="true"></div>
+        <div class="mlb-pv-head">
+          <div class="mlb-pv-title">${headHtml}</div>
+          <button type="button" class="mlb-pv-close" data-pv="close" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        ${bodyHtml}
+      </div>`;
+    document.body.appendChild(overlay);
+    const dlg = overlay.querySelector(".mlb-pv-dlg");
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.closest("[data-pv='close']")) { closePhotoViewer(); return; }
+      if (onClick) onClick(e);
+    });
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closePhotoViewer(); return; }
+      if (e.key !== "Tab") return;
+      const focusables = [...dlg.querySelectorAll("button:not([disabled]), a[href]")];
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    enableSheetSwipe(dlg);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    viewer = { overlay, trigger, prevOverflow, pushed: false };
+    try { history.pushState({ mlbPhotoViewer: true }, ""); viewer.pushed = true; } catch (_) { /* ignore */ }
+    overlay.querySelector(".mlb-pv-close").focus({ preventScroll: true });
+    return overlay;
+  }
+  function partHeadHtml(part) {
+    const sizeBadge = part.size ? `<span class="crm-parts-size">${escapeHtml(part.size)}</span> ` : "";
+    return `<h2>${sizeBadge}${escapeHtml(part.description || part.sku)}</h2>
+      <p><span class="mlb-line-sku">${escapeHtml(part.sku)}</span>${part.manufacturer ? ` &middot; ${escapeHtml(part.manufacturer)}` : ""}</p>`;
+  }
+  function openPhotoViewer(row, trigger) {
+    const part = row.defaultPart;
+    const verified = hasVerifiedPhoto(part);
+    const desc = part.description || part.sku;
+    const stage = verified
+      // The 2000 copy exists only when the source was larger than 1200 —
+      // never an upscale — so a retina phone or a desktop monitor gets it.
+      ? `<div class="mlb-pv-stage"><img src="${escapeHtml(part.photo.large)}" srcset="${escapeHtml(part.photo.largeMobile)} 480w, ${escapeHtml(part.photo.large)} 1200w${part.photo.full ? `, ${escapeHtml(part.photo.full)} 2000w` : ""}" sizes="(max-width: 640px) 100vw, 720px" alt="${escapeHtml(desc)}"></div>`
+      : `<div class="mlb-pv-stage is-empty"><span class="mlb-noph mlb-noph--big">${ICON_NO_PHOTO}<span>No photo</span></span></div>`;
+    const overlay = mountOverlay({
+      label: (verified ? "Photo of " : "No photo for ") + desc,
+      headHtml: partHeadHtml(part),
+      // Read-only offers: the viewer never adds anything.
+      bodyHtml: `${stage}${trustHtml(part)}${offersHtml(row, { withAdd: false })}
+        <p class="mlb-pv-manage"><a href="/admin/part-photos?sku=${encodeURIComponent(part.sku)}">${verified ? "Manage this photo" : "Set a photo for this part"}</a></p>`,
+      trigger
+    });
+    const img = overlay.querySelector(".mlb-pv-stage img");
+    if (img) img.addEventListener("error", () => {
+      img.parentElement.classList.add("is-empty");
+      img.outerHTML = `<span class="mlb-noph mlb-noph--big">${ICON_NO_PHOTO}<span>Photo unavailable</span></span>`;
+    });
+  }
+
+  // Supplier panel: a popover under the chip on desktop, the bottom sheet
+  // on a phone. Each offer's Add adds THAT part number; offers that would
+  // need a per-line supplier are shown but disabled.
+  let supplierPopover = null;
+  function closeSupplierPopover() {
+    if (!supplierPopover) return;
+    const { el, chip } = supplierPopover;
+    supplierPopover = null;
+    el.remove();
+    if (chip && chip.isConnected) chip.setAttribute("aria-expanded", "false");
+  }
+  function addFromOffer(sku, rowEl) {
+    addOrIncrementLine(sku);
+    const btn = rowEl && rowEl.querySelector("[data-action='add']");
+    if (btn) { btn.classList.add("is-added"); btn.textContent = "+1"; }
+  }
+  function openSupplierPanel(row, chip) {
+    const rowEl = chip.closest(".mlb-result");
+    if (window.innerWidth <= 640) {
+      mountOverlay({
+        label: "Suppliers for " + (row.defaultPart.description || row.defaultPart.sku),
+        headHtml: partHeadHtml(row.defaultPart),
+        bodyHtml: offersHtml(row, { withAdd: true }),
+        trigger: chip,
+        onClick: (e) => {
+          const b = e.target.closest("[data-action='add-offer']");
+          if (!b) return;
+          closePhotoViewer();
+          addFromOffer(b.dataset.offerSku, rowEl);
+        }
+      });
+      return;
+    }
+    if (supplierPopover && supplierPopover.chip === chip) { closeSupplierPopover(); return; }
+    closeSupplierPopover();
+    const el = document.createElement("div");
+    el.className = "mlb-suppop";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Suppliers for " + (row.defaultPart.description || row.defaultPart.sku));
+    el.innerHTML = offersHtml(row, { withAdd: true });
+    rowEl.appendChild(el);
+    // Near the bottom of the screen the drop-down would slide under the
+    // sticky save bar — open it upward instead.
+    const bar = els.savebar && !els.savebar.hidden ? els.savebar.getBoundingClientRect().top : window.innerHeight;
+    if (el.getBoundingClientRect().bottom > bar - 8) el.classList.add("is-up");
+    chip.setAttribute("aria-expanded", "true");
+    supplierPopover = { el, chip };
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const b = e.target.closest("[data-action='add-offer']");
+      if (!b) return;
+      closeSupplierPopover();
+      addFromOffer(b.dataset.offerSku, rowEl);
+    });
+    el.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeSupplierPopover(); chip.focus(); } });
+    const first = el.querySelector("button:not([disabled])");
+    if (first) first.focus({ preventScroll: true });
+  }
+  document.addEventListener("click", (e) => {
+    if (supplierPopover && !e.target.closest(".mlb-suppop, [data-action='suppliers']")) closeSupplierPopover();
+  });
+  function closePhotoViewer(fromPopOrReplace) {
+    if (!viewer) return;
+    const v = viewer;
+    viewer = null;
+    v.overlay.remove();
+    document.body.style.overflow = v.prevOverflow;
+    // Closed by ×/Esc/outside/swipe: undo our history entry so Back still
+    // means "leave this page" afterwards.
+    if (v.pushed && !fromPopOrReplace) history.back();
+    if (!fromPopOrReplace && v.trigger && v.trigger.isConnected) v.trigger.focus({ preventScroll: true });
+  }
+  window.addEventListener("popstate", () => {
+    if (!viewer) return;
+    const trigger = viewer.trigger;
+    closePhotoViewer(true);
+    if (trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
+  });
+  function enableSheetSwipe(dlg) {
+    const grips = [dlg.querySelector(".mlb-pv-handle"), dlg.querySelector(".mlb-pv-head")];
+    let y0 = null, dy = 0;
+    grips.forEach((el) => {
+      el.addEventListener("pointerdown", (e) => {
+        if (window.innerWidth > 640 || e.target.closest("button, a")) return;
+        y0 = e.clientY; dy = 0; dlg.style.transition = "none";
+        try { el.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (y0 == null) return;
+        dy = Math.max(0, e.clientY - y0);
+        dlg.style.transform = `translateY(${dy}px)`;
+      });
+      const end = () => {
+        if (y0 == null) return;
+        y0 = null; dlg.style.transition = "transform .18s ease-out";
+        if (dy > 90) closePhotoViewer(); else dlg.style.transform = "";
+      };
+      el.addEventListener("pointerup", end);
+      el.addEventListener("pointercancel", end);
+    });
   }
 
   function renderSearchResults() {
@@ -387,17 +727,13 @@
       els.searchHint.hidden = true;
       return;
     }
-    const parts = Object.values(state.catalog.parts || {});
-    const matches = parts.filter((p) => {
-      const haystack = [
-        p.sku, p.partNumber, p.description, p.category, p.subcategory, p.size
-      ].map((v) => String(v || "").toLowerCase()).join(" ");
-      return haystack.includes(q);
-    });
+    // Rows, not parts: a fitting sold under several part numbers is one
+    // row, found by any of them (or any supplier's own part #).
+    const matches = pickerRows(Object.values(state.catalog.parts || {})).filter((row) => window.PickerRows.rowMatches(row, q));
     // Cap at 30 results — keeps the DOM small and the user typing toward
     // a more specific query rather than scrolling.
     const capped = matches.slice(0, 30);
-    const inListSkus = new Set((state.list.lineItems || []).map((l) => l.sku));
+    const lines = state.list.lineItems || [];
     if (!capped.length) {
       els.searchHint.hidden = false;
       els.searchHint.textContent = "No matching parts.";
@@ -408,7 +744,7 @@
     els.searchHint.textContent = matches.length > capped.length
       ? `Showing first ${capped.length} of ${matches.length} matches — keep typing to narrow.`
       : `${matches.length} match${matches.length === 1 ? "" : "es"}.`;
-    els.searchResults.innerHTML = capped.map((p) => renderResult(p, inListSkus.has(p.sku))).join("");
+    els.searchResults.innerHTML = capped.map((r) => renderResult(r, window.PickerRows.qtyInList(r, lines) > 0)).join("");
   }
 
   function renderSavebar() {
@@ -1138,6 +1474,23 @@
     // Search + browse — both render .mlb-result rows; one click handler
     // serves both surfaces.
     function onAddClick(event) {
+      // The photo is its own button. Opening it never adds the part —
+      // adding is always the deliberate press of Add.
+      const photoBtn = event.target.closest("[data-action='photo']");
+      if (photoBtn) {
+        const rowEl = photoBtn.closest("[data-row]");
+        const row = rowEl && rowByKey.get(rowEl.dataset.row);
+        if (row) openPhotoViewer(row, photoBtn);
+        return;
+      }
+      const chipBtn = event.target.closest("[data-action='suppliers']");
+      if (chipBtn) {
+        event.stopPropagation();
+        const rowEl = chipBtn.closest("[data-row]");
+        const row = rowEl && rowByKey.get(rowEl.dataset.row);
+        if (row) openSupplierPanel(row, chipBtn);
+        return;
+      }
       const button = event.target.closest("[data-action='add']");
       if (!button) return;
       const result = event.target.closest("[data-sku]");
@@ -1149,6 +1502,30 @@
     }
     els.searchResults.addEventListener("click", onAddClick);
     els.catalogTree.addEventListener("click", onAddClick);
+    // A verified photo that fails to load (offline, or deleted on the
+    // server) becomes the "No photo" tile, never a broken image. `error`
+    // doesn't bubble, so listen in the capture phase.
+    function onThumbError(event) {
+      const img = event.target;
+      if (!(img instanceof HTMLImageElement)) return;
+      if (img.classList.contains("mlb-suplogo")) {
+        const mono = document.createElement("span");
+        mono.className = "mlb-supmono";
+        mono.textContent = img.dataset.mono || "?";
+        const name = document.createElement("span");
+        name.className = "mlb-supname";
+        name.textContent = img.alt || "";
+        img.replaceWith(mono, name);
+        return;
+      }
+      const btn = img.closest(".mlb-thumb.is-verified");
+      const row = btn && btn.closest("[data-sku]");
+      if (!row) return;
+      const part = state.catalog && state.catalog.parts[row.dataset.sku];
+      btn.outerHTML = renderPartThumb({ ...(part || {}), sku: row.dataset.sku, photoState: "none", photo: null });
+    }
+    els.searchResults.addEventListener("error", onThumbError, true);
+    els.catalogTree.addEventListener("error", onThumbError, true);
 
     let searchTimer = null;
     els.search.addEventListener("input", () => {

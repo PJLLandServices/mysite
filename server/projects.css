@@ -121,6 +121,59 @@
 }
 .proj-back:hover { text-decoration: underline; }
 
+/* Workspace handoff band (2026-09-26) -----------------------------
+   Patrick walked the Tasks release, landed on this page, and saw no
+   change — because the rebuilt Tasks screen lives at /app and nothing
+   here said so. Two screens for one job with no signpost between them
+   is a bug in the transition, not in either screen.
+
+   Deliberately loud: it sits above the job, in brand green, with the
+   one action as a filled button. A quiet link is what it had before,
+   which is to say nothing at all. */
+.proj-workspace-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid #C6DDCC;
+  border-left: 4px solid #1B4D2E;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #F4FAF5, #EAF4EC);
+}
+.proj-workspace-band-text { min-width: 0; }
+.proj-workspace-band-text strong {
+  display: block;
+  font-size: 15px;
+  color: #143B23;
+}
+.proj-workspace-band-text span {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #3E5648;
+}
+.proj-workspace-band-btn { flex: 0 0 auto; }
+@media (max-width: 560px) {
+  /* Full width rather than squeezed beside the text — this is the
+     action the band exists for. */
+  .proj-workspace-band-btn { width: 100%; justify-content: center; }
+}
+
+/* And at the Tasks list itself, where the difference actually shows:
+   this list can say done or not done, and nothing in between. */
+.proj-tasks-workspace {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1B4D2E;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.proj-tasks-workspace:hover { text-decoration: underline; }
+
 .proj-loading {
   text-align: center;
   color: #6B6B63;

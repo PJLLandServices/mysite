@@ -6,7 +6,7 @@
 // happens to be narrow.
 //
 // One line worth being explicit about: the two buttons at the bottom of
-// each card WRITE. "Notify on route" sends a real SMS and email to a
+// each card WRITE. "Notify on route" sends a real text (no email) to a
 // real customer, and "Start work order" creates a work order when the
 // lead hasn't got one. Elsewhere this app reads natively and leaves
 // writing to the web pages. These two earn the exception because a
@@ -33,6 +33,7 @@ import {
   removeVisit,
   listPropertyWorkOrders,
   notifyOnRoute,
+  notifyBookingOnRoute,
   openWorkOrder,
 } from '../api';
 import { telHref } from '../format';
@@ -197,22 +198,25 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, onOpenTapToPay
   const confirmNotify = (b) => {
     Alert.alert(
       'Notify on route?',
-      `Texts and emails ${b.customerName || 'the customer'} to say you're on the way.`,
+      `Texts ${b.customerName || 'the customer'} to say you're on the way.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Send',
           style: 'default',
           onPress: async () => {
-            setBusyId(b.leadId);
+            setBusyId(rowKey(b));
             try {
-              await notifyOnRoute(b.leadId);
+              // A lead booking notifies through its lead; a season-plan
+              // visit (no lead) through its own booking record.
+              if (b.leadId) await notifyOnRoute(b.leadId);
+              else await notifyBookingOnRoute(b.bookingId);
               // Reflect it immediately rather than making them refresh
               // to find out whether it went.
               setPayload((prev) => prev && ({
                 ...prev,
                 bookings: prev.bookings.map((row) =>
-                  row.leadId === b.leadId
+                  rowKey(row) === rowKey(b)
                     ? { ...row, onRouteNotifiedAt: new Date().toISOString() }
                     : row),
               }));
@@ -528,7 +532,7 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, onOpenTapToPay
               <Action
                 label={notified ? 'Notified' : 'Notify'}
                 onPress={() => confirmNotify(b)}
-                disabled={notified || busy || !b.leadId}
+                disabled={notified || busy || !(b.leadId || b.bookingId)}
               />
               <Action
                 label={workOrderActionLabel(b)}

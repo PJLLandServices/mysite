@@ -118,8 +118,10 @@ try {
   const API = read("pjl-field/src/api.js");
   ok(/const alreadyDone = freshBeforeFinish\?\.status === 'completed';/.test(CLOSING), "Finish re-reads the WO and knows a completed job");
   ok(/if \(!alreadyDone && freshBeforeFinish\.zones/.test(CLOSING), "…and does not re-run the findings transfer on it");
-  ok(/signature: freshBeforeFinish\?\.signature\?\.signed \? null : result\.signature/.test(CLOSING),
-    "a signature already on file is never re-sent");
+  // …unless the work order changed in price after that signature and the
+  // server wants the customer's NEW one (re-signing, 2026-09-26).
+  ok(/signature: freshBeforeFinish\?\.signature\?\.signed && freshBeforeFinish\?\.resignature\?\.required !== true \? null : result\.signature/.test(CLOSING),
+    "a signature already on file is never re-sent (only a new one owed on a revised scope is sent)");
   ok(/if \(alreadyDone\) \{[\s\S]{0,200}completeWorkOrder\(workOrderId, \{\}\)/.test(CLOSING),
     "a completed job goes straight on to its invoice");
   ok(/fetchWithTimeout\(`\$\{HOST\}\/api\/work-orders\/\$\{encodeURIComponent\(id\)\}`, \{\s*method: 'PATCH'[\s\S]{0,200}FINISH_TIMEOUT_MS\)/.test(API),

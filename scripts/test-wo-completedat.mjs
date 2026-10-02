@@ -48,7 +48,9 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-wo-completedat-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // atomic-json.js: work-orders.js requires it since fall-closing fix #1.
-for (const f of ["work-orders.js", "warranty.js", "atomic-json.js"]) {
+// session-hours.js: since office corrections to session times and
+// labourer counts came in — the sandbox copy needs it to load at all.
+for (const f of ["work-orders.js", "warranty.js", "atomic-json.js", "session-hours.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }
 const require = createRequire(import.meta.url);

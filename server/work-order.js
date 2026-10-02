@@ -2834,6 +2834,10 @@ function renderUnlockControls(wo) {
   // and showing a re-lock button there would be nonsense.
   const showRelock = viewerIsAdmin && !locked && hasAcceptance;
   if (unlockedBanner) unlockedBanner.hidden = !showRelock;
+  // Re-signing (2026-09-26): the priced scope changed after acceptance.
+  // Shown locked or unlocked — the customer's new signature is owed either way.
+  const resignBanner = document.getElementById("woResignBanner");
+  if (resignBanner) resignBanner.hidden = wo.resignature?.required !== true;
   if (showRelock && unlockedMeta) {
     const lastUnlock = (Array.isArray(wo.history) ? wo.history : [])
       .filter((h) => h && h.action === "wo_unlocked")
@@ -2887,7 +2891,11 @@ document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
 
 document.getElementById("woRelockBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked === true) return;
-  if (!(await pjlDialog.confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.", { title: "Re-lock work order", confirmLabel: "Re-lock" }))) return;
+  const revised = loadedWorkOrder.resignature?.required === true;
+  const msg = revised
+    ? "Re-lock the revised work order? Its price is set and frozen now, and the customer still has to sign the revised work order before it can be completed or paid."
+    : "Re-lock this work order? Scope freezes again against the signature/bypass already on file.";
+  if (!(await pjlDialog.confirm(msg, { title: "Re-lock work order", confirmLabel: "Re-lock" }))) return;
   await postLockAction("relock", {});
 });
 

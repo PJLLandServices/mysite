@@ -262,65 +262,274 @@ function resolveSeasonalPrice(property, serviceType, { commercial = false, zoneC
   };
 }
 
+
+// ---- Suggested price for a closing Patrick prices himself (PJL-96) -----
+//
+// Ruling (Patrick, 2026-09-23): 16+ zone residential and 9+ zone
+// commercial are priced by Patrick, and so is every commercial account
+// without a price of its own. The system SUGGESTS a price from the zone
+// count so he has something to go off; he confirms or changes it on the
+// office invoice before anything is payable.
+//
+// THE RULE — pricing.json only, no typed prices (Hard Rule 21):
+//   Take the LAST TWO PRICED tiers of seasonal_tiers.<group> (custom-quote
+//   tiers skipped). Place each at its UPPER zone bound and its pricing.json
+//   item price, and extend the per-zone slope between them past the top
+//   priced tier:
+//
+//     perZone   = (price[top] − price[prev]) / (upper[top] − upper[prev])
+//     suggested = price[top] + (zones − upper[top]) × perZone
+//
+//   rounded to the whole dollar. On today's table that is residential
+//   7–8 → 9–15 and commercial 1–4 → 5–8. If pricing.json gains a tier,
+//   the rule follows it with no code change.
+//
+//   Inside a priced tier (a commercial account with no price of its own,
+//   ruling 2) the suggestion is simply that tier's price.
+//
+// Returns { amount, perZone, zones, tier, extraZones, key, basis } — basis
+// is the arithmetic in words, shown to Patrick on the office invoice and
+// never to the customer — or null when the table has no priced tier.
+function tierRange(t) {
+  const r = String(t?.zones || "").trim();
+  const lo = parseInt(r, 10) || 0;
+  if (r.endsWith("+")) return { lo, hi: Infinity };
+  if (r.includes("-")) {
+    const hi = parseInt(r.split("-")[1], 10);
+    return { lo, hi: Number.isFinite(hi) ? hi : lo };
+  }
+  return { lo, hi: lo };
+}
+const dollars = (n) => "$" + formatMoney(Math.round(Number(n) * 100) / 100);
+
+function suggestSeasonalPrice(woType, zoneCount, group = "residential") {
+  const tiers = PRICING?.seasonal_tiers?.[group];
+  if (!Array.isArray(tiers)) return null;
+  const keyField = woType === "spring_opening" ? "key_spring" : "key_fall";
+  const priced = tiers
+    .map((t) => ({ t, key: t[keyField], item: PRICING.items?.[t[keyField]], ...tierRange(t) }))
+    .filter((x) => x.item && x.item.quoteType !== "custom" && Number(x.item.price) > 0 && Number.isFinite(x.hi));
+  if (!priced.length) return null;
+  const zones = Math.max(0, Math.floor(Number(zoneCount) || 0));
+  const where = group === "commercial" ? "commercial " : "";
+  const n = Math.max(zones, priced[0].lo);
+  const inTier = priced.find((x) => n >= x.lo && n <= x.hi);
+  if (inTier || priced.length < 2) {
+    const x = inTier || priced[priced.length - 1];
+    const amount = Math.round(Number(x.item.price));
+    return {
+      amount, perZone: null, zones, tier: x.t.zones, extraZones: 0, key: x.key,
+      basis: `${zones} zone${zones === 1 ? "" : "s"}: suggested ${dollars(amount)}, the ${where}${x.t.zones} zone tier`
+    };
+  }
+  const prev = priced[priced.length - 2];
+  const top = priced[priced.length - 1];
+  const perZone = (Number(top.item.price) - Number(prev.item.price)) / (top.hi - prev.hi);
+  const extraZones = zones - top.hi;
+  const amount = Math.round(Number(top.item.price) + extraZones * perZone);
+  return {
+    amount, perZone: Math.round(perZone * 100) / 100, zones, tier: top.t.zones, extraZones, key: top.key,
+    basis: `${zones} zones: suggested ${dollars(amount)}, from the ${where}${top.t.zones} zone tier (${dollars(top.item.price)}) `
+      + `plus ${extraZones} zone${extraZones === 1 ? "" : "s"} at ${dollars(perZone)}/zone`
+  };
+}
+
+// ---- The seasonal fee POLICY (PJL-96) ----------------------------------
+//
+// Which price a spring opening / fall closing carries:
+//
+//   1. The property has its own price (seasonalPricing override)
+//        → that price, confirmed. Residential or commercial alike. (There is
+//        no account-level price on the customer record today.)
+//   2. A COMMERCIAL account with no price of its own → PRICE PENDING,
+//      reason "commercial_unpriced". The commercial tier table is not
+//      their price (ruling 2); it is only the suggestion.
+//   3. A custom-quote size (16+ residential, 9+ commercial) → PRICE
+//      PENDING, reason "custom_size" (ruling 3).
+//   4. Otherwise → the pricing.json tier price, confirmed.
+//
+// Returns { status: "confirmed"|"pending", price, key, source, tier,
+// reason, zoneCount }. A pending decision carries NO price: the work order
+// the customer signs never shows a number PJL has not set. The suggestion
+// is computed only when the office invoice is drafted (billableLines).
+const PRICE_PENDING_NOTES = {
+  custom_size: "Custom size — PJL confirms the price",
+  commercial_unpriced: "Commercial account — PJL confirms the price"
+};
+function seasonalFeeDecision(property, serviceType, { commercial = false, zoneCount = null } = {}) {
+  const resolved = resolveSeasonalPrice(property || {}, serviceType, { commercial, zoneCount });
+  const zones = Math.floor(Number(zoneCount) || 0) > 0 ? Math.floor(Number(zoneCount)) : effectiveZoneCount(property);
+  if (resolved.source === "property_override") {
+    return { status: "confirmed", price: resolved.price, key: resolved.key, source: resolved.source, tier: null, reason: null, zoneCount: zones };
+  }
+  if (commercial === true || resolved.custom) {
+    return {
+      status: "pending", price: null,
+      key: resolved.key || deriveSeasonalKey(serviceType, zones, commercial === true) || "",
+      source: "price_pending", tier: resolved.tier || null,
+      reason: commercial === true ? "commercial_unpriced" : "custom_size",
+      zoneCount: zones
+    };
+  }
+  return { status: "confirmed", price: resolved.price, key: resolved.key, source: resolved.source, tier: resolved.tier || null, reason: null, zoneCount: zones };
+}
+
+// A seasonal fee line marked price-pending: no price, the reason, and the
+// customer-safe note. The zones it was decided on ride in source so the
+// office invoice's suggestion is computed from the same count.
+function pendingFeeLine(line, decision) {
+  return {
+    ...line,
+    key: decision.key || line.key || "",
+    originalPrice: null,
+    overridePrice: null,
+    custom: true,
+    priceStatus: "pending",
+    priceReason: decision.reason,
+    note: PRICE_PENDING_NOTES[decision.reason] || PRICE_PENDING_NOTES.custom_size,
+    source: { ...(line.source || {}), baseline: true, recordedZones: decision.zoneCount }
+  };
+}
+const isPricePending = (line) => line?.priceStatus === "pending";
+
+// The seasonal baseline line in a builder list, or -1.
+function feeLineIndex(lines) {
+  return (Array.isArray(lines) ? lines : []).findIndex((l) => l && l.source && l.source.baseline === true
+    && !l.source.propertyAdditionalFallBlowout && l.key !== "fall_additional_plumbing" && !l.source.aiBonusCredit);
+}
+
+// The lines a work order BILLS. A price-pending fee line becomes a
+// SUGGESTED line priced by suggestSeasonalPrice — the invoice then drafts
+// with that amount prefilled and flagged for Patrick to confirm
+// (invoices.createDraft reads priceStatus "suggested"). Every other line
+// passes through untouched. Used by the completion cascade and the manual
+// create-invoice route, so both bill the same way.
+function billableLines(wo, lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  if (!list.some(isPricePending)) return list;
+  return list.map((l) => {
+    if (!isPricePending(l)) return l;
+    const zones = Number.isFinite(Number(l.source?.recordedZones)) ? Number(l.source.recordedZones) : 0;
+    const s = suggestSeasonalPrice(wo?.type, zones, l.priceReason === "commercial_unpriced" ? "commercial" : "residential");
+    return { ...l, originalPrice: s ? s.amount : 0, priceStatus: "suggested", suggestion: s };
+  });
+}
+
 // The seasonal fee a work order should bill, from the zones actually on it
 // (fall-closing fix #7). The baseline line is seeded when the WO is opened
 // — from the BOOKED count — and the cascade used to bill that snapshot, so
 // 4 booked / 6 walked billed the 1-4 tier. This re-resolves the same line
-// through resolveSeasonalPrice at completion (and for the app's preview):
+// through seasonalFeeDecision at completion (and for the app's preview):
 //
 //   * a per-property override still wins (it is resolveSeasonalPrice's
 //     first rule — grandfathered/legacy rates included);
 //   * a line Patrick priced by hand on this WO (overridePrice) is left alone;
-//   * a custom-quote tier (16+ residential, 9+ commercial) is left alone —
-//     no flat price to move to; Patrick prices it on the draft;
+//   * a custom-quote size or a commercial account without its own price
+//     becomes PRICE PENDING (PJL-96) — no flat price, Patrick confirms it on
+//     the office invoice — and a job with NO seeded line of that kind gets
+//     one inserted, so it can never close as free;
 //   * only the seasonal baseline line moves; the additional-plumbing line
 //     and anything else is untouched.
 //
-// Returns { lines, changed, before, after, zoneCount } — `lines` is the full
-// builder list with the baseline replaced when changed.
-// The note that marks a seasonal line Patrick still has to price. Read by
-// invoices.openForOnSitePayment so a placeholder price is never charged.
+// Returns { lines, changed, before, after, zoneCount, customQuote?,
+// pending?, inserted? } — `lines` is the full builder list with the
+// baseline replaced (or inserted) when changed. `after` for a pending line
+// is { key, price: null, custom: true, pending: true, reason }.
+//
+// The note that marked a custom line on drafts made before PJL-96. Still
+// read (invoices.isPriceUnconfirmed) so those drafts stay unpayable too.
 const CUSTOM_QUOTE_NOTE_PREFIX = "Custom quote — Patrick to price";
-function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
+//
+// NOTHING IS RE-PRICED AFTER SIGNING (PJL-96, ruling 1). The fee line is
+// priced at the moment the signature or bypass freezes the work order
+// (pricedQuoteForLock below, which stamps source.pricedAtLock). Pass
+// `frozen: true` for a locked WO: a stamped line then stands exactly as
+// signed — the signed WO, the report and the invoice carry one number.
+// An UNSTAMPED line on a locked WO (signed before this rule) still gets
+// the re-resolve, as the safety net it always was.
+function refreshSeasonalBaseline(wo, property, { commercial = false, frozen = false } = {}) {
   const lines = Array.isArray(wo?.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
   const none = { lines, changed: false, before: null, after: null, zoneCount: 0 };
   if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return none;
-  const idx = lines.findIndex((l) => l && l.source && l.source.baseline === true
-    && !l.source.propertyAdditionalFallBlowout && l.key !== "fall_additional_plumbing" && !l.source.aiBonusCredit);
+  const idx = feeLineIndex(lines);
   const zoneCount = Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0;
+  if (frozen && idx !== -1 && lines[idx]?.source?.pricedAtLock) {
+    const signed = lines[idx];
+    const asSigned = isPricePending(signed)
+      ? { key: signed.key || "", price: null, custom: true, pending: true, reason: signed.priceReason || null }
+      : { key: signed.key || "", price: Number(signed.overridePrice ?? signed.originalPrice) || 0 };
+    return { ...none, zoneCount, lockedAtSigning: true, pending: isPricePending(signed), customQuote: isPricePending(signed),
+      before: asSigned, after: asSigned };
+  }
+  const decision = seasonalFeeDecision(property || {}, wo.type, { commercial, zoneCount });
+  const pendingAfter = { key: decision.key || "", price: null, custom: true, pending: true, reason: decision.reason, source: decision.source, tier: decision.tier || null };
   if (idx === -1) {
-    // No seeded line: a custom-quote size from the start (16+ residential,
-    // 9+ commercial). Say so, so nobody reads the missing line as free.
-    const r = resolveSeasonalPrice(property || {}, wo.type, { commercial, zoneCount });
-    return r.custom
-      ? { ...none, zoneCount, changed: false, customQuote: true, before: null,
-          after: { key: r.key || "", price: null, custom: true, source: r.source, tier: r.tier || null } }
-      : none;
+    // No seeded line. A size Patrick prices (or an unpriced commercial
+    // account) gets a price-pending line INSERTED: before PJL-96 this job
+    // drafted no invoice at all and read "no charge".
+    if (decision.status !== "pending") return none;
+    const year = new Date(wo.scheduledFor || wo.createdAt || Date.now()).getUTCFullYear();
+    const base = {
+      key: decision.key || "",
+      label: `${wo.type === "spring_opening" ? "Spring Opening" : "Fall Closing"} (${year})`,
+      qty: 1,
+      source: { zoneNumbers: [], issueIds: [], baseline: true }
+    };
+    return { lines: [pendingFeeLine(base, decision), ...lines], changed: true, customQuote: true, pending: true, inserted: true,
+      before: null, after: pendingAfter, zoneCount };
   }
   const line = lines[idx];
   if (line.overridePrice != null && line.overridePrice !== "") return { ...none, zoneCount };
-  const resolved = resolveSeasonalPrice(property || {}, wo.type, { commercial, zoneCount });
-  const before = { key: line.key || "", price: Number(line.originalPrice) || 0 };
-  if (resolved.custom) {
-    // Round 2: 16+ residential / 9+ commercial has NO flat price. Don't
-    // silently bill the booked tier's: the line is flagged for Patrick to
-    // price on the draft, and the preview says so.
-    const note = `${CUSTOM_QUOTE_NOTE_PREFIX} (${zoneCount} zones${commercial ? ", commercial" : ""})`;
+  const before = isPricePending(line)
+    ? { key: line.key || "", price: null, pending: true }
+    : { key: line.key || "", price: Number(line.originalPrice) || 0 };
+  if (decision.status === "pending") {
+    const nextLine = pendingFeeLine(line, decision);
+    const same = isPricePending(line) && line.key === nextLine.key && line.priceReason === nextLine.priceReason
+      && Number(line.source?.recordedZones) === zoneCount;
+    if (same) return { ...none, zoneCount, customQuote: true, pending: true, before, after: pendingAfter };
     const next = [...lines];
-    next[idx] = { ...line, key: resolved.key || line.key || "", custom: true, note };
-    return { lines: next, changed: true, customQuote: true, before,
-      after: { key: resolved.key || "", price: null, custom: true, source: resolved.source, tier: resolved.tier || null }, zoneCount };
+    next[idx] = nextLine;
+    return { lines: next, changed: true, customQuote: true, pending: true, before, after: pendingAfter, zoneCount };
   }
-  const after = { key: resolved.key || line.key || "", price: resolved.price, source: resolved.source, tier: resolved.tier || null };
-  if (before.price === after.price && before.key === after.key) return { ...none, zoneCount, before, after };
+  const after = { key: decision.key || line.key || "", price: decision.price, source: decision.source, tier: decision.tier || null };
+  if (!isPricePending(line) && before.price === after.price && before.key === after.key) return { ...none, zoneCount, before, after };
   const next = [...lines];
+  const { priceStatus: _ps, priceReason: _pr, ...rest } = line;
+  const staleNote = rest.note === "Per-property rate" || Object.values(PRICE_PENDING_NOTES).includes(rest.note);
   next[idx] = {
-    ...line,
+    ...rest,
     key: after.key,
     originalPrice: after.price,
-    note: resolved.source === "property_override" ? "Per-property rate" : (line.note === "Per-property rate" ? "" : (line.note || ""))
+    custom: false,
+    note: decision.source === "property_override" ? "Per-property rate" : (staleNote ? "" : (rest.note || ""))
   };
   return { lines: next, changed: true, before, after, zoneCount };
 }
 
-module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline, CUSTOM_QUOTE_NOTE_PREFIX };
+// The seasonal fee, priced the moment the work order is signed (PJL-96,
+// ruling 1). Called at BOTH lock points — the customer's signature and the
+// nobody-home bypass — with the WO as it stands just before it freezes
+// (`zones` = zones carried in the same signing payload, if any). Re-prices
+// the fee line from the zones recorded (refreshSeasonalBaseline: tier,
+// override, or price pending) and stamps it source.pricedAtLock, so the
+// work order the customer signs carries the price the invoice will bill,
+// and nothing moves it afterwards. Returns { onSiteQuote, refresh } or
+// null when there is no seasonal fee to price.
+function pricedQuoteForLock(wo, property, { commercial = false, zones = null } = {}) {
+  if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return null;
+  const view = Array.isArray(zones) ? { ...wo, zones } : wo;
+  const refresh = refreshSeasonalBaseline(view, property, { commercial });
+  const idx = feeLineIndex(refresh.lines);
+  if (idx === -1) return null;
+  const lines = refresh.lines.slice();
+  lines[idx] = { ...lines[idx], source: { ...(lines[idx].source || {}), pricedAtLock: new Date().toISOString(), recordedZones: refresh.zoneCount } };
+  return { onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: lines }, refresh };
+}
+
+module.exports = {
+  priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline, CUSTOM_QUOTE_NOTE_PREFIX,
+  // PJL-96
+  suggestSeasonalPrice, seasonalFeeDecision, pendingFeeLine, isPricePending, feeLineIndex, billableLines, PRICE_PENDING_NOTES,
+  pricedQuoteForLock
+};

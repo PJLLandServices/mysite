@@ -58,12 +58,16 @@ try {
     const line = seasonalLine(invoiceFor(f.wo.id)?.lineItems);
     ok(lineKey(line) === "fall_close_6z", `the invoice bills the 5-6 tier (got ${lineKey(line)})`);
     ok(linePrice(line) === price("fall_close_6z"), `…at its pricing.json price (got ${linePrice(line)})`);
-    // Round 2: the WO was signed — its quote is the customer's record and is
-    // not rewritten after signing; the history says what the invoice did.
+    // PJL-96 (ruling 1): the fee is priced BEFORE the signature freezes the
+    // WO, so the signed quote already carries the walked tier and equals the
+    // invoice — it used to keep the booked 1-4 tier while the invoice billed
+    // 5-6 ("invoice only"). Nothing is re-priced after signing.
     const doneWo = srv.data("work-orders").find((w) => w.id === f.wo.id);
-    ok(lineKey(seasonalLine(doneWo?.onSiteQuote?.builderLineItems)) === "fall_close_4z", "the signed work order's quote is left as signed");
-    ok((doneWo?.history || []).some((h) => h.action === "seasonal_fee_reresolved" && /fall_close_6z/.test(h.note) && /invoice only/.test(h.note)),
-      "…and its history records the re-priced invoice line");
+    const signedLine = seasonalLine(doneWo?.onSiteQuote?.builderLineItems);
+    ok(lineKey(signedLine) === "fall_close_6z" && linePrice(signedLine) === linePrice(line),
+      `the signed work order carries the price the invoice bills (got ${lineKey(signedLine)} ${linePrice(signedLine)})`);
+    ok(!(doneWo?.history || []).some((h) => h.action === "seasonal_fee_reresolved" && /invoice only/.test(h.note)),
+      "…and nothing was re-priced after signing");
   }
 
   // ---- B. commercial ------------------------------------------------------
@@ -77,6 +81,9 @@ try {
     const line = seasonalLine(invoiceFor(f.wo.id)?.lineItems);
     ok(lineKey(line) === "fall_close_commercial_8z" && linePrice(line) === price("fall_close_commercial_8z"),
       `…and billed there (got ${lineKey(line)} ${linePrice(line)})`);
+    // PJL-96 ruling 2: for a commercial account without its own price that
+    // tier is only the SUGGESTION — Patrick confirms it before it is sent.
+    ok(invoiceFor(f.wo.id)?.priceConfirm?.reason === "commercial_unpriced", "…as a suggestion Patrick confirms (PJL-96)");
   }
 
   // ---- C. a per-property override still wins ------------------------------
@@ -105,7 +112,11 @@ try {
     await sleep(300);
     const i = invoiceFor(f.wo.id);
     const line = seasonalLine(i?.lineItems) || (i?.lineItems || [])[0];
-    ok(/^Custom quote — Patrick to price/.test(line?.note || ""), `the draft line is flagged for Patrick (note: ${line?.note})`);
+    // PJL-96: the flag is the invoice's own priceConfirm (unconfirmed until
+    // Patrick sets the price), not the old "Custom quote — Patrick to price"
+    // note; the line reads the customer-safe "PJL confirms the price".
+    ok(i?.priceConfirm?.required === true && !i?.priceConfirm?.confirmedAt && /PJL confirms the price/.test(line?.note || ""),
+      `the draft is flagged for Patrick (priceConfirm ${JSON.stringify(i?.priceConfirm)}, note: ${line?.note})`);
     const link = await srv.api("POST", `/api/invoices/${i.id}/payment-link`, {});
     ok(link.status === 409 && link.body.code === "needs_pricing", `…and can't be charged on site at the placeholder price (${link.status} ${link.body.code})`);
   }
@@ -119,7 +130,9 @@ try {
     await sleep(900);
     const alert = srv.outbox().slice(before).find((m) => /WO COMPLETED/.test(m.subject));
     const txt = String(alert?.html || "").replace(/<[^>]+>/g, " ");
-    ok(/No invoice drafted — price this visit/.test(txt) && !/No charge/.test(txt), "Patrick's alert says 'price this visit', not 'No charge'");
+    // PJL-96: 16 zones from the start now DRAFTS an invoice at a suggested
+    // price (it drafted none); the alert tells Patrick to confirm it.
+    ok(/SUGGESTED price, confirm it/.test(txt) && !/No charge/.test(txt), "Patrick's alert says 'suggested price, confirm it', not 'No charge'");
   }
 } finally {
   await srv.stop();
@@ -143,15 +156,20 @@ try {
     const big = { ...wo(null), zones: Array.from({ length: 20 }, (_, i) => ({ number: i + 1 })) };
     const rb = refreshSeasonalBaseline(big, {}, {});
     ok(rb.customQuote === true && rb.after?.custom === true && rb.after?.price === null, "a custom-quote tier is reported as custom, not given a flat price");
-    ok(rb.lines[0].custom === true && /^Custom quote — Patrick to price/.test(rb.lines[0].note) && rb.lines[0].originalPrice === price("fall_close_4z"),
-      "…its draft line is flagged for Patrick (not zeroed, not silently billed)");
+    // PJL-96: the line is PRICE PENDING — no number at all (it used to keep
+    // the booked tier's price under a note); the invoice gets the suggestion.
+    ok(rb.lines[0].custom === true && rb.lines[0].priceStatus === "pending" && rb.lines[0].originalPrice == null
+      && rb.lines[0].note === "Custom size — PJL confirms the price",
+      "…its line is price pending (no booked price billed, no number shown)");
     const unseeded = { type: "fall_closing", zones: Array.from({ length: 16 }, (_, i) => ({ number: i + 1 })), onSiteQuote: { builderLineItems: [] } };
-    ok(refreshSeasonalBaseline(unseeded, {}, {}).customQuote === true, "a custom-size job with no seeded line says custom, not free");
+    const ru = refreshSeasonalBaseline(unseeded, {}, {});
+    ok(ru.customQuote === true, "a custom-size job with no seeded line says custom, not free");
+    ok(ru.inserted === true && ru.lines[0]?.priceStatus === "pending", "…and gets a price-pending line inserted, so it is billed (PJL-96)");
   }
   const closing = fs.readFileSync(new URL("../pjl-field/src/screens/ClosingScreen.js", import.meta.url), "utf8");
   ok(/fee\?\.changed && fee\.atFinish && \(fee\.current \|\| fee\.atFinish\.custom\)/.test(closing) && /The price follows the zones/.test(closing),
     "the app shows the price change before Finish");
-  ok(/custom quote — Patrick to price/.test(closing), "…and says 'custom — Patrick to price' for a custom-quote size");
+  ok(/PJL confirms the price after the visit/.test(closing), "…and says 'PJL confirms the price' for a size PJL prices (PJL-96)");
   const api = fs.readFileSync(new URL("../pjl-field/src/api.js", import.meta.url), "utf8");
   ok(/seasonalFee: d\.seasonalFee \|\| null/.test(api), "the app keeps the server's preview on the fresh read");
 }

@@ -717,6 +717,13 @@
       <h2 class="tech-section-title">Customer sign-off</h2>
 
       <div class="tech-signoff-form" id="techSignoffForm">
+        <!-- Re-signing (2026-09-26): shown only when the work order changed
+             in price after the customer signed. -->
+        <p class="tech-resign-notice" id="techResignNotice" role="status" hidden>
+          <strong>New signature needed.</strong> The work order changed after it was signed, and the
+          price changed with it. The customer signs the revised work order. Their first signature
+          stays on file.
+        </p>
         <!-- Pre-sign checklist (Brief: WO Field-Readiness §6.3) — every
              gate that has to pass before the merged "Sign, Lock &
              Generate Invoice" button activates. Always visible. Each

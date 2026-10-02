@@ -18,6 +18,7 @@
 const properties = require("./properties");
 const invoices = require("./invoices");
 const workOrders = require("./work-orders");
+const billing = require("./billing");
 const woReportSnapshot = require("./wo-report-snapshot");
 
 // Warranty months + month arithmetic now live in lib/warranty.js (JOB-002
@@ -49,17 +50,9 @@ function summarizeWo(wo) {
   return `${base} — ${zoneCount} zone${zoneCount === 1 ? "" : "s"} ${verbs[wo.type] || "checked"}`;
 }
 
-// Pull line items from the WO. Priority:
-//   1. wo.onSiteQuote.builderLineItems (the customer-accepted lines)
-//   2. wo.lineItems (legacy / additional repairs)
-//   3. [] (no charge — spring opening with nothing to bill, etc.)
-function lineItemsFromWo(wo) {
-  if (Array.isArray(wo.onSiteQuote?.builderLineItems) && wo.onSiteQuote.builderLineItems.length) {
-    return wo.onSiteQuote.builderLineItems;
-  }
-  if (Array.isArray(wo.lineItems) && wo.lineItems.length) return wo.lineItems;
-  return [];
-}
+// lineItemsFromWo lives in lib/billing.js with the rest of "what a work
+// order bills"; re-exported below for older callers.
+const { lineItemsFromWo } = billing;
 
 // Build the system-update patch from the WO's zones. Only carries forward
 // the fields a tech might have edited on-site (notes, sprinkler types,
@@ -200,41 +193,38 @@ async function run(wo, deps = {}) {
   // from the actual visit date, not the day the record was closed out.
   const completedAt = wo.completedAt || new Date().toISOString();
 
-  // Bill the zones actually walked, at the account's real tier
-  // (fall-closing fix #7). The seasonal line was snapshotted from the
-  // BOOKED count when the WO was opened, and priced residential always.
-  // Re-resolve it through the pricing resolvers now; a per-property
-  // override and a hand-priced line both still win. The WO's own line is
-  // corrected too, so the WO, the report and the invoice agree.
-  if (wo.type === "fall_closing" || wo.type === "spring_opening") {
+  // What this visit bills: billing.billingFor, the ONE calculation Finish,
+  // "Generate invoice now" and the technician's preview all ask. It bills
+  // the zones actually walked at the account's real tier (fall-closing fix
+  // #7), the fee exactly as signed once the WO is locked (PJL-96), and a
+  // price-pending fee as its suggestion for Patrick to confirm. The WO's own
+  // quote is corrected only while it is NOT signature-locked (round 2): a
+  // signed scope is the customer's record and is never rewritten after the
+  // fact; the history entry records the difference.
+  const bill = await billing.billingFor(wo);
+  if (bill.correctedQuote) {
     try {
-      const liveProperty = await properties.get(wo.propertyId);
-      const commercial = await require("./customers").isCommercialAccount(liveProperty?.customerId || wo.customerId || null);
-      const refresh = require("./pricing").refreshSeasonalBaseline(wo, liveProperty, { commercial });
-      if (refresh.changed) {
-        // The invoice bills the re-resolved line. The WO's own quote is
-        // corrected only while it is NOT signature-locked (round 2): a
-        // signed scope is the customer's record and is never rewritten
-        // after the fact; the history entry records the difference.
-        const signedLocked = workOrders.isScopeFrozen(wo);
-        wo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
-        if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
-        try {
-          const afterText = refresh.customQuote
-            ? `${refresh.after.key || "custom tier"} — custom quote, Patrick to price on the draft`
-            : `${refresh.after.key} $${refresh.after.price.toFixed(2)}`;
-          await workOrders.appendHistory(wo.id, {
-            action: "seasonal_fee_reresolved",
-            by: "system",
-            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${refresh.before.key} $${refresh.before.price.toFixed(2)} → ${afterText}`
-              + (signedLocked ? " (invoice only — the signed work order is left as signed)" : "")
-          });
-        } catch (_e) {}
-      }
-    } catch (err) { console.warn("[cascade] seasonal fee re-resolve failed:", err?.message); }
+      const signedLocked = workOrders.isScopeFrozen(wo);
+      const { before, after, zoneCount, commercial, pending } = bill.fee || {};
+      wo = { ...wo, onSiteQuote: bill.correctedQuote };
+      if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote }, { systemWrite: true });
+      try {
+        const afterText = pending
+          ? `${after?.key || "custom tier"} — price pending, Patrick confirms it on the invoice`
+          : `${after?.key} $${Number(after?.price || 0).toFixed(2)}`;
+        const beforeText = !before ? "no fee line"
+          : before.price == null ? `${before.key} (price pending)`
+            : `${before.key} $${Number(before.price).toFixed(2)}`;
+        await workOrders.appendHistory(wo.id, {
+          action: "seasonal_fee_reresolved",
+          by: "system",
+          note: `${zoneCount} zones${commercial ? " (commercial)" : ""}: ${beforeText} → ${afterText}`
+            + (signedLocked ? " (invoice only — the signed work order is left as signed)" : "")
+        });
+      } catch (_e) {}
+    } catch (err) { console.warn("[cascade] seasonal fee correction failed:", err?.message); }
   }
-
-  const lineItems = lineItemsFromWo(wo);
+  const lineItems = bill.lines;
   const summary = summarizeWo(wo);
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;
   const warrantyExpiresAt = addMonths(completedAt, warrantyMonths);
@@ -306,8 +296,7 @@ async function run(wo, deps = {}) {
   // allow a payment link and schedule "your invoice is ready" to the
   // customer. There is nothing to pay, so there is no invoice: the visit,
   // its service record and its report are the record.
-  const billableTotal = lineItems.length ? invoices.totalsForLines(lineItems).total : 0;
-  const noCharge = lineItems.length > 0 && !(billableTotal > 0);
+  const noCharge = bill.noCharge;
   if (lineItems.length && !noCharge) {
     try {
       invoice = await invoices.createDraft({
@@ -325,8 +314,13 @@ async function run(wo, deps = {}) {
         disclaimers
       });
     } catch (err) {
-      invoiceDraftError = err?.message || "createDraft threw";
-      console.warn("[cascade] invoice draft failed:", invoiceDraftError);
+      // "Generate invoice now" got there first (the store allows one
+      // active invoice per work order): that invoice IS this visit's.
+      if (err?.code === "wo_already_invoiced") invoice = await invoices.get(err.existingInvoiceId);
+      else {
+        invoiceDraftError = err?.message || "createDraft threw";
+        console.warn("[cascade] invoice draft failed:", invoiceDraftError);
+      }
     }
   }
 
@@ -345,6 +339,26 @@ async function run(wo, deps = {}) {
     warrantyExpiresAt,
     invoiceId: invoice?.id || null
   });
+
+  // 3a) PJL-100 #5 — a fall closing's findings are recorded for next
+  // spring. The app copies them just before completing; one whose copy
+  // FAILED (reported as notTransferred, left unstamped) used to stay on the
+  // report and never reach the spring list. Copy whatever is still
+  // unstamped now, through the same rule as the defer routes. Best-effort:
+  // a failure here is logged and left for the next run, never fatal.
+  if (wo.type === "fall_closing") {
+    try {
+      const carried = await require("./wo-findings").copyFindingsForward(wo.id, { reason: "fall_visit_no_repairs_policy" });
+      if (carried.deferred.length || carried.notTransferred.length) {
+        await workOrders.appendHistory(wo.id, {
+          action: "issues_bulk_deferred",
+          by: "system",
+          note: `Completion: ${carried.deferred.length} finding${carried.deferred.length === 1 ? "" : "s"} copied to deferred recommendations`
+            + (carried.notTransferred.length ? ` — ${carried.notTransferred.length} still NOT transferred, on the work order` : "")
+        });
+      }
+    } catch (err) { console.warn("[cascade] carrying findings forward failed:", err?.message); }
+  }
 
   // 3b) Service / Inspection Report PDF snapshot (Service Report brief,
   // 2026-05-19). Gated by wo.completionReportSnapshotAt for idempotency:
@@ -429,7 +443,20 @@ async function run(wo, deps = {}) {
         // customerSmsScheduledAt — a prior cascade re-fire may have
         // already scheduled.
         const freshInv = await invoices.get(invoice.id);
-        if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt) {
+        // PJL-96: a price PJL sets is sent by the office, never by timer
+        // (invoices.isPriceSetByPjl) — not scheduled, and a re-run of the
+        // cascade after Confirm price doesn't schedule it either.
+        if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt && invoices.isPriceSetByPjl(freshInv)) {
+          if (!(freshInv.history || []).some((h) => h.action === "customer_sms_not_scheduled_price_set_by_pjl")) {
+            try {
+              await invoices.appendHistory(freshInv.id, {
+                action: "customer_sms_not_scheduled_price_set_by_pjl",
+                by: "system",
+                note: "No automatic invoice text — PJL sets this price; the office sends the invoice."
+              });
+            } catch (logErr) { console.warn("[cascade] SMS skip history failed:", logErr?.message); }
+          }
+        } else if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt) {
           let smsAllowed = true;
           let skipReason = null;
           if (freshInv.customerId) {
@@ -623,14 +650,20 @@ async function runProjectFinalCascade(project, opts = {}) {
   let unknownSkus = [];
   const projects = require("./projects");
   if (project.billingMode === "time_and_material") {
-    // Lazy-load parts.json from disk to avoid a load-order coupling with
-    // server.js's PARTS global.
-    let partsCatalog = null;
-    try {
-      const fsSync = require("node:fs");
-      const path = require("node:path");
-      partsCatalog = JSON.parse(fsSync.readFileSync(path.resolve(__dirname, "..", "..", "parts.json"), "utf8"));
-    } catch (err) { console.warn("[project-cascade] parts.json read failed:", err?.message); }
+    // Priced from the catalog the route hands in (deps.partsCatalog): the
+    // same effective catalog — admin edits and supplier prices merged — the
+    // billing preview uses, so the invoice is what the preview showed
+    // (Financials Fix B). Raw parts.json is only the fallback for a caller
+    // that has none, and it says so.
+    let partsCatalog = deps.partsCatalog || null;
+    if (!partsCatalog) {
+      console.warn("[project-cascade] no effective parts catalog passed — pricing from raw parts.json (admin price edits NOT applied)");
+      try {
+        const fsSync = require("node:fs");
+        const path = require("node:path");
+        partsCatalog = JSON.parse(fsSync.readFileSync(path.resolve(__dirname, "..", "..", "parts.json"), "utf8"));
+      } catch (err) { console.warn("[project-cascade] parts.json read failed:", err?.message); }
+    }
     const billing = await projects.computeTAndMBilling(project.id, { partsCatalog });
     lineItems = billing.lineItems.map((li) => ({
       key: li.sourceKey || (li.source === "labour" ? "project_labour" : "custom"),
@@ -642,33 +675,13 @@ async function runProjectFinalCascade(project, opts = {}) {
     unknownSkus = billing.unknownSkus || [];
     billingNote = `T&M: ${billing.totalHours} person-hours @ $${billing.rate}/hr`;
   } else {
-    // Fixed-price — mirror the proposal snapshot. If for some reason
-    // the snapshot is missing, fall back to the source quote.
-    const snap = project.proposalSnapshot;
-    if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
-      lineItems = snap.lineItems.map((li) => ({
-        key: li.sourceKey || "custom",
-        label: li.label,
-        qty: li.qty,
-        price: li.price,
-        lineTotal: li.lineTotal
-      }));
-      billingNote = `Fixed price: from proposal ${snap.quoteId}`;
-    } else if (project.sourceQuoteId) {
-      try {
-        const quotes = require("./quotes");
-        const q = await quotes.get(project.sourceQuoteId);
-        if (q && Array.isArray(q.lineItems)) {
-          lineItems = q.lineItems.map((li) => ({
-            key: li.sourceKey || "custom",
-            label: li.label,
-            qty: li.qty,
-            price: li.price,
-            lineTotal: li.lineTotal
-          }));
-          billingNote = `Fixed price: live quote ${q.id}`;
-        }
-      } catch (err) { console.warn("[project-cascade] sourceQuote read failed:", err?.message); }
+    // Fixed-price — bill the SIGNED AGREEMENT governing the job. One
+    // answer, shared with the Complete dialog's invoice preview:
+    // projects.fixedPriceBillingSource() (2026-09-27).
+    const src = await projects.fixedPriceBillingSource(project);
+    if (src.lineItems.length) {
+      lineItems = src.lineItems;
+      billingNote = src.note;
     }
   }
 
@@ -677,7 +690,7 @@ async function runProjectFinalCascade(project, opts = {}) {
       ok: false,
       mode: "project_final",
       errors: [
-        `Cannot bill project — these consumed SKUs have no retail price in parts.json: ${unknownSkus.join(", ")}. Set retail prices and retry.`
+        `Cannot bill project — these consumed SKUs have no retail price in the parts catalog: ${unknownSkus.join(", ")}. Set retail prices and retry.`
       ],
       unknownSkus
     };
@@ -696,7 +709,11 @@ async function runProjectFinalCascade(project, opts = {}) {
     const quotesLib = require("./quotes");
     const allInvoices = await invoices.list();
     const woIds = Array.isArray(project.workOrderIds) ? project.workOrderIds : [];
-    const seenQuote = new Set([project.sourceQuoteId].filter(Boolean));
+    // Every version of the job's own proposal is already billed above (or
+    // deliberately not) — never pick one up again as an "on-site" add-on.
+    const seenQuote = new Set([project.sourceQuoteId, project.currentQuoteId].filter(Boolean));
+    try { for (const q of (await projects.resolveProjectQuote(project)).chain) seenQuote.add(q.id); }
+    catch (_) { /* the plain source-quote guard above still applies */ }
     for (const woId of woIds) {
       const w = await workOrders.get(woId);
       const qid = w && w.onSiteQuote && w.onSiteQuote.quoteId;
@@ -803,11 +820,11 @@ async function runProjectFinalCascade(project, opts = {}) {
     // as due separately.
     try {
       invoice = await depositsLib.createBalanceInvoice(depositCtx.quote, depositCtx.depositInvoice, {
-        depositPaid: depositCtx.depositInvoice.status === "paid",
+        depositPaid: invoices.isSettled(depositCtx.depositInvoice),
         projectId: project.id
       });
       invoice = (await invoices.update(invoice.id, { holdUntilCompletion: false })) || invoice;
-      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice (deposit ${depositCtx.depositInvoice.status === "paid" ? "paid" : "still owing on " + depositCtx.depositInvoice.id})`;
+      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice (deposit ${invoices.isSettled(depositCtx.depositInvoice) ? "paid" : "still owing on " + depositCtx.depositInvoice.id})`;
     } catch (err) {
       invoiceDraftError = err?.message || "balance-invoice draft failed";
       console.warn("[project-cascade] balance invoice draft failed:", invoiceDraftError);
@@ -819,7 +836,7 @@ async function runProjectFinalCascade(project, opts = {}) {
     const tAndMDeposit = depositCtx && depositCtx.depositInvoice && project.billingMode === "time_and_material";
     if (tAndMDeposit) {
       const depInv = depositCtx.depositInvoice;
-      const paid = depInv.status === "paid";
+      const paid = invoices.isSettled(depInv);
       lineItems.push({
         key: "deposit_credit",
         label: paid
@@ -857,8 +874,11 @@ async function runProjectFinalCascade(project, opts = {}) {
         } : {})
       });
     } catch (err) {
-      invoiceDraftError = err?.message || "createDraft threw";
-      console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
+      if (err?.code === "wo_already_invoiced") invoice = await invoices.get(err.existingInvoiceId);
+      else {
+        invoiceDraftError = err?.message || "createDraft threw";
+        console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
+      }
     }
   }
 
@@ -869,7 +889,7 @@ async function runProjectFinalCascade(project, opts = {}) {
   if (depositCtx && invoice) {
     try {
       const quotesLib = require("./quotes");
-      const depositSettled = depositCtx.depositInvoice?.status === "paid";
+      const depositSettled = invoices.isSettled(depositCtx.depositInvoice);
       await quotesLib.updateDepositLifecycle(depositCtx.quote.id, {
         stage: depositSettled ? "awaiting_balance_payment" : "awaiting_deposit",
         balanceInvoiceId: invoice.id

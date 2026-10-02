@@ -160,6 +160,31 @@ function render(inv) {
 
   const statusMeta = document.getElementById("invoiceStatusMeta");
   statusMeta.textContent = inv.quickbooksInvoiceId ? `QB: ${inv.quickbooksInvoiceId}` : "Not synced to QuickBooks";
+  // Payment reconciliation (2026-09-28): marked Paid, but the recorded
+  // payments fall short. The server decides (inv.paymentReconciliation);
+  // this page says so and offers the two ways out: record the missing
+  // payment, or correct the status to Partially paid (the only time that
+  // option can be chosen by hand).
+  const recon = inv.paymentReconciliation || {};
+  const partialOpt = document.querySelector('#invoiceStatus option[value="partially_paid"]');
+  if (partialOpt) partialOpt.disabled = !recon.required;
+  let reconEl = document.getElementById("invoiceReconciliation");
+  if (!reconEl) {
+    reconEl = document.createElement("p");
+    reconEl.id = "invoiceReconciliation";
+    reconEl.className = "invoice-action-meta";
+    reconEl.setAttribute("role", "alert");
+    reconEl.style.cssText = "color:#b71c1c;font-weight:600;margin-top:6px;";
+    statusMeta.insertAdjacentElement("afterend", reconEl);
+  }
+  const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (recon.required) {
+    reconEl.hidden = false;
+    reconEl.textContent = `⚠ Payment reconciliation required · ${money(recon.unresolved)} unresolved. Marked Paid, but only ${money(recon.recorded)} of ${money(recon.total)} is recorded — ${money(recon.unresolved)} not recorded. Record the missing payment below, or set the status to Partially paid.`;
+  } else {
+    reconEl.hidden = true;
+    reconEl.textContent = "";
+  }
 
   // Bill-to vs service address (billing-party brief). The billTo
   // snapshot is set at draft time; when it names a different payer or
@@ -309,6 +334,7 @@ function render(inv) {
           customer_sms_skipped_no_phone: "Not scheduled — no customer phone on invoice",
           customer_sms_skipped_voided: "Not scheduled — invoice voided",
           customer_sms_skipped_paid: "Not scheduled — invoice already paid",
+          customer_sms_skipped_not_emailed: "Not sent — the invoice hadn't been emailed; Send texts the customer",
           customer_sms_failed: "Failed — see invoice history"
         };
         smsStatusLine.textContent = reasonMap[lastSmsEntry.action] || "Not scheduled";
@@ -1749,7 +1775,153 @@ render = function (inv) {
   renderPaymentsTable(inv);
   renderPaymentCard(inv);
   renderReviseCard(inv);
+  renderPriceConfirmCard(inv);
+  renderRevisionRequiredCard(inv);
+  renderPaymentExceptionsCard(inv);
 };
+
+// ---- Payment exceptions (2026-09-27) -------------------------------------
+// The server decides (invoice.paymentExceptions / needsReconciliation);
+// this shows each one — charge, applied, excess, card, Stripe id — and
+// closes it with a note. Resolved ones stay listed, greyed, for the record.
+const PAYMENT_EXCEPTION_REASON_TEXT = {
+  already_covered: "arrived after the invoice was already paid in full",
+  over_balance: "was more than the balance left owing",
+  invoice_void: "arrived for a void invoice"
+};
+function renderPaymentExceptionsCard(inv) {
+  const card = document.getElementById("invoicePaymentExceptionsCard");
+  const list = document.getElementById("invoicePaymentExceptionsList");
+  const label = document.getElementById("invoicePaymentExceptionsLabel");
+  if (!card || !list) return;
+  const all = Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : [];
+  card.hidden = all.length === 0;
+  if (card.hidden) return;
+  const open = all.filter((e) => e.status === "open");
+  card.classList.toggle("is-resolved", open.length === 0);
+  if (label) label.textContent = open.length ? "Needs refund / reconciliation" : "Payment exceptions — resolved";
+  const card4 = (e) => [e.cardBrand ? String(e.cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : "", e.cardLast4 ? `••${e.cardLast4}` : ""].filter(Boolean).join(" ");
+  list.innerHTML = all.map((e) => `
+    <div class="invoice-exception${e.status === "open" ? " is-open" : ""}" data-exception-id="${escapeHtml(e.id)}">
+      <p class="invoice-exception-head">${e.status === "open"
+        ? `<strong>${escapeHtml(fmt(e.excess))} extra</strong> — needs refund or reconciliation`
+        : `${escapeHtml(fmt(e.excess))} extra — <strong>${escapeHtml(e.status)}</strong>`}</p>
+      <dl class="invoice-exception-facts">
+        <dt>Total charge</dt><dd>${escapeHtml(fmt(e.chargedTotal))}</dd>
+        <dt>Applied to invoice</dt><dd>${escapeHtml(fmt(e.applied))}</dd>
+        <dt>Excess</dt><dd>${escapeHtml(fmt(e.excess))}</dd>
+        <dt>Method / card</dt><dd>${escapeHtml(e.methodLabel || "Card")}${card4(e) ? ` — ${escapeHtml(card4(e))}` : ""}</dd>
+        <dt>Stripe payment</dt><dd class="invoice-exception-mono">${escapeHtml(e.paymentIntentId || "—")}</dd>
+        <dt>Arrived</dt><dd>${escapeHtml(fmtDate(e.detectedAt))}${e.via ? ` via ${escapeHtml(e.via)}` : ""}</dd>
+      </dl>
+      <p class="invoice-action-meta">This payment ${escapeHtml(PAYMENT_EXCEPTION_REASON_TEXT[e.reason] || e.reasonNote || "")}.${e.status === "open" ? " PJL refunds nothing by itself: refund it in Stripe, or settle it with the customer, then mark it here." : ""}${e.alert?.sentAt ? " Alert emailed." : e.alert?.failedAt ? " The alert email failed to send." : ""}</p>
+      ${e.resolution ? `<p class="invoice-action-meta">Marked ${escapeHtml(e.resolution.status)} ${escapeHtml(fmtDate(e.resolution.at))} by ${escapeHtml(e.resolution.by || "—")}: ${escapeHtml(e.resolution.note || "")}</p>` : ""}
+      ${e.status === "open" ? `
+      <div class="invoice-exception-actions">
+        <button type="button" class="invoice-action-btn invoice-action-btn--danger" data-exception-resolve="refunded" data-exception-id="${escapeHtml(e.id)}">Mark refunded</button>
+        <button type="button" class="invoice-action-btn" data-exception-resolve="reconciled" data-exception-id="${escapeHtml(e.id)}">Mark reconciled</button>
+      </div>` : ""}
+    </div>`).join("");
+}
+
+document.getElementById("invoicePaymentExceptionsList")?.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-exception-resolve]");
+  if (!btn || !currentInvoice) return;
+  const status = document.getElementById("invoicePaymentExceptionsStatus");
+  const resolution = btn.dataset.exceptionResolve;
+  const note = await pjlDialog.prompt(
+    resolution === "refunded"
+      ? "How was the extra refunded? (e.g. \"Refunded in the Stripe dashboard, Sep 28\")"
+      : "How was it reconciled? (e.g. \"Customer asked to keep it as credit toward spring\")",
+    { title: resolution === "refunded" ? "Mark refunded" : "Mark reconciled", icon: "info", confirmLabel: resolution === "refunded" ? "Mark refunded" : "Mark reconciled" }
+  );
+  if (note == null) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(currentInvoice.id)}/payment-exceptions/${encodeURIComponent(btn.dataset.exceptionId)}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resolution, note })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save that.");
+    currentInvoice = data.invoice;
+    render(data.invoice);
+    if (status) { status.textContent = `✓ Marked ${resolution}.`; status.dataset.kind = "ok"; }
+  } catch (e) {
+    if (status) { status.textContent = e.message || "Failed."; status.dataset.kind = "error"; }
+    btn.disabled = false;
+  }
+});
+
+// ---- Revision required after re-signing (2026-09-26) ---------------------
+// The server decides (invoice.scopeHold.reason); this only says what it
+// means and what clears it.
+function renderRevisionRequiredCard(inv) {
+  const card = document.getElementById("invoiceRevisionRequiredCard");
+  const meta = document.getElementById("invoiceRevisionRequiredMeta");
+  if (!card || !meta) return;
+  const hold = inv?.scopeHold;
+  card.hidden = hold?.reason !== "revision_required";
+  if (card.hidden) return;
+  const signed = hold.requiredTotal != null ? ` billing ${fmt(hold.requiredTotal)}` : "";
+  const how = hold.requiredTotal === 0
+    ? "The signed work order is no charge: void this invoice"
+    : hold.requiredTotal == null || !(inv.status === "sent" || inv.status === "partially_paid")
+      ? "Void it and generate a new invoice from the work order"
+      : `Revise it below, at or under ${fmt(hold.requiredTotal)} (a higher amount needs the customer's approval first)`;
+  meta.textContent = `The customer signed a revised work order${signed}; this invoice (${fmt(inv.total)}) was left as it was. ${how}. No payment, of any kind, and no Send until then.`;
+}
+
+// ---- Price to confirm (PJL-96) -------------------------------------------
+// The server decides (invoice.priceUnconfirmed); this only shows it. The
+// suggestion and its arithmetic are staff-only — they never reach the
+// customer's documents.
+function renderPriceConfirmCard(inv) {
+  const card = document.getElementById("invoicePriceConfirmCard");
+  const meta = document.getElementById("invoicePriceConfirmMeta");
+  if (!card || !meta) return;
+  card.hidden = inv?.priceUnconfirmed !== true;
+  if (card.hidden) return;
+  const pc = inv.priceConfirm || {};
+  const why = pc.reason === "commercial_unpriced"
+    ? "Commercial account with no price of its own."
+    : "Custom size — you set the price.";
+  const suggested = pc.suggestedAmount != null ? `Suggested ${fmt(pc.suggestedAmount)}` : "Suggested amount prefilled";
+  meta.textContent = `${why} ${suggested}${pc.basis ? ` (${pc.basis})` : ""}. Not sendable, payable or texted until you confirm.`;
+}
+
+document.getElementById("invoicePriceConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const status = document.getElementById("invoicePriceConfirmStatus");
+  const pc = currentInvoice.priceConfirm || {};
+  const start = pc.suggestedAmount != null ? Number(pc.suggestedAmount).toFixed(2) : "";
+  const value = await pjlDialog.prompt(
+    `Price for this visit, before HST.${pc.basis ? `\n\n${pc.basis}` : ""}`,
+    { title: "Confirm price", icon: "info", defaultValue: start, confirmLabel: "Confirm price" }
+  );
+  if (value === null || value === undefined) return;
+  const amount = Number(String(value).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(amount) || amount <= 0) {
+    await pjlDialog.alert("Enter the price as a positive amount.", { title: "Confirm price", icon: "warning" });
+    return;
+  }
+  if (status) { status.textContent = "Saving…"; status.dataset.kind = ""; }
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/confirm-price`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Failed (${r.status})`);
+    currentInvoice = data.invoice;
+    render(currentInvoice);
+    if (status) { status.textContent = "✓ Price confirmed."; status.dataset.kind = "ok"; }
+  } catch (err) {
+    if (status) { status.textContent = err.message || "Couldn't confirm the price."; status.dataset.kind = "error"; }
+  }
+});
 
 // ---- Klarna financing (PJL-34, build order step 4b) --------------------
 //

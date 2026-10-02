@@ -170,6 +170,17 @@
 
         <!-- RIGHT: admin actions (sticky on desktop). -->
         <aside class="invoice-actions">
+          <!-- Payment exceptions (2026-09-27). A card payment brought in more
+               than this invoice owed: the excess is kept here, off the
+               ledger, until it is marked refunded or reconciled (with a
+               note). First on the page so it can't be missed. Hidden when
+               there has never been one. -->
+          <section class="invoice-action-card invoice-action-card--exception" id="invoicePaymentExceptionsCard" hidden>
+            <span class="invoice-action-label" id="invoicePaymentExceptionsLabel">Needs refund / reconciliation</span>
+            <div id="invoicePaymentExceptionsList"></div>
+            <p class="invoice-action-status" id="invoicePaymentExceptionsStatus"></p>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">Status</span>
             <select id="invoiceStatus" class="invoice-action-select">
@@ -177,12 +188,37 @@
               <option value="sent">Sent</option>
               <!-- Partially paid is DERIVED from the payment ledger, never
                    chosen by hand — disabled so the select can display it
-                   without offering it as a manual transition. -->
+                   without offering it as a manual transition. The one
+                   exception: an invoice marked Paid with its payments short
+                   (payment reconciliation) — invoice.js enables it there,
+                   and the server checks the ledger bears it out. -->
               <option value="partially_paid" disabled>Partially paid</option>
               <option value="paid">Paid</option>
               <option value="void">Void</option>
             </select>
             <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
+          </section>
+
+          <!-- Revision required (2026-09-26). The customer signed a revised
+               work order after this invoice went out (or after money was
+               recorded against it), so it was NOT rewritten. Payment and
+               Send stay blocked until it is revised to the signed scope.
+               Hidden on every other invoice. -->
+          <section class="invoice-action-card" id="invoiceRevisionRequiredCard" hidden>
+            <span class="invoice-action-label">Revision required</span>
+            <p class="invoice-action-meta" id="invoiceRevisionRequiredMeta"></p>
+          </section>
+
+          <!-- Price to confirm (PJL-96). A closing Patrick prices himself — a
+               custom size (16+ residential, 9+ commercial) or a commercial
+               account without its own price — drafts with a SUGGESTED
+               amount. Until it is confirmed here the invoice can't be
+               sent, paid or texted. Hidden on every other invoice. -->
+          <section class="invoice-action-card" id="invoicePriceConfirmCard" hidden>
+            <span class="invoice-action-label">Price not confirmed</span>
+            <p class="invoice-action-meta" id="invoicePriceConfirmMeta"></p>
+            <button type="button" id="invoicePriceConfirmBtn" class="invoice-action-btn invoice-action-btn--amber">Confirm price</button>
+            <p class="invoice-action-status" id="invoicePriceConfirmStatus"></p>
           </section>
 
           <!-- Payment ledger (invoice payment ledger, Jul 2026). Records

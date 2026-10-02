@@ -28,7 +28,9 @@ function statusLabel(status) {
 }
 
 async function load() {
-  const url = currentFilter ? `/api/invoices?status=${encodeURIComponent(currentFilter)}` : "/api/invoices";
+  const url = currentFilter === "needs_reconciliation"
+    ? "/api/invoices?needsReconciliation=1"
+    : currentFilter ? `/api/invoices?status=${encodeURIComponent(currentFilter)}` : "/api/invoices";
   const r = await fetch(url, { cache: "no-store" });
   const data = await r.json().catch(() => ({}));
   const items = (data.ok && Array.isArray(data.invoices)) ? data.invoices : [];
@@ -48,7 +50,7 @@ async function load() {
       </td>
       <td>${inv.woId ? `<a href="/admin/work-order/${encodeURIComponent(inv.woId)}">${escapeHtml(inv.woId)}</a>` : "—"}</td>
       <td class="invoices-amount">${fmt(inv.total)}</td>
-      <td><span class="invoices-status invoices-status--${escapeHtml(inv.status)}">${escapeHtml(statusLabel(inv.status))}</span></td>
+      <td><span class="invoices-status invoices-status--${escapeHtml(inv.status)}">${escapeHtml(statusLabel(inv.status))}</span>${inv.needsReconciliation ? `<br><span class="invoices-status invoices-status--exception" title="A card payment brought in more than this invoice owed">Needs refund / reconciliation</span>` : ""}</td>
       <td>${escapeHtml(fmtDate(inv.createdAt))}</td>
     </tr>
   `).join("");

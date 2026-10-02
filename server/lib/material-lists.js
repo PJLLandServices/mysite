@@ -270,6 +270,40 @@ async function create({
 // from the line items unless the caller explicitly passes a status that's
 // either "archived" or matches the derived value (lets the UI nudge an
 // otherwise-complete list back to "draft" only via the archive flow).
+// ONE definition of "these lines can no longer be replaced wholesale".
+//
+// Returns null when replacement is allowed, or { why, blockingSkus }
+// when it is not. Exported so any future editing path — a route, a
+// script, a re-sync — asks the same question rather than growing a
+// second copy that drifts (CLAUDE.md).
+//
+// Two independent tests, because either alone can be wrong:
+//   * the list's status is past draft, OR
+//   * ANY existing line carries purchasing state, even if the status
+//     still says draft — a status can be stale or set by hand, and the
+//     lines are the actual evidence.
+//
+// NB on frozenPriceCents: hydrateLine() forces it null on a "need"
+// line, so through the store that clause only ever fires alongside a
+// non-need status. It is kept because this function is also the answer
+// for callers holding a record that has NOT been through hydrate().
+function lineItemsLockedBy(list) {
+  const blocking = (list?.lineItems || []).filter(
+    (l) => l.status === "ordered" || l.status === "have" || l.poId || l.frozenPriceCents != null
+  );
+  const status = list?.status;
+  const pastDraft = status && status !== "draft" && status !== "archived";
+  if (!blocking.length && !pastDraft) return null;
+  const blockingSkus = [...new Set(blocking.map((l) => l.sku))];
+  return {
+    why: blocking.length
+      ? `${blocking.length} line(s) are ordered, received, on a purchase order or price-locked (${
+          blockingSkus.slice(0, 5).join(", ")})`
+      : `the list is "${status}", not a draft`,
+    blockingSkus
+  };
+}
+
 async function update(id, patch = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
@@ -300,6 +334,37 @@ async function update(id, patch = {}) {
 
   let lineItemsChanged = false;
   if (Array.isArray(patch.lineItems)) {
+    // WHOLESALE REPLACEMENT IS DESTRUCTIVE, so it is refused once the
+    // list has purchasing history (Patrick, 2026-09-27).
+    //
+    // `next.lineItems = patch.lineItems.map(hydrateLine)` throws away
+    // every line's `status`, `poId` and `frozenPriceCents` — the record
+    // that something was ordered, that a PO points at it, and the price
+    // that locked when that PO was sent. Re-syncing the System Builder
+    // onto a purchased list would silently reopen settled lines and
+    // release frozen prices.
+    //
+    // That was previously prevented only by the BROWSER choosing to
+    // create a new list instead (sitebuilder.html). A convention in one
+    // caller is not a guarantee: any other caller, script or future
+    // route could reach this line. The rule belongs here.
+    //
+    // Two independent tests, because either alone can be wrong:
+    //   * the list's status is past draft, OR
+    //   * ANY existing line carries purchasing state, even if the
+    //     status still says draft — a status can be stale or set by
+    //     hand, and the lines are the actual evidence.
+    const locked = lineItemsLockedBy(current);
+    if (locked) {
+      throw Object.assign(
+        new Error(
+          `Can't replace the lines on ${current.id}: ${locked.why}. ` +
+          `Replacing them would drop their purchase-order links and frozen prices. ` +
+          `Copy this list or start a new one instead.`
+        ),
+        { code: "line_items_locked", blockingSkus: locked.blockingSkus }
+      );
+    }
     next.lineItems = patch.lineItems.map(hydrateLine);
     lineItemsChanged = true;
   }
@@ -463,6 +528,7 @@ module.exports = {
   remove,
   computeTotals,
   resolveLineUnitPriceCents,
+  lineItemsLockedBy,
   deriveStatus,
   softDelete,
   restore,

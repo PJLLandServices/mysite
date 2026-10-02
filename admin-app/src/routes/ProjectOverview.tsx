@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { projectsApi, type ProjectStatus, type SiteBuilderSummary } from "../lib/api";
-import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate, taskProgress } from "../lib/format";
+import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, projectPercentComplete, shortDate, taskProgress } from "../lib/format";
 import { nextAction } from "../lib/nextAction";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, CardHeader, ErrorNote, LoadingRows, Stat, StatusPill, cx } from "../ui/primitives";
@@ -63,21 +63,27 @@ export function ProjectWorkspace() {
   const p = data.project;
   const status = (p.status || "planning") as ProjectStatus;
   const { done, total } = taskProgress(p.tasks);
-  const value = data.linkedQuote?.total ?? p.proposalSnapshot?.total;
-  const invoice = data.invoiceSummary;
+  // The contract is what the customer SIGNED — the server's
+  // describeAgreement, the same answer the Change Orders tab shows. No
+  // fallback here: a second source would be a second interpretation.
+  const value = data.agreement?.governing?.total;
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
 
-  // A settled DEPOSIT is not a settled job. Reading "Paid" on a job with
-  // the balance still to raise is the kind of glance that loses money,
-  // so the deposit case says what it actually is.
-  const billing = !invoice
-    ? { value: "—", hint: "not invoiced yet", tone: "muted" as const }
-    : Number(invoice.balanceDue) > 0
-      ? { value: money(invoice.balanceDue), hint: "outstanding", tone: "money" as const }
-      : invoice.invoiceRole === "deposit"
-        ? { value: "Deposit paid", hint: "balance not invoiced yet", tone: "default" as const }
-        : { value: "Paid", hint: invoice.paidAt ? shortDate(invoice.paidAt) : "nothing outstanding", tone: "default" as const };
+  // Billing is the server's answer (financials-view billingSummary) — the
+  // same model the Financials tab shows. A settled DEPOSIT is not a settled
+  // job, and a held balance invoice nobody has been sent is not owed: the
+  // server decides which it is and says so in the hint.
+  const b = data.billing;
+  const billing = b && b.kind === "reconcile"
+    ? { value: "⚠ Reconcile", hint: b.hint, tone: "default" as const, warnHint: true }
+    : !b || b.kind === "none"
+    ? { value: "—", hint: b?.hint || "not invoiced yet", tone: "muted" as const }
+    : b.kind === "owed"
+      ? { value: money(b.owed), hint: b.hint, tone: "money" as const }
+      : b.kind === "settled"
+        ? { value: "None owed", hint: b.hint, tone: "default" as const }
+        : { value: "Paid", hint: b.hint, tone: "default" as const };
 
   return (
     <>
@@ -141,12 +147,22 @@ export function ProjectWorkspace() {
           the way into the section behind it. */}
       <div className="bg-surface border-b border-line">
         <div className="mx-auto max-w-[1180px] px-4 lg:px-8 py-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Stat label="Contract value" value={value ? money(value) : "—"} tone={value ? "money" : "muted"} onClick={() => goTab("scope")} />
+          {/* A job with nothing signed says so — never "$0", which would read
+              as a signed contract worth nothing. */}
+          <Stat
+            label="Contract value"
+            value={value !== undefined && value !== null ? money(value) : "Not signed"}
+            tone={value !== undefined && value !== null ? "money" : "muted"}
+            hint={value !== undefined && value !== null
+              ? (data.agreement?.pending ? `with HST · revision ${data.agreement.pending.id} awaiting signature` : "with HST, signed")
+              : (data.agreement?.pending ? `quote ${data.agreement.pending.id} awaiting signature` : "no signed agreement yet")}
+            onClick={() => goTab("scope")}
+          />
           <Stat
             label="Project progress"
             value={total ? `${done} of ${total} tasks` : "No tasks yet"}
             tone={total ? "default" : "muted"}
-            progress={total ? done / total : undefined}
+            progress={total ? projectPercentComplete(p.tasks) / 100 : undefined}
             onClick={() => goTab("tasks")}
           />
           {/* Stations lead, because that is what the controller is sized on
@@ -166,7 +182,7 @@ export function ProjectWorkspace() {
             ].filter(Boolean).join(" · ") || undefined}
             onClick={() => goTab("design")}
           />
-          <Stat label="Billing" value={billing.value} tone={billing.tone} hint={billing.hint} onClick={() => goTab("financials")} />
+          <Stat label="Billing" value={billing.value} tone={billing.tone} hint={billing.hint} warnHint={"warnHint" in billing && billing.warnHint} onClick={() => goTab("financials")} />
         </div>
       </div>
 
@@ -188,7 +204,10 @@ export function ProjectOverviewTab() {
   const quote = data.linkedQuote;
   const snap = p.proposalSnapshot;
   const journal = (p.journalEntries || []).slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-  const action = nextAction(p, quote, data.invoiceSummary, data.siteBuilderSummary);
+  // The invoice the next step is about — the server's (billingSummary):
+  // a sent one still owing, else an unsent draft to send. Never a held
+  // balance invoice, which nobody can send or pay yet.
+  const action = nextAction(p, quote, data.billing?.actionInvoice ?? null, data.siteBuilderSummary);
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">

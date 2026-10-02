@@ -122,6 +122,22 @@ const tasks = (done, total) =>
   check("5b. it says the invoice hasn't gone out", /not sent yet/i.test(a.detail), a.detail);
 }
 
+// ── 5c. marked Paid with its payments short: reconcile, never collect ──
+// Payment reconciliation (Patrick, 2026-09-28): what the customer owes is
+// not determined, so it is never chased as a balance.
+{
+  const a = nextAction(
+    { id: "P5c", status: "complete", tasks: tasks(16, 16), proposalSnapshot: snapshot, workOrderIds: ["WO-1"] },
+    acceptedQuote,
+    { id: "I-2026-0092", status: "paid", invoiceRole: "standard", total: 1260, amountPaid: 1000, balanceDue: 0, paidAt: "2026-09-25T10:00:00Z", reconciliationRequired: true, unresolved: 260 },
+    design
+  );
+  check("5c. marked Paid, $260 short -> reconcile payment", /reconcile payment/i.test(a.headline), a.headline);
+  check("5c. never 'collect payment'", !/collect/i.test(a.headline + a.detail), `${a.headline} / ${a.detail}`);
+  check("5c. it names the invoice and the $260", /I-2026-0092/.test(a.detail) && /\$260\.00/.test(a.detail), a.detail);
+  check("5c. it is the office's move, on the invoice page", a.tone === "act" && String(a.href).includes("/admin/invoice/I-2026-0092"), `${a.tone} ${a.href}`);
+}
+
 // ── 6. complete and fully paid ──────────────────────────────────────
 {
   const a = nextAction(

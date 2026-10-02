@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { removePropertyZone, uploadWoPhotos, woPhotoUri } from '../../api';
+import { uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
@@ -49,7 +49,7 @@ const REPAIR_TYPES = [
   { key: 'other', label: 'Other (use notes)' },
 ];
 
-export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri }) {
+export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty }) {
   const zones = wo?.zones || [];
   const zone = zones[zoneIndex] || {};
   const total = zones.length;
@@ -212,22 +212,29 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
     if (!number) return;
     setBusy(true);
     try {
-      if (wo?.propertyId) {
-        await removePropertyZone(wo.propertyId, number, {
-          reason: removeReason,
-          note: removeNote.trim(),
-        });
-      }
+      const why = {
+        reason: removeReason,
+        note: removeNote.trim(),
+        reasonLabel: REMOVAL_REASONS.find((r) => r.key === removeReason)?.label || '',
+      };
+      // The VISIT first, through the phone's outbox — offline-safe, and it
+      // is what the price follows (fix #7). It used to wait on the property
+      // call, which a tech session cannot make (admin-only until PJL-86):
+      // the 403 read as "Not signed in" and the zone stayed on (PJL-98).
       const next = zones.filter((z) => Number(z.number) !== Number(number));
       // Its unfinished draft goes with it, or sign-off waits forever on a
       // zone that is not there (the outbox clears it too).
       clearDraft(`zone:${number}`);
-      save({ zones: next });
+      if (!(await save({ zones: next }))) return;
       // Step back rather than off the end when the last page goes.
       setZoneIndex(Math.max(0, Math.min(zoneIndex, next.length - 1)));
       setRemoving(null);
       setRemoveReason('');
       setRemoveNote('');
+      // Then the property record. If it can't follow, the office is told on
+      // the work order and the tech is told why — in words, not a sign-in.
+      const outcome = await removeZoneOnProperty(number, why);
+      if (!outcome.ok) Alert.alert('Zone removed from this visit', outcome.message);
       if (!next.length) onDoneAll();
     } catch (err) {
       Alert.alert("Couldn't remove the zone", err?.message || 'Please try again.');
@@ -275,7 +282,11 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
   return (
     <>
       <View style={styles.pager}>
-        <Button label="‹" tone="ghost" onPress={() => setZoneIndex(Math.max(0, zoneIndex - 1))} disabled={zoneIndex === 0} />
+        <PagerArrow
+          direction="previous"
+          onPress={() => setZoneIndex(Math.max(0, zoneIndex - 1))}
+          disabled={zoneIndex === 0}
+        />
         <View style={styles.pagerMid}>
           <Text style={styles.pagerText}>Zone {zone.number ?? zoneIndex + 1} of {total}</Text>
           {done ? <Text style={styles.pagerDone}>Done</Text> : null}
@@ -290,7 +301,11 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
         >
           <Text style={[styles.pagerEditText, (busy || saving) && styles.pagerEditOff]}>Edit</Text>
         </Pressable>
-        <Button label="›" tone="ghost" onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))} disabled={zoneIndex + 1 >= total} />
+        <PagerArrow
+          direction="next"
+          onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))}
+          disabled={zoneIndex + 1 >= total}
+        />
       </View>
 
       <Section title="Where is it?" footer="Correcting this updates the property record too, so the system gets better described every visit.">
@@ -403,7 +418,39 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
   );
 }
 
+// The zone pager's arrows. They were the closing's plain text Button with a
+// one-character label, which gave a target the width of "‹" — barely
+// touchable with a wet thumb (Patrick, 2026-10-01). Now a fixed 64 × 56 pt
+// block with a large chevron: past Apple's 44 pt minimum with room to
+// spare, and the same size at both ends so the label between them never
+// shifts. Greyed rather than hidden at the first and last zone, so the row
+// keeps its shape.
+function PagerArrow({ direction, onPress, disabled }) {
+  const next = direction === 'next';
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={8}
+      style={({ pressed }) => [styles.arrow, disabled && styles.arrowOff, pressed && !disabled && styles.arrowOn]}
+      accessibilityRole="button"
+      accessibilityLabel={next ? 'Next zone' : 'Previous zone'}
+      accessibilityState={{ disabled: Boolean(disabled) }}
+    >
+      <Text style={[styles.arrowGlyph, disabled && styles.arrowGlyphOff]}>{next ? '›' : '‹'}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  arrow: {
+    width: 64, height: 56, borderRadius: radius.card,
+    backgroundColor: colors.brandTint, alignItems: 'center', justifyContent: 'center',
+  },
+  arrowOn: { opacity: 0.6 },
+  arrowOff: { backgroundColor: colors.separator },
+  arrowGlyph: { fontSize: 40, lineHeight: 44, fontWeight: '600', color: colors.brand, marginTop: -4 },
+  arrowGlyphOff: { color: colors.textFaint },
   pagerEdit: { paddingHorizontal: space.sm, paddingVertical: 8 },
   pagerEditOn: { opacity: 0.5 },
   pagerEditText: { ...type.body, color: colors.brand, fontWeight: '600' },
