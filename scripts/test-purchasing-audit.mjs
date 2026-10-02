@@ -26,7 +26,7 @@ const materialLists = [{
     L("ok-ordered", "ordered", "PO-SENT", 250),     // agrees: outstanding on a sent PO
     L("ok-have", "have", null, 250),                // agrees: received
     L("recv-stuck", "ordered", "PO-RECV", 250),     // received in full, still ordered
-    L("canc-stuck", "ordered", "PO-CANC", 250),     // cancelled before arrival, still ordered
+    L("canc-stuck", "ordered", "PO-CANC", 250),     // cancelled after 1 of 4 arrived, still ordered — a person decides
     L("canc-got", "ordered", "PO-CANC", 250),       // arrived in full before the cancel, still ordered
     L("sent-need", "need"),                          // PO out, list never told
     L("recv-need", "need"),                          // arrived, list never told
@@ -54,9 +54,9 @@ const r = auditPurchasingLines({ purchaseOrders, materialLists });
 ok(S({ purchaseOrders, materialLists }) === input, "the audit does not change what it reads");
 const by = Object.fromEntries(r.findings.map((f) => [f.lineId, f]));
 const expect = {
-  "recv-stuck": ["received_still_ordered", { status: "have", poId: null }],
-  "canc-stuck": ["cancelled_still_ordered", { status: "need", poId: null, frozenPriceCents: null }],
-  "canc-got": ["received_still_ordered", { status: "have", poId: null }],
+  "recv-stuck": ["received_still_ordered", { status: "have", poId: null, frozenPriceCents: 250 }],
+  "canc-stuck": ["cancelled_partial_still_ordered", null],
+  "canc-got": ["received_still_ordered", { status: "have", poId: null, frozenPriceCents: 250 }],
   "sent-need": ["sent_never_marked", { status: "ordered", poId: "PO-SENT", frozenPriceCents: 250 }],
   "recv-need": ["received_never_marked", { status: "have", poId: null, frozenPriceCents: 250 }],
   "ghost": ["po_missing", null],
@@ -71,19 +71,27 @@ for (const [lineId, [kind, repair]] of Object.entries(expect)) {
 ok(!by["ok-ordered"] && !by["ok-have"], "lines that agree with their PO are not reported");
 ok(r.findings.length === Object.keys(expect).length, `exactly the disagreeing lines are reported (${r.findings.length})`);
 ok(r.notes.length === 1 && r.notes[0].poId === "PO-GONE", "a sent PO line whose list line is gone is noted for information, not as a disagreement");
-ok(S(r.totals) === S({ projects: 1, materialLists: 2, purchaseOrders: 6, lines: 9, repairable: 5, needsAPerson: 4 }), `totals (${S(r.totals)})`);
+ok(S(r.totals) === S({ projects: 1, materialLists: 2, purchaseOrders: 6, lines: 9, hold: 9, review: 0, repairable: 4, needsAPerson: 5 }), `totals (${S(r.totals)})`);
+const canc = by["canc-stuck"];
+ok(canc && S(canc.quantities) === S({ needed: 4, received: 1, onOrder: 0, remaining: 3 }) && canc.claims[0].unitPriceCents === 250,
+  `a cancelled, part-delivered line shows what arrived, what remains and the price (${S(canc && canc.quantities)})`);
 ok(r.findings.every((f) => f.projectId === "PRJ-1"), "each finding names its project");
 
-// Each repair is exactly what the one-commit rule makes of the same line.
-for (const lineId of ["recv-stuck", "canc-stuck", "canc-got"]) {
+// Each repair leaves the line exactly as the one-commit rule (lineMove)
+// would have — same status, link and locked price.
+const apply = (line, change) => ({ status: line.status, poId: line.poId, frozenPriceCents: line.frozenPriceCents, ...change });
+for (const lineId of ["recv-stuck", "canc-got"]) {
   const f = by[lineId];
   const po = purchaseOrders.find((p) => p.id === f.poId);
   const pl = po.lineItems.find((l) => l.sourceLineId === lineId);
   const line = materialLists[0].lineItems.find((l) => l.id === lineId);
-  ok(S(lineMove(po, pl, line, "received")) === S(f.repair), `${lineId}: the audit's repair matches purchasing.lineMove`);
+  ok(S(apply(line, lineMove(po, pl, line, "received"))) === S(apply(line, f.repair)), `${lineId}: the audit's repair matches purchasing.lineMove`);
 }
-ok(S(lineMove(purchaseOrders[0], purchaseOrders[0].lineItems[1], materialLists[0].lineItems[5], "sent")) === S(by["sent-need"].repair),
-  "sent-need: the audit's repair matches what sending moves");
+{
+  const line = materialLists[0].lineItems[5];
+  ok(S(apply(line, lineMove(purchaseOrders[0], purchaseOrders[0].lineItems[1], line, "sent"))) === S(apply(line, by["sent-need"].repair)),
+    "sent-need: the audit's repair matches what sending moves");
+}
 
 const text = formatPurchasingAudit(r);
 ok(/read-only — nothing was changed/.test(text) && /Affected: 1 project\(s\), 2 material list\(s\), 6 purchase order\(s\), 9 line\(s\)/.test(text), "the report states the totals and that nothing was changed");

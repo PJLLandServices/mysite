@@ -353,20 +353,26 @@ function checkConsistency() {
   const r = auditPurchasingLines({ purchaseOrders: Array.isArray(pos) ? pos : [], materialLists: Array.isArray(lists) ? lists : [] });
   lastCheck = {
     at,
-    disagreements: r.findings.length,
-    findings: r.findings.slice(0, 50).map((f) => ({ kind: f.kind, projectId: f.projectId, listId: f.listId, lineId: f.lineId, sku: f.sku, poId: f.poId, poStatus: f.poStatus }))
+    disagreements: r.totals.hold,
+    toReview: r.totals.review,
+    findings: r.findings.slice(0, 50).map((f) => ({ kind: f.kind, severity: f.severity, projectId: f.projectId, listId: f.listId, lineId: f.lineId, sku: f.sku, poId: f.poId, poStatus: f.poStatus }))
   };
-  if (r.findings.length) {
-    // Fail closed: hold each PO and list that disagree. Nothing is changed.
+  // Fail closed on contradictions only ("hold"): each list and every PO
+  // involved. Quantity reviews are reported, never held — a draft PO's
+  // quantity may be edited on purpose. Nothing is changed either way.
+  const contradictions = r.findings.filter((f) => f.severity === "hold");
+  if (contradictions.length) {
     const holds = [];
-    for (const f of r.findings) {
+    for (const f of contradictions) {
       const reason = `line ${f.lineId} (${f.sku}) on ${f.listId} disagrees with ${f.poId || "its purchase order"}: ${f.kind}`;
-      if (f.poId && pos.some((p) => p && p.id === f.poId)) holds.push({ scope: "purchase_order", id: f.poId, reason, source: f.kind });
+      const poIds = new Set([...String(f.poId || "").split(", "), ...(f.claims || []).map((c) => c.poId)]);
+      for (const id of poIds) if (id && pos.some((p) => p && p.id === id)) holds.push({ scope: "purchase_order", id, reason, source: f.kind });
       holds.push({ scope: "material_list", id: f.listId, reason, source: f.kind });
     }
     const added = addHolds(holds);
-    console.error(`[purchasing] ${r.findings.length} material-list line(s) disagree with their purchase order — nothing changed; those records are held (${added} new hold(s)); see scripts/audit-po-list-lines.mjs`);
+    console.error(`[purchasing] ${contradictions.length} material-list line(s) disagree with their purchase order — nothing changed; those records are held (${added} new hold(s)); see scripts/audit-po-list-lines.mjs`);
   }
+  if (r.totals.review) console.warn(`[purchasing] ${r.totals.review} line(s) whose quantities a person should review (not held)`);
   return lastCheck;
 }
 

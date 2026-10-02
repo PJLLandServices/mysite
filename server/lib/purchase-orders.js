@@ -518,7 +518,28 @@ async function remove(id) {
 //     (part.supplierPrices[supplierId], lib/part-supplier-prices.js) and
 //     falls back to the catalog price otherwise. `unpricedForSupplier`
 //     names the fallbacks so the UI can say which lines are a guess.
-function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}) {
+// What has already arrived for each line of a list, across every sent,
+// received or cancelled PO that claims it (2026-10-02). A cancelled PO that
+// delivered part of a line leaves the line at "need" for the REST — so
+// what to order is the line's quantity less what arrived, never the whole
+// line again. Same arithmetic as purchasing-audit's "received".
+function receivedByListLine(purchaseOrders, listId) {
+  const out = new Map();
+  for (const po of purchaseOrders || []) {
+    if (!po || po.status === "draft") continue;
+    for (const l of po.lineItems || []) {
+      if (!l || l.sourceListId !== listId || !l.sourceLineId) continue;
+      const qty = Math.max(0, Number(l.qty) || 0);
+      const got = Math.min(qty, Math.max(0, Number(l.receivedQty) || 0));
+      out.set(l.sourceLineId, (out.get(l.sourceLineId) || 0) + got);
+    }
+  }
+  return out;
+}
+
+// `received` — receivedByListLine() for this list. A "need" line orders
+// only what is still to come; one already covered in full is skipped.
+function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, received = null } = {}) {
   if (!list || !Array.isArray(list.lineItems)) {
     return { ok: false, drafts: [], missingSupplier: [], missingSupplierLines: [], unpricedForSupplier: [] };
   }
@@ -529,6 +550,8 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
   const unpricedForSupplier = [];
   for (const line of list.lineItems) {
     if (line.status !== "need") continue;
+    const stillToOrder = Math.max(0, Math.floor(Number(line.qty) || 1) - ((received && received.get(line.id)) || 0));
+    if (stillToOrder <= 0) continue;
     const part = parts && parts[line.sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!forced && !supplierIds.length) {
@@ -551,7 +574,7 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
       else unpricedForSupplier.push(line.sku);
     }
     const unitCents = Number.isFinite(Number(sourceCents)) ? Math.max(0, Math.floor(Number(sourceCents))) : 0;
-    const qty = Math.max(1, Math.floor(Number(line.qty) || 1));
+    const qty = stillToOrder;
     draft.lineItems.push({
       sku: line.sku,
       qty,
@@ -596,29 +619,49 @@ async function reorderFrom(sourcePoId, parts) {
   if (!source) throw new Error(`Source PO ${sourcePoId} not found`);
   // A re-order links to the same lists — never to one whose state is in doubt.
   assertNotHeld(poRefs(source));
+  // What a re-order may claim (2026-10-02): only a list line that still
+  // needs ordering — "need" and on no PO. A repeat purchase of parts the
+  // list already has keeps the list and project link (sourceListId,
+  // sourceMaterialListIds) but claims no line, so no list line is ever
+  // "on order" twice. Read under the purchasing lock.
+  const listsNow = await require("./material-lists").list({ includeArchived: true, includeDeleted: true });
+  const lineNow = (listId, lineId) => {
+    const l = listsNow.find((x) => x.id === listId);
+    return l ? (l.lineItems || []).find((x) => x.id === lineId) || null : null;
+  };
+  // A cancelled PO is re-ordered for what didn't arrive; anything else is
+  // a repeat of the whole order.
+  const outstanding = (line) => source.status === "cancelled"
+    ? Math.max(0, (Number(line.qty) || 0) - (Number(line.receivedQty) || 0))
+    : Number(line.qty) || 0;
   // Snapshot line items, refreshing prices from the catalog at re-order
   // time. If a SKU has been removed from the catalog (rare), keep the
   // original price so the new draft stays usable.
-  const lineItems = source.lineItems.map((line) => {
+  const lineItems = source.lineItems.filter((line) => outstanding(line) > 0).map((line) => {
+    const qty = outstanding(line);
+    const target = line.sourceListId && line.sourceLineId ? lineNow(line.sourceListId, line.sourceLineId) : null;
+    const claims = Boolean(target && target.status === "need" && !target.poId);
     const part = parts && parts[line.sku];
     const unitCents = part && Number.isFinite(Number(part.priceCents))
       ? Math.max(0, Math.floor(Number(part.priceCents)))
       : line.unitPriceCents;
     return {
       sku: line.sku,
-      qty: line.qty,
-      // The same list line it was ordered for — so sending, receiving and
-      // cancelling the re-order move that line, and the job counts it.
+      qty,
+      // The same list line it was ordered for, when that line still needs
+      // ordering — so sending, receiving and cancelling the re-order move
+      // it, and the job counts it.
       sourceListId: line.sourceListId || null,
-      sourceLineId: line.sourceLineId || null,
+      sourceLineId: claims ? line.sourceLineId : null,
       // Carry the description forward (source line's stored snapshot wins;
       // else re-resolve from the catalog at re-order time, like the price).
       description: resolveLineDescription(line, parts),
       unitPriceCents: unitCents,
-      lineTotalCents: unitCents * line.qty,
+      lineTotalCents: unitCents * qty,
       notes: line.notes || ""
     };
   });
+  if (!lineItems.length) throw new PurchasingError(`Nothing to re-order: everything on ${source.id} arrived.`, { status: 409, code: "nothing_to_reorder" });
   const newPo = await create({
     supplierId: source.supplierId,
     supplierName: source.supplierName,
@@ -721,6 +764,7 @@ module.exports = {
   reorderFrom: locked(reorderFrom),
   remove: locked(remove),
   planDraftsFromMaterialList,
+  receivedByListLine,
   deriveReceiveStatus,
   softDelete: locked(softDelete),
   restore: locked(restore),

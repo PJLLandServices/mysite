@@ -192,7 +192,8 @@ try {
   ok(r.status === 200 && (await lineOf(listA.id, "61146")).poId === po2.id, `7: sending it orders the freed lines on it (${r.status})`);
   r = await call("POST", `/api/purchase-orders/${po2.id}/receive`, {});
   ok(r.status === 200 && (await lineOf(listA.id, "61146")).status === "have", `7: receiving it completes them (${r.status})`);
-  ok(await received("61146") === 16, `7: the job counts both POs — 6 + 10 = 16 (${await received("61146")})`);
+  ok(po2.lineItems?.find((l) => l.sku === "61146")?.qty === 4, `7: the re-order asks only for the 4 that didn't arrive, not all 10 again (${po2.lineItems?.find((l) => l.sku === "61146")?.qty})`);
+  ok(await received("61146") === 10, `7: the job counts both POs — 6 + 4 = 10 (${await received("61146")})`);
   const proj2 = await call("GET", `/api/projects/${encodeURIComponent(proj.id)}/materials`);
   ok((proj2.body?.stock || []).find((s) => s.sku === "61146")?.receivedFromPoIds?.includes(po2.id), "7: the re-order is linked to the project's materials");
   clean("7"); unrelatedUnchanged("7");

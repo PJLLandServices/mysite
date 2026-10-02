@@ -7858,4 +7858,32 @@ records no longer disagree; the release is logged. Note for deploying: any lines
 split (see the read-only audit) will be held at the first boot, until they are repaired with
 approval.
 
-All four suites run in `build:check`.
+**One definition of "agree" (Patrick, 2026-10-02).** `server/lib/purchasing-audit.js`
+`auditPurchasingLines` is the only classifier: the boot check holds on its findings, and the live audit's
+browser snippet embeds its source. `scripts/test-purchasing-matrix.mjs` runs the snippet for every case
+and requires byte-identical output. The model: the PO line is the record of what was ordered, what
+arrived and at what price, and nothing on the list side ever rewrites it. For a list line:
+received = everything that arrived on every non-draft PO claiming it (cancelled ones too). At most ONE
+non-cancelled PO may claim a line. "ordered" must point at that PO while its line is outstanding;
+"have" means it arrived (or no PO ever claimed it: stock on hand); "need" means nothing active and
+something still to order. Severity "hold" means the records contradict each other (held at boot).
+"review" means the quantities don't add up: short, or what arrived was ordered again. It is not held,
+because a draft's quantity can be edited on purpose. "Repairable by rule" only when the repair changes
+nothing but the list line's status / poId / locked price, the PO record already holds what arrived and
+its price, any locked price equals that PO price, and the quantities add up. A cancelled PO that
+delivered part of a line is always "needs a person".
+
+**Live behaviour aligned with it.**
+- **Send** refuses a line already ordered on another PO, already received, or claimed twice on one
+  PO (409 `lines_not_orderable`), before anything is written or emailed.
+- **Re-order** of a cancelled PO asks only for what didn't arrive. It claims a list line only if that
+  line still needs ordering; a repeat purchase keeps the list and project link but claims no line.
+- **Generating POs from a list** orders each need line's quantity less what has already arrived
+  (`receivedByListLine`). Before this, cancelling after a partial delivery put the whole line back to
+  "need" and the next generation re-ordered the parts that had arrived.
+- Not changed: quote-request (RFQ) quantities still use the full line.
+
+The matrix (8 PO states × 6 list states, plus 16 extra cases) and the old classifier's 47 misses are
+in the PR.
+
+All five suites run in `build:check`.

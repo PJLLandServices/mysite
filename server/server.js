@@ -16777,7 +16777,8 @@ async function handleApi(req, res, pathname) {
       // all at the dearer branch; the dialog lets Patrick choose.
       const planBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      const received = purchaseOrders.receivedByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, received });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -16824,7 +16825,8 @@ async function handleApi(req, res, pathname) {
       // from the preview: the dialog and the write are separate requests.
       const genBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      const received = purchaseOrders.receivedByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, received });
       if (forceSupplierId && !plan.drafts.length) {
         return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
       }

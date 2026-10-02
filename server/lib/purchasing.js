@@ -110,6 +110,39 @@ function planListMoves(po, listsRaw, event) {
   return { changedLists, moved, notMoved };
 }
 
+// Before a send (2026-10-02): every list line the PO claims must still be
+// waiting to be ordered — "need", on no PO, with no other live or received
+// PO claiming it — or already ordered on THIS PO (a retry). A line on
+// another order, or already received, or claimed twice on this PO, refuses
+// the whole send before anything is written or emailed, so a send can never
+// leave a list line claimed by two orders (purchasing-audit
+// multiple_active_claims / have_but_po_outstanding).
+function assertLinesOrderable(po, posRaw, listsRaw) {
+  const problems = [];
+  const seen = new Set();
+  for (const pl of po.lineItems) {
+    if (!pl.sourceListId || !pl.sourceLineId) continue;
+    const key = pl.sourceListId + "|" + pl.sourceLineId;
+    if (seen.has(key)) { problems.push(`${pl.sku}: two lines on ${po.id} are for the same list line`); continue; }
+    seen.add(key);
+    const list = listsRaw.find((r) => r && r.id === pl.sourceListId);
+    const raw = list && (list.lineItems || []).find((l) => l && l.id === pl.sourceLineId);
+    if (!raw) continue;   // the list line is gone — nothing to keep in step (reported by the audit)
+    const line = ML.hydrateLine(raw);
+    const mine = line.status === "ordered" && line.poId === po.id;
+    if (!mine && !(line.status === "need" && !line.poId)) {
+      problems.push(`${pl.sku} on ${list.id}: ${line.status === "ordered" ? `already ordered on ${line.poId}` : line.status === "have" ? "already received" : `marked need but linked to ${line.poId}`}`);
+      continue;
+    }
+    const other = posRaw.find((p) => p && p.id !== po.id && p.status !== "draft" && p.status !== "cancelled" &&
+      (p.lineItems || []).some((l) => l && l.sourceListId === pl.sourceListId && l.sourceLineId === pl.sourceLineId));
+    if (other) problems.push(`${pl.sku} on ${list.id}: ${other.id} (${other.status}) is already the order for it`);
+  }
+  if (problems.length) {
+    throw new PurchasingError(`Can't send ${po.id} — these material-list lines aren't waiting to be ordered: ${problems.join("; ")}. Remove them from this draft, or check the list.`, { status: 409, code: "lines_not_orderable" });
+  }
+}
+
 // The one commit path for send / receive / cancel.
 //   apply(po)            — the PO transition on a copy; throws if illegal
 //   beforeCommit(stored, po) — send's render + email; may patch po; runs
@@ -169,7 +202,9 @@ async function sendPurchaseOrder(poId, { toEmail, toName, subject, by = "admin" 
     assertNotHeld(purchaseOrders.poRefs(stored));
     const probe = PO.hydrate(clone(posRaw[idx]));
     PO.transitionSent(probe, { toEmail, toName, subject, by });   // throws if it can't be sent
-    planListMoves(probe, await ML.readRaw(), "sent");              // every list readable, every line resolved
+    const listsNow = await ML.readRaw();                           // every list readable
+    assertLinesOrderable(probe, posRaw, listsNow);                 // every line still waiting to be ordered
+    planListMoves(probe, listsNow, "sent");
 
     const inFlight = { at: PO.nowIso(), by, to: probe.emailedToEmail };
     const marked = clone(posRaw[idx]);
@@ -249,8 +284,9 @@ async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" }
     return releaseHold({
       scope, id, note, by,
       stillDisagrees: (h) => {
-        const hits = r.findings.filter((f) => h.scope === "all" ||
-          (h.scope === "purchase_order" && f.poId === h.id) || (h.scope === "material_list" && f.listId === h.id));
+        const involves = (f) => h.scope === "all" || (h.scope === "material_list" && f.listId === h.id) ||
+          (h.scope === "purchase_order" && (String(f.poId || "").split(", ").includes(h.id) || (f.claims || []).some((c) => c.poId === h.id)));
+        const hits = r.findings.filter((f) => f.severity === "hold" && involves(f));
         return hits.length ? hits.slice(0, 3).map((f) => `${f.listId} line ${f.lineId} ${f.kind}`).join("; ") : false;
       }
     });
@@ -258,6 +294,7 @@ async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" }
 }
 
 module.exports = {
+  assertLinesOrderable,
   releaseRecoveryHold,
   sendPurchaseOrder,
   resolveUncertainPoSend,

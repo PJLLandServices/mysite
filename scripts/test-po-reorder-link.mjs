@@ -108,8 +108,11 @@ try {
   // 3. Receive the re-order: its units count toward the project.
   await api("POST", `/api/purchase-orders/${p2.id}/receive`, {});
   const s1 = await stock("61146");
-  ok(s1?.received === 16 && (s1.receivedFromPoIds || []).includes(p2.id) && (s1.receivedFromPoIds || []).includes(p1.id),
-    `3: the project counts the re-order's receipts — 6 + 10 = 16, from both POs (${j(s1 && { received: s1.received, from: s1.receivedFromPoIds })})`);
+  // The re-order of a cancelled PO asks only for what didn't arrive
+  // (2026-10-02): 4 of the 10, not all 10 again.
+  ok(p2.lineItems.find((l) => l.sku === "61146")?.qty === 4, `3: the re-order asks only for the 4 that didn't arrive (${p2.lineItems.find((l) => l.sku === "61146")?.qty})`);
+  ok(s1?.received === 10 && (s1.receivedFromPoIds || []).includes(p2.id) && (s1.receivedFromPoIds || []).includes(p1.id),
+    `3: the project counts the re-order's receipts — 6 + 4 = 10, from both POs (${j(s1 && { received: s1.received, from: s1.receivedFromPoIds })})`);
   ok((await lineOf("61146")).status === "have", "3: receiving the re-order completes the list line");
 
   // 4b. A second re-order, sent then cancelled before anything arrives,
@@ -119,7 +122,7 @@ try {
   ok((await lineOf("61146")).status === "have" && (await lineOf("61146")).poId === null,
     "4: sending another re-order does not touch a line already received on the first");
   await api("POST", `/api/purchase-orders/${p3.id}/cancel`, { reason: "Not needed" });
-  ok((await stock("61146"))?.received === 16 && (await lineOf("61146")).status === "have",
+  ok((await stock("61146"))?.received === 10 && (await lineOf("61146")).status === "have",
     "4: cancelling it adds nothing and leaves the received line alone");
 
   // 7. Two POs from ONE list (two suppliers), sent one after the other, then
@@ -169,7 +172,7 @@ try {
     fs.writeFileSync(legacyFile, JSON.stringify(all, null, 2));
   }
   const s2 = await stock("61146");
-  ok(s2?.received === before && before === 18 && !(s2.receivedFromPoIds || []).includes(legacy.id),
+  ok(s2?.received === before && before === 12 && !(s2.receivedFromPoIds || []).includes(legacy.id),
     `6: an old re-order with no link is not counted on the job — not guessed from its note (${s2?.received})`);
   const after = await purchaseOrders.get(legacy.id);
   ok(S(after.sourceMaterialListIds) === "[]" && after.lineItems[0].sourceListId === null,
