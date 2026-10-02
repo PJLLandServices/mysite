@@ -7821,7 +7821,7 @@ file, a crash between the two, and unrelated purchased lines and POs byte-for-by
 (29) cover the re-order link and the audit.
 
 **Real crashes (2026-10-02, Patrick: "throwing an exception is not the same as the server dying").**
-`scripts/test-po-crash-recovery.mjs` (69 checks; 32 fail on the old code) runs each request in a real
+`scripts/test-po-crash-recovery.mjs` (128 checks; 83 fail on the old code) runs each request in a real
 server process and SIGKILLs it at an exact point (`scripts/lib/crash-at.cjs`, test-only preload):
 after the first data file changed, mid-way through the second, after both but before the journal is
 removed, and just before / just after the supplier email. A fresh process then boots on what was left.
@@ -7834,12 +7834,28 @@ and the problem is reported (server log, `purchasing-recovery-log.json`, GET /ap
 (`list_ahead_of_po`). On the old code a kill mid-write left material-lists.json unreadable, and a
 retry after a crash emailed the supplier twice.
 
-**Supplier email: at most once, honestly.** Exactly-once delivery can't be guaranteed — the server
-can die after the mail server accepts a message and before anything is saved. So, as for change
-requests (2026-09-27), a send is claimed on disk (`sendInFlight`) before the email goes and cleared
-in the same commit that saves the outcome. If the process dies in between, the next send is refused
-as `delivery_uncertain` (409) and the PO page shows "Delivery uncertain" with two buttons: "It went —
-mark as sent" (saves sent + list lines ordered, no email) or "It didn't go — allow sending again"
-(`POST /api/purchase-orders/:id/send-outcome`). Every attempt stays in `sendAttempts`.
+**Supplier email: no automatic duplicate — not "at most once" (Patrick, 2026-10-02).** Exactly-once
+delivery can't be guaranteed — the server can die after the mail server accepts a message and before
+anything is saved. So, as for change requests (2026-09-27), a send is claimed on disk (`sendInFlight`)
+before the email goes and cleared in the same commit that saves the outcome. If the process dies in
+between, the next send is refused as `delivery_uncertain` (409) and the PO page shows "Delivery
+uncertain" with two buttons: "It went — mark as sent" (saves sent + list lines ordered, no email) or
+"It didn't go — allow sending again" (`POST /api/purchase-orders/:id/send-outcome`). Every attempt
+stays in `sendAttempts`. What is guaranteed: the system never sends a second email on its own. What
+is NOT: if the office chooses "It didn't go" and sends again while the first email had in fact
+arrived, the supplier gets two — the button asks the office to confirm that, in those words, first.
+
+**Fail closed when recovery can't prove the state.** A journal that can't be read or no longer
+matches the files, an unreadable data file, or — at boot — a PO and list line that disagree, puts a
+**recovery hold** on the records involved (`purchasing-holds.json`): the PO and list the journal
+header names, the PO and list of each disagreeing line, or — when nothing says which — every PO and
+material list. The rest of the website starts normally. A held record can be read, but send,
+receive, cancel, re-order, edit, delete, restore, re-send, settle a send, and creating a PO from a
+held list are all refused (423 `recovery_required`) with a message saying why and what the office
+must do; the PO and material-list pages show it. No code chooses which record is right. The office
+releases a hold (`POST /api/purchasing/recovery-holds/release`, admin, with a note) only once the
+records no longer disagree; the release is logged. Note for deploying: any lines the old defect left
+split (see the read-only audit) will be held at the first boot, until they are repaired with
+approval.
 
 All four suites run in `build:check`.

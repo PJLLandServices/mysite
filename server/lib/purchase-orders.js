@@ -40,7 +40,16 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { resolveLineDescription } = require("./format");
-const { withPurchasingLock, atomicWrite, PurchasingError } = require("./purchasing-store");
+const { withPurchasingLock, atomicWrite, PurchasingError, assertNotHeld, holdFor } = require("./purchasing-store");
+
+// The records a PO touches: itself and every material list it links to.
+// A recovery hold on any of them blocks writing it (purchasing-store.js).
+function poRefs(rec) {
+  return {
+    purchaseOrders: [rec && rec.id].filter(Boolean),
+    materialLists: [...(rec && rec.sourceMaterialListIds || []), ...((rec && rec.lineItems) || []).map((l) => l && l.sourceListId)].filter(Boolean)
+  };
+}
 
 const FILE = path.join(__dirname, "..", "data", "purchase-orders.json");
 
@@ -289,6 +298,7 @@ async function create({
   internalNotes = "",
   createdBy = "admin"
 } = {}, { extraHistory = [] } = {}) {
+  assertNotHeld({ purchaseOrders: [], materialLists: [...(sourceMaterialListIds || []), ...(lineItems || []).map((l) => l && l.sourceListId)] });
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextPoId(year);
@@ -320,6 +330,8 @@ async function update(id, patch = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  assertNotHeld(poRefs(current));
+  if (Array.isArray(patch.lineItems)) assertNotHeld({ materialLists: patch.lineItems.map((l) => l && l.sourceListId) });
   if (current.status !== "draft" && (Array.isArray(patch.lineItems) || patch.supplierId !== undefined)) {
     throw new Error(`Cannot edit line items or supplier on a ${current.status} PO`);
   }
@@ -471,6 +483,7 @@ async function remove(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
+  assertNotHeld(poRefs(records[idx]));
   const [removed] = records.splice(idx, 1);
   await writeAll(records);
   return removed;
@@ -581,6 +594,8 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
 async function reorderFrom(sourcePoId, parts) {
   const source = await get(sourcePoId);
   if (!source) throw new Error(`Source PO ${sourcePoId} not found`);
+  // A re-order links to the same lists — never to one whose state is in doubt.
+  assertNotHeld(poRefs(source));
   // Snapshot line items, refreshing prices from the catalog at re-order
   // time. If a SKU has been removed from the catalog (rare), keep the
   // original price so the new draft stays usable.
@@ -632,6 +647,7 @@ async function markResent(id, { toEmail, toName, subject } = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const rec = records[idx];
+  assertNotHeld(poRefs(rec));
   if (rec.status !== "sent" && rec.status !== "partially_received") {
     throw new Error(`Can only re-send a sent or partially-received PO. This one is "${rec.status}".`);
   }
@@ -652,6 +668,7 @@ async function softDelete(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Purchase order not found");
+  assertNotHeld(poRefs(records[idx]));
   if (records[idx].deletedAt) throw new Error("Already in Trash");
   records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
   await writeAll(records);
@@ -662,6 +679,7 @@ async function restore(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Purchase order not found");
+  assertNotHeld(poRefs(records[idx]));
   if (!records[idx].deletedAt) throw new Error("Not in Trash");
   records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
   await writeAll(records);
@@ -676,8 +694,10 @@ async function listDeleted() {
 async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   const records = await readAll();
   const cutoff = Date.now() - olderThanMs;
+  assertNotHeld({ purchaseOrders: [], materialLists: [] });   // a hold on everything stops the purge
   const kept = records.filter((r) => {
     if (!r.deletedAt) return true;
+    if (holdFor(poRefs(r))) return true;                         // never purge a held record
     const t = Date.parse(r.deletedAt);
     return !Number.isFinite(t) || t > cutoff;
   });
@@ -707,5 +727,6 @@ module.exports = {
   listDeleted,
   purgeDeleted: locked(purgeDeleted),
   // purchasing.js only — it holds the lock and commits the result.
+  poRefs,
   _internal: { readRaw, serialize, hydrate, assertSendable, uncertainSendError, appendHistory, nowIso, transitionSent, transitionReceived, transitionCancelled }
 };

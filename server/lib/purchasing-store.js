@@ -50,6 +50,7 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const DATA_DIR = path.join(__dirname, "..", "data");
 const JOURNAL = path.join(DATA_DIR, "purchasing-journal.json");
 const RECOVERY_LOG = path.join(DATA_DIR, "purchasing-recovery-log.json");
+const HOLDS = path.join(DATA_DIR, "purchasing-holds.json");
 const DATA_FILES = new Set(["purchase-orders.json", "material-lists.json"]);
 
 class PurchasingError extends Error {
@@ -117,13 +118,20 @@ function readOrNull(file) {
 }
 
 // writes: [{ file, after }] — files under the data directory.
-async function commitFiles(writes) {
+// records: { purchaseOrders: [ids], materialLists: [ids] } — what this
+// commit changes. Written FIRST in the journal, so even a journal cut off
+// part-way still says which records were in flight (see recover()).
+async function commitFiles(writes, records = {}) {
   if (!held.getStore()) throw new Error("commitFiles must run inside withPurchasingLock");
   const plan = writes.filter(Boolean).map((w) => ({ file: w.file, before: readOrNull(w.file), after: w.after }))
     .filter((p) => p.before !== p.after);
   if (!plan.length) return;
   await atomicWrite(JOURNAL, JSON.stringify({
     state: "commit",
+    records: {
+      purchaseOrders: [...new Set((records.purchaseOrders || []).filter(Boolean).map(String))],
+      materialLists: [...new Set((records.materialLists || []).filter(Boolean).map(String))]
+    },
     at: new Date().toISOString(),
     files: plan.map((p) => ({ name: path.basename(p.file), before: p.before, after: p.after }))
   }));
@@ -177,13 +185,112 @@ function recoveryProblems() {
   return recoveryLog().filter((e) => e.kind === "journal_unreadable" || e.kind === "journal_stale");
 }
 
-function setAside(kind, reason) {
+// The records a journal names, read from its header even when the rest of
+// it is cut off or damaged. null = it doesn't say (or can't be read).
+function journalRecords(raw, parsed) {
+  const ok = (r) => r && Array.isArray(r.purchaseOrders) && Array.isArray(r.materialLists) &&
+    [...r.purchaseOrders, ...r.materialLists].every((x) => typeof x === "string") ? r : null;
+  if (parsed && parsed.records) return ok(parsed.records);
+  const m = /"records":(\{"purchaseOrders":\[[^\]]*\],"materialLists":\[[^\]]*\]\})/.exec(String(raw || "").slice(0, 4096));
+  if (!m) return null;
+  try { return ok(JSON.parse(m[1])); } catch { return null; }
+}
+
+function setAside(kind, reason, records) {
   const suffix = kind === "journal_unreadable" ? "corrupt" : "stale";
   const kept = path.join(DATA_DIR, `purchasing-journal.${suffix}-${Date.now()}.json`);
   try { fs.renameSync(JOURNAL, kept); } catch {}
-  const entry = logRecovery({ kind, file: path.basename(kept), reason, action: "set aside unapplied; data files left exactly as they were — run scripts/audit-po-list-lines.mjs" });
-  console.error(`[purchasing] RECOVERY PROBLEM: ${reason} — journal kept as ${path.basename(kept)}, not applied. Data files untouched. Check with scripts/audit-po-list-lines.mjs.`);
+  // Fail closed: the state of these records can't be proven, so nothing may
+  // act on them until a person has looked. If the journal doesn't say which
+  // records, every purchase order and material list is held.
+  const why = `${reason} — kept as ${path.basename(kept)}`;
+  const holds = records && (records.purchaseOrders.length || records.materialLists.length)
+    ? [...records.purchaseOrders.map((id) => ({ scope: "purchase_order", id })), ...records.materialLists.map((id) => ({ scope: "material_list", id }))]
+    : [{ scope: "all", id: null }];
+  addHolds(holds.map((h) => ({ ...h, reason: why, source: kind })));
+  const entry = logRecovery({ kind, file: path.basename(kept), reason, held: holds, action: "set aside unapplied; data files left exactly as they were; the records named are held until the office releases them" });
+  console.error(`[purchasing] RECOVERY PROBLEM: ${reason} — journal kept as ${path.basename(kept)}, not applied. Data files untouched. Held: ${holds.map((h) => h.scope === "all" ? "ALL purchase orders and material lists" : h.id).join(", ")}.`);
   return { recovered: false, problem: entry };
+}
+
+// ---- Recovery holds (fail closed) ------------------------------------------
+//
+// A hold is set when recovery can't prove what a purchase order and its
+// material list should say: a journal that can't be read or no longer
+// matches, or — at boot — a PO and list line that disagree. A held record
+// can be READ, but nothing may send, receive, cancel, re-order, edit,
+// delete or restore it, or order from a held list, so a later action can't
+// build on a state nobody has confirmed. No code decides which record is
+// right. Holds live in purchasing-holds.json and are released only by the
+// office (releaseHold), and only once the records no longer disagree. An
+// unreadable holds file holds everything.
+
+function readHolds() {
+  const raw = readOrNull(HOLDS);
+  if (raw == null) return [];
+  try { const h = JSON.parse(raw); if (Array.isArray(h)) return h; } catch {}
+  return [{ scope: "all", id: null, reason: "the purchasing hold list (purchasing-holds.json) can't be read", source: "holds_unreadable", at: null }];
+}
+
+function addHolds(entries) {
+  const holds = readHolds().filter((h) => h.source !== "holds_unreadable");
+  const at = new Date().toISOString();
+  let added = 0;
+  for (const e of entries) {
+    if (holds.some((h) => h.scope === e.scope && (h.id || null) === (e.id || null))) continue;
+    holds.push({ scope: e.scope, id: e.id || null, reason: e.reason, source: e.source, detail: e.detail || null, at });
+    added += 1;
+  }
+  if (added) atomicWriteSync(HOLDS, JSON.stringify(holds, null, 2) + "\n");
+  return added;
+}
+
+// The hold, if any, that covers any of these records.
+function holdFor({ purchaseOrders = [], materialLists = [] } = {}) {
+  const pos = new Set(purchaseOrders.filter(Boolean));
+  const lists = new Set(materialLists.filter(Boolean));
+  return readHolds().find((h) => h.scope === "all" ||
+    (h.scope === "purchase_order" && pos.has(h.id)) ||
+    (h.scope === "material_list" && lists.has(h.id))) || null;
+}
+
+function holdMessage(h) {
+  const what = h.scope === "all" ? "Purchase orders and material lists are"
+    : h.scope === "purchase_order" ? `Purchase order ${h.id} is` : `Material list ${h.id} is`;
+  return `Recovery required: ${what} locked because an interrupted save left records the system can't prove are correct (${h.reason}). ` +
+    "Nothing can send, receive, cancel, re-order or edit it until the office checks the purchase order against its material list and releases the hold. Nothing has been changed automatically.";
+}
+
+function assertNotHeld(refs) {
+  const h = holdFor(refs);
+  if (!h) return;
+  const err = new PurchasingError(holdMessage(h), { status: 423, code: "recovery_required" });
+  err.hold = h;
+  throw err;
+}
+
+// What a screen shows for one record: the hold and its message, or null.
+function holdInfo(refs) {
+  const h = holdFor(refs);
+  return h ? { ...h, message: holdMessage(h) } : null;
+}
+
+// The office releases a hold once it has checked the records. Refused
+// while the PO and list still disagree — that is repaired first, by a
+// person, never by this.
+function releaseHold({ scope, id = null, by = "admin", note = "", stillDisagrees = () => false } = {}) {
+  if (!String(note || "").trim()) throw new PurchasingError("Say what you checked before releasing the hold.", { status: 400, code: "note_required" });
+  const holds = readHolds();
+  const match = holds.find((h) => h.scope === scope && (h.id || null) === (id || null));
+  if (!match) throw new PurchasingError("There is no such recovery hold.", { status: 404, code: "no_hold" });
+  const disagreement = stillDisagrees(match);
+  if (disagreement) {
+    throw new PurchasingError(`The records still disagree (${disagreement}). Repair them first; the hold stays.`, { status: 409, code: "still_disagrees" });
+  }
+  const kept = holds.filter((h) => h !== match && h.source !== "holds_unreadable");
+  atomicWriteSync(HOLDS, JSON.stringify(kept, null, 2) + "\n");
+  logRecovery({ kind: "hold_released", scope, id, by, note: String(note).slice(0, 500), hold: match });
+  return match;
 }
 
 // Leftover temp files from a write a crash cut short. Never a data file.
@@ -207,10 +314,10 @@ function recover() {
   const files = (j && Array.isArray(j.files) && j.files.length && (j.state === "commit" || j.state === "rollback")) ? j.files : null;
   const shapeOk = files && files.every((f) => f && DATA_FILES.has(path.basename(String(f.name))) &&
     (f.before === null || typeof f.before === "string") && typeof f.after === "string");
-  if (!shapeOk) return setAside("journal_unreadable", `the purchasing journal could not be read (${raw.length} bytes${j ? ", wrong shape" : ", not valid JSON"})`);
+  if (!shapeOk) return setAside("journal_unreadable", `the purchasing journal could not be read (${raw.length} bytes${j ? ", wrong shape" : ", not valid JSON"})`, journalRecords(raw, j));
   const current = files.map((f) => readOrNull(path.join(DATA_DIR, path.basename(String(f.name)))));
   const intact = files.every((f, i) => current[i] === f.before || current[i] === f.after);
-  if (!intact) return setAside("journal_stale", "the data files no longer match the purchasing journal (written over since)");
+  if (!intact) return setAside("journal_stale", "the data files no longer match the purchasing journal (written over since)", journalRecords(raw, j));
   const forward = j.state !== "rollback";
   const changed = [];
   for (const f of files) {
@@ -239,7 +346,8 @@ function checkConsistency() {
     lists = JSON.parse(readOrNull(path.join(DATA_DIR, "material-lists.json")) || "[]");
   } catch (err) {
     lastCheck = { at, unreadable: true, disagreements: null, findings: [] };
-    console.error(`[purchasing] RECOVERY PROBLEM: a purchasing data file can't be read: ${err.message}`);
+    addHolds([{ scope: "all", id: null, reason: `a purchasing data file can't be read (${err.message})`, source: "data_unreadable" }]);
+    console.error(`[purchasing] RECOVERY PROBLEM: a purchasing data file can't be read: ${err.message} — all purchase orders and material lists held`);
     return lastCheck;
   }
   const r = auditPurchasingLines({ purchaseOrders: Array.isArray(pos) ? pos : [], materialLists: Array.isArray(lists) ? lists : [] });
@@ -249,7 +357,15 @@ function checkConsistency() {
     findings: r.findings.slice(0, 50).map((f) => ({ kind: f.kind, projectId: f.projectId, listId: f.listId, lineId: f.lineId, sku: f.sku, poId: f.poId, poStatus: f.poStatus }))
   };
   if (r.findings.length) {
-    console.error(`[purchasing] ${r.findings.length} material-list line(s) disagree with their purchase order — nothing changed; see scripts/audit-po-list-lines.mjs`);
+    // Fail closed: hold each PO and list that disagree. Nothing is changed.
+    const holds = [];
+    for (const f of r.findings) {
+      const reason = `line ${f.lineId} (${f.sku}) on ${f.listId} disagrees with ${f.poId || "its purchase order"}: ${f.kind}`;
+      if (f.poId && pos.some((p) => p && p.id === f.poId)) holds.push({ scope: "purchase_order", id: f.poId, reason, source: f.kind });
+      holds.push({ scope: "material_list", id: f.listId, reason, source: f.kind });
+    }
+    const added = addHolds(holds);
+    console.error(`[purchasing] ${r.findings.length} material-list line(s) disagree with their purchase order — nothing changed; those records are held (${added} new hold(s)); see scripts/audit-po-list-lines.mjs`);
   }
   return lastCheck;
 }
@@ -258,6 +374,7 @@ function checkConsistency() {
 // and the boot check's count of disagreeing lines.
 function recoveryStatus() {
   return {
+    holds: readHolds().map((h) => ({ ...h, message: holdMessage(h) })),
     problems: recoveryProblems(),
     disagreements: lastCheck ? lastCheck.disagreements : null,
     checkedAt: lastCheck ? lastCheck.at : null,
@@ -274,6 +391,11 @@ module.exports = {
   recoveryProblems,
   checkConsistency,
   recoveryStatus,
+  readHolds,
+  holdFor,
+  holdInfo,
+  assertNotHeld,
+  releaseHold,
   PurchasingError,
   JOURNAL,
   DATA_DIR,

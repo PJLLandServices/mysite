@@ -9,6 +9,7 @@
   const els = {
     loading: document.getElementById("mlbLoading"),
     error: document.getElementById("mlbError"),
+    recoveryHold: document.getElementById("mlbRecoveryHold"),
     page: document.getElementById("mlbPage"),
     id: document.getElementById("mlbId"),
     status: document.getElementById("mlbStatus"),
@@ -253,6 +254,12 @@
 
   // ---- Render --------------------------------------------------------
   function renderAll() {
+    // A recovery hold: the server couldn't prove this list agrees with its
+    // purchase orders after an interrupted save. Shown at the top; every
+    // save is refused by the server until the office releases it.
+    const hold = state.list && state.list.recoveryHold;
+    els.recoveryHold.hidden = !hold;
+    els.recoveryHold.textContent = hold ? hold.message : "";
     renderHeader();
     renderLines();
     renderCatalogTree();

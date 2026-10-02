@@ -23,7 +23,7 @@
 // wholesale replacement of a bought-from list's lines) is untouched: this
 // path never replaces a line array, and nothing else can reach it.
 
-const { withPurchasingLock, commitFiles, PurchasingError } = require("./purchasing-store");
+const { withPurchasingLock, commitFiles, PurchasingError, assertNotHeld } = require("./purchasing-store");
 const purchaseOrders = require("./purchase-orders");
 const materialLists = require("./material-lists");
 
@@ -120,6 +120,9 @@ async function transact(poId, event, apply, beforeCommit = null) {
     const idx = posRaw.findIndex((r) => r && r.id === poId);
     if (idx === -1) return null;
     const stored = PO.hydrate(posRaw[idx]);
+    // A recovery hold on this PO or any list it touches: refuse before
+    // anything — the state it would build on is unconfirmed.
+    assertNotHeld(purchaseOrders.poRefs(stored));
     const po = PO.hydrate(clone(posRaw[idx]));
     const t = apply(po);
     const listsRaw = await ML.readRaw();
@@ -133,7 +136,7 @@ async function transact(poId, event, apply, beforeCommit = null) {
     await commitFiles([
       plan.changedLists.length ? { file: materialLists.FILE, after: ML.serialize(listsRaw) } : null,
       t.changed ? { file: purchaseOrders.FILE, after: PO.serialize(posRaw) } : null
-    ]);
+    ], { purchaseOrders: [po.id], materialLists: plan.changedLists.map((w) => w.rec.id) });
     return { ...t, po: t.changed ? po : stored, changed: true, moved: plan.moved, notMoved: plan.notMoved };
   });
 }
@@ -150,14 +153,20 @@ async function transact(poId, event, apply, beforeCommit = null) {
 //      mark), or — if delivery threw — the failed attempt, mark cleared.
 // If the process dies anywhere between 2 and 4, the mark survives and the
 // next send is refused as delivery_uncertain until the office records
-// whether the email went (resolveUncertainPoSend). The supplier can be
-// emailed at most once per send the office starts.
+// whether the email went (resolveUncertainPoSend).
+//
+// The guarantee is exactly this: NO AUTOMATIC duplicate after an
+// uncertain delivery — the system never re-sends on its own. It is not
+// "at most one email": if the office records "it didn't go" and sends
+// again, and the first email had in fact arrived, the supplier has two.
+// That is the office's informed choice, and the PO page says so.
 async function sendPurchaseOrder(poId, { toEmail, toName, subject, by = "admin" } = {}, deliver = null) {
   return withPurchasingLock(async () => {
     const posRaw = await PO.readRaw();
     const idx = posRaw.findIndex((r) => r && r.id === poId);
     if (idx === -1) return null;
     const stored = PO.hydrate(posRaw[idx]);
+    assertNotHeld(purchaseOrders.poRefs(stored));
     const probe = PO.hydrate(clone(posRaw[idx]));
     PO.transitionSent(probe, { toEmail, toName, subject, by });   // throws if it can't be sent
     planListMoves(probe, await ML.readRaw(), "sent");              // every list readable, every line resolved
@@ -167,7 +176,8 @@ async function sendPurchaseOrder(poId, { toEmail, toName, subject, by = "admin" 
     marked.sendInFlight = inFlight;
     marked.updatedAt = inFlight.at;
     posRaw[idx] = marked;
-    await commitFiles([{ file: purchaseOrders.FILE, after: PO.serialize(posRaw) }]);
+    await commitFiles([{ file: purchaseOrders.FILE, after: PO.serialize(posRaw) }],
+      { purchaseOrders: [poId], materialLists: purchaseOrders.poRefs(stored).materialLists });
 
     let docs = {};
     let failure = null;
@@ -228,7 +238,27 @@ async function cancelPurchaseOrder(poId, { reason = "" } = {}) {
   return transact(poId, "cancelled", (po) => PO.transitionCancelled(po, { reason }));
 }
 
+// The office releases a recovery hold once it has checked the records
+// (purchasing-store.js). Refused while the read-only audit still finds the
+// held PO or list disagreeing — that is repaired first, by a person.
+async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" } = {}) {
+  const { releaseHold } = require("./purchasing-store");
+  const { auditPurchasingLines } = require("./purchasing-audit");
+  return withPurchasingLock(async () => {
+    const r = auditPurchasingLines({ purchaseOrders: await PO.readRaw(), materialLists: await ML.readRaw() });
+    return releaseHold({
+      scope, id, note, by,
+      stillDisagrees: (h) => {
+        const hits = r.findings.filter((f) => h.scope === "all" ||
+          (h.scope === "purchase_order" && f.poId === h.id) || (h.scope === "material_list" && f.listId === h.id));
+        return hits.length ? hits.slice(0, 3).map((f) => `${f.listId} line ${f.lineId} ${f.kind}`).join("; ") : false;
+      }
+    });
+  });
+}
+
 module.exports = {
+  releaseRecoveryHold,
   sendPurchaseOrder,
   resolveUncertainPoSend,
   receivePurchaseOrder,

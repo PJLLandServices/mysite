@@ -30,6 +30,8 @@
     history: document.getElementById("poHistory"),
 
     sendBtn: document.getElementById("poSendButton"),
+    recoveryHold: document.getElementById("poRecoveryHold"),
+    recoveryHoldText: document.getElementById("poRecoveryHoldText"),
     uncertain: document.getElementById("poUncertainSend"),
     uncertainText: document.getElementById("poUncertainText"),
     uncertainSent: document.getElementById("poUncertainSent"),
@@ -187,12 +189,14 @@
     setIfNotFocused(els.notes, state.po.notes);
     setIfNotFocused(els.internalNotes, state.po.internalNotes);
 
-    // Lock fields when not draft.
-    const locked = state.po.status !== "draft";
+    // Lock fields when not draft — or when a recovery hold locks the PO.
+    const locked = state.po.status !== "draft" || Boolean(state.po.recoveryHold);
     [els.supplierName, els.supplierContactName, els.supplierEmail, els.supplierPhone, els.supplierAddress, els.notes, els.internalNotes].forEach((el) => {
       el.readOnly = locked;
     });
-    els.saveContext.textContent = locked
+    els.saveContext.textContent = state.po.recoveryHold
+      ? "Recovery required — read-only"
+      : locked
       ? `${STATUS_LABELS[state.po.status]} — read-only`
       : "Editable while in draft";
   }
@@ -250,13 +254,24 @@
 
   function renderActions() {
     const status = state.po.status;
+    // A recovery hold (the server couldn't prove this PO and its material
+    // list agree after an interrupted save): read-only, every action off,
+    // and the office told why. The server refuses the actions regardless.
+    const hold = state.po.recoveryHold;
+    els.recoveryHold.hidden = !hold;
+    if (hold) {
+      els.recoveryHoldText.textContent = hold.message;
+      els.uncertain.hidden = true;
+      [els.sendBtn, els.resendBtn, els.receiveBtn, els.reorderBtn, els.cancelBtn, els.deleteBtn].forEach((b) => { b.hidden = true; });
+      return;
+    }
     // An interrupted send (the server stopped between claiming the send and
     // saving its result): nobody can tell whether the supplier got the
     // email, so it is never sent again until the office says which.
     const f = state.po.sendInFlight;
     els.uncertain.hidden = !f;
     if (f) {
-      els.uncertainText.textContent = `Delivery uncertain: a send to ${f.to || "the supplier"} started ${f.at ? new Date(f.at).toLocaleString() : "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved. Check your sent mail or ask the supplier, then record whether it went. It will not be emailed again until you do.`;
+      els.uncertainText.textContent = `Delivery uncertain: a send to ${f.to || "the supplier"} started ${f.at ? new Date(f.at).toLocaleString() : "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved, so the system can't tell whether the supplier got it. It will not email them again by itself. Check your sent mail or ask the supplier, then record what happened. If you choose "It didn't go" and send again but the first email did arrive, the supplier will get it twice.`;
     }
     els.sendBtn.hidden = status !== "draft" || Boolean(f);
     els.deleteBtn.hidden = status !== "draft";
@@ -562,6 +577,10 @@
   }
 
   async function settleUncertainSend(outcome) {
+    if (outcome === "not_sent" && !(await pjlDialog.confirm(
+      "Only choose this if you've checked that the supplier did NOT get the email (your sent mail, or the supplier).\n\nThe purchase order goes back to a draft and can be sent again. If the first email did arrive, sending again means the supplier gets it twice.",
+      { title: "The email didn't go?", confirmLabel: "It didn't go" }
+    ))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/send-outcome`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

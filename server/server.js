@@ -685,6 +685,12 @@ const MIME_TYPES = {
   ".mov": "video/quicktime"
 };
 
+// A purchase order or material list under a recovery hold (purchasing-
+// store.js): 423 Locked, with the office's message and the hold itself.
+function sendRecoveryRequired(res, err) {
+  return sendJson(res, 423, { ok: false, code: "recovery_required", errors: [err.message], recoveryHold: err.hold || null });
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(status, {
@@ -16701,7 +16707,8 @@ async function handleApi(req, res, pathname) {
     const parentId = url.searchParams.get("parentId");
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const withTotals = url.searchParams.get("withTotals") === "1";
-    const all = await materialLists.list({ status, parentType, parentId, includeArchived });
+    const all = (await materialLists.list({ status, parentType, parentId, includeArchived }))
+      .map((rec) => ({ ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }));
     // Newest-first index — same convention as invoices/quotes.
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
     if (!withTotals) return sendJson(res, 200, { ok: true, lists: all });
@@ -16716,6 +16723,7 @@ async function handleApi(req, res, pathname) {
       const created = await materialLists.create(payload);
       return sendJson(res, 201, { ok: true, list: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create material list."] });
     }
   }
@@ -16726,7 +16734,7 @@ async function handleApi(req, res, pathname) {
     const rec = await materialLists.get(id);
     if (!rec) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
     const partsMap = (PARTS && PARTS.parts) || {};
-    return sendJson(res, 200, { ok: true, list: rec, totals: materialLists.computeTotals(rec, partsMap) });
+    return sendJson(res, 200, { ok: true, list: { ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }, totals: materialLists.computeTotals(rec, partsMap) });
   }
   if (listMatch && req.method === "PATCH") {
     try {
@@ -16737,14 +16745,20 @@ async function handleApi(req, res, pathname) {
       const partsMap = (PARTS && PARTS.parts) || {};
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
     }
   }
   if (listMatch && req.method === "DELETE") {
-    const id = decodeURIComponent(listMatch[1]);
-    const removed = await materialLists.remove(id);
-    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const id = decodeURIComponent(listMatch[1]);
+      const removed = await materialLists.remove(id);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      throw err;
+    }
   }
 
   // POST /api/material-lists/:id/plan-purchase-orders — DRY RUN. Returns
@@ -16789,6 +16803,7 @@ async function handleApi(req, res, pathname) {
         supplierOptions
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
     }
   }
@@ -16841,6 +16856,7 @@ async function handleApi(req, res, pathname) {
       }
       return sendJson(res, 201, { ok: true, purchaseOrders: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate purchase orders."] });
     }
   }
@@ -16878,6 +16894,7 @@ async function handleApi(req, res, pathname) {
       const created = await projects.create(payload);
       return sendJson(res, 201, { ok: true, project: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
     }
   }
@@ -20346,9 +20363,32 @@ async function handleApi(req, res, pathname) {
     const materialListId = url.searchParams.get("materialListId");
     let all = await purchaseOrders.list({ status, supplierId, materialListId });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    all = all.map((po) => ({ ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) }));
     // Interrupted purchasing saves recovery could not apply — a person
     // has to look (purchasing-store.js). Empty when all is well.
     return sendJson(res, 200, { ok: true, purchaseOrders: all, purchasingRecovery: purchasingStore.recoveryStatus() });
+  }
+
+  // Recovery holds (purchasing-store.js) — what is locked and why, and the
+  // office's release once it has checked the records. Office only. A
+  // release is refused while the PO and list still disagree.
+  if (req.method === "GET" && pathname === "/api/purchasing/recovery-holds") {
+    const holdsSession = await requireAdmin(req);
+    if (!holdsSession) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+    return sendJson(res, 200, { ok: true, ...purchasingStore.recoveryStatus() });
+  }
+  if (req.method === "POST" && pathname === "/api/purchasing/recovery-holds/release") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const by = await actorLabel(req, session.uid || "admin");
+      const released = await purchasing.releaseRecoveryHold({ scope: payload.scope, id: payload.id || null, note: payload.note, by });
+      return sendJson(res, 200, { ok: true, released });
+    } catch (err) {
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't release the hold."] });
+    }
   }
 
   if (req.method === "POST" && pathname === "/api/purchase-orders") {
@@ -20369,6 +20409,7 @@ async function handleApi(req, res, pathname) {
       const created = await purchaseOrders.create(payload);
       return sendJson(res, 201, { ok: true, purchaseOrder: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create purchase order."] });
     }
   }
@@ -20377,7 +20418,7 @@ async function handleApi(req, res, pathname) {
   if (poMatch && req.method === "GET") {
     const po = await purchaseOrders.get(decodeURIComponent(poMatch[1]));
     if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-    return sendJson(res, 200, { ok: true, purchaseOrder: po });
+    return sendJson(res, 200, { ok: true, purchaseOrder: { ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) } });
   }
   if (poMatch && req.method === "PATCH") {
     try {
@@ -20387,6 +20428,7 @@ async function handleApi(req, res, pathname) {
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update purchase order."] });
     }
   }
@@ -20397,8 +20439,13 @@ async function handleApi(req, res, pathname) {
     if (po.status !== "draft") {
       return sendJson(res, 409, { ok: false, errors: [`Can only delete draft POs. This one is "${po.status}". Use cancel instead.`] });
     }
-    const removed = await purchaseOrders.remove(id);
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const removed = await purchaseOrders.remove(id);
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      throw err;
+    }
   }
 
   // POST /api/purchase-orders/:id/send — render PDF + CSV, snapshot
@@ -20481,6 +20528,7 @@ async function handleApi(req, res, pathname) {
       if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: result.po, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       console.warn("[po] send failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
@@ -20508,6 +20556,7 @@ async function handleApi(req, res, pathname) {
       if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: result.po });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't record the send outcome."] });
     }
@@ -20541,6 +20590,7 @@ async function handleApi(req, res, pathname) {
       if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: result.po, fullyReceivedLineIds: result.fullyReceivedLineIds, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record receipt."] });
     }
   }
@@ -20560,6 +20610,7 @@ async function handleApi(req, res, pathname) {
       if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: result.po, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
     }
   }
@@ -20642,6 +20693,7 @@ async function handleApi(req, res, pathname) {
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       console.warn("[po] resend failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't re-send purchase order."] });
     }
@@ -20658,6 +20710,7 @@ async function handleApi(req, res, pathname) {
       const newPo = await purchaseOrders.reorderFrom(id, partsMap);
       return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }
@@ -20689,6 +20742,7 @@ async function handleApi(req, res, pathname) {
       res.end(pdf);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
     }
   }
@@ -20718,6 +20772,7 @@ async function handleApi(req, res, pathname) {
       res.end(csv);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render CSV."] });
     }
   }
@@ -20775,6 +20830,7 @@ async function handleApi(req, res, pathname) {
         missingSupplierLines: plan.missingSupplierLines
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan quote requests."] });
     }
   }
@@ -20833,6 +20889,7 @@ async function handleApi(req, res, pathname) {
       const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById, opts);
       return sendJson(res, 201, { ok: true, mode: plan.mode, created: result.created, refreshed: result.refreshed });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
     }
   }
@@ -20889,6 +20946,7 @@ async function handleApi(req, res, pathname) {
       if (applied.length) rebuildCatalogFromOverrides();
       return sendJson(res, 200, { ok: true, applied, unchanged, skipped, rows: winners.length });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply the cheapest quotes."] });
     }
   }

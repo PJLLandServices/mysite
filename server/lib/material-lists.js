@@ -35,7 +35,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { withPurchasingLock, atomicWrite } = require("./purchasing-store");
+const { withPurchasingLock, atomicWrite, assertNotHeld, holdFor } = require("./purchasing-store");
 
 const FILE = path.join(__dirname, "..", "data", "material-lists.json");
 
@@ -260,6 +260,7 @@ async function create({
   lineItems = [],
   createdBy = "admin"
 } = {}) {
+  assertNotHeld({});   // only a hold on everything stops a new list
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextListId(year);
@@ -325,6 +326,7 @@ async function update(id, patch = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  assertNotHeld({ materialLists: [current.id] });   // a recovery hold: read-only until the office releases it
   const next = { ...current };
 
   const allowedTop = ["name", "customerName", "customerEmail", "address", "notes", "parentType", "parentId"];
@@ -425,6 +427,7 @@ async function remove(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
+  assertNotHeld({ materialLists: [records[idx].id] });
   const [removed] = records.splice(idx, 1);
   await writeAll(records);
   return removed;
@@ -498,6 +501,7 @@ async function softDelete(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Material list not found");
+  assertNotHeld({ materialLists: [records[idx].id] });
   if (records[idx].deletedAt) throw new Error("Already in Trash");
   records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
   await writeAll(records);
@@ -508,6 +512,7 @@ async function restore(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Material list not found");
+  assertNotHeld({ materialLists: [records[idx].id] });
   if (!records[idx].deletedAt) throw new Error("Not in Trash");
   records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
   await writeAll(records);
@@ -521,9 +526,11 @@ async function listDeleted() {
 
 async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   const records = await readAll();
+  assertNotHeld({ materialLists: [] });                         // a hold on everything stops the purge
   const cutoff = Date.now() - olderThanMs;
   const kept = records.filter((r) => {
     if (!r.deletedAt) return true;
+    if (holdFor({ materialLists: [r.id] })) return true;       // never purge a held list
     const t = Date.parse(r.deletedAt);
     return !Number.isFinite(t) || t > cutoff;
   });

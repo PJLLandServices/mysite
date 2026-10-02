@@ -21,7 +21,14 @@
 //   G  recovery run again (twice, and with the journal put back) changes
 //      nothing
 //   H  a truncated, a corrupt and a missing journal: the server still
-//      starts, applies nothing, changes no data, and reports the problem
+//      starts, applies nothing, changes no data, and reports the problem —
+//      and FAILS CLOSED: the records it can't vouch for are held, every
+//      later send / receive / cancel / re-order / edit / delete on them is
+//      refused (423 recovery_required), so nothing can compound the split;
+//      the rest of the website and unrelated purchasing keep working
+//   I  the office's release: refused without a note, refused while the
+//      records still disagree, accepted once they agree — then the PO
+//      works again
 //
 // After every recovery: the PO and its list lines agree (read-only audit),
 // unrelated lines and POs are byte-for-byte unchanged, and retrying the
@@ -330,6 +337,81 @@ try {
         : (problems?.problems || []).some((p) => p.kind === "journal_unreadable");
       ok(reported, `H-${kind}: the problem is reported by GET /api/purchase-orders (${S(problems)})`);
       ok(/RECOVERY PROBLEM|disagree/i.test(srv.logs()), `H-${kind}: …and in the server log`);
+
+      // ── Fail closed. The truncated journal still names its records in
+      // its header; the corrupt one names nothing, so everything is held;
+      // the missing one is found by the boot check's disagreement.
+      const holds = problems?.holds || [];
+      const scoped = kind === "corrupt" ? holds.some((h) => h.scope === "all")
+        : holds.some((h) => h.scope === "purchase_order" && h.id === "PO-2026-0001") && holds.some((h) => h.scope === "material_list" && h.id === "ML-2026-0001") && !holds.some((h) => h.scope === "all");
+      ok(scoped, `H-${kind}: the records recovery can't vouch for are held — ${kind === "corrupt" ? "everything (the journal doesn't say which)" : "PO-2026-0001 and ML-2026-0001 only"} (${S(holds.map((h) => [h.scope, h.id]))})`);
+      const page = await srv.api("GET", "/api/purchase-orders/PO-2026-0001");
+      ok(/^Recovery required: .*locked/.test(page.body?.purchaseOrder?.recoveryHold?.message || ""), `H-${kind}: the PO itself carries the office's recovery-required message (${(page.body?.purchaseOrder?.recoveryHold?.message || "").slice(0, 80)})`);
+      const listPage = await srv.api("GET", "/api/material-lists/ML-2026-0001");
+      ok(/^Recovery required/.test(listPage.body?.list?.recoveryHold?.message || ""), `H-${kind}: …and so does its material list`);
+
+      // Every later action on the held records is refused, and none of
+      // them changes a byte.
+      const held = [
+        ["receive", () => srv.api("POST", "/api/purchase-orders/PO-2026-0001/receive", {})],
+        ["receive one line", () => srv.api("POST", "/api/purchase-orders/PO-2026-0001/receive", { lineUpdates: { pl_x: 4 } })],
+        ["cancel", () => srv.api("POST", "/api/purchase-orders/PO-2026-0001/cancel", { reason: "x" })],
+        ["re-order", () => srv.api("POST", "/api/purchase-orders/PO-2026-0001/reorder")],
+        ["re-send", () => srv.api("POST", "/api/purchase-orders/PO-2026-0001/resend", { toEmail: "orders@siteone.test" })],
+        ["edit the PO", () => srv.api("PATCH", "/api/purchase-orders/PO-2026-0001", { notes: "edited" })],
+        ["edit the list", () => srv.api("PATCH", "/api/material-lists/ML-2026-0001", { notes: "edited" })],
+        ["delete the list", () => srv.api("DELETE", "/api/material-lists/ML-2026-0001")],
+        ["order more from the list", () => srv.api("POST", "/api/purchase-orders", { supplierName: "Ewing", sourceMaterialListIds: ["ML-2026-0001"], lineItems: [{ sku: "61146", qty: 1, unitPriceCents: 100, sourceListId: "ML-2026-0001", sourceLineId: "li_x" }] })]
+      ];
+      for (const [what, act] of held) {
+        const r = await act();
+        ok(r.status === 423 && r.body?.code === "recovery_required" && /^Recovery required/.test(r.body?.errors?.[0] || ""),
+          `H-${kind}: ${what} is refused as recovery required (${r.status} ${r.body?.code || ""})`);
+      }
+      ok(files(srv.DATA) === crashedFiles, `H-${kind}: after every one of those attempts both data files are still exactly as the crash left them — nothing compounded`);
+      ok(poEmails(srv) === 0, `H-${kind}: …and nobody was emailed`);
+
+      // The rest of the website keeps working; so does unrelated purchasing
+      // (unless the journal named nothing and everything is held).
+      const site = await srv.api("GET", "/api/booking/services");
+      ok(site.status === 200, `H-${kind}: the rest of the website still serves (${site.status})`);
+      const other = await sendPo(srv);
+      if (kind === "corrupt") ok(other.status === 423, `H-${kind}: with everything held, an unrelated send is refused too (${other.status})`);
+      else ok(other.status === 200 && poEmails(srv) === 1, `H-${kind}: an unrelated PO on another list still sends (${other.status})`);
+
+      // No code picks a side: the office can't release while they disagree.
+      const rel = await srv.api("POST", "/api/purchasing/recovery-holds/release", { scope: kind === "corrupt" ? "all" : "purchase_order", id: kind === "corrupt" ? null : "PO-2026-0001", note: "Checked the supplier invoice." });
+      ok(rel.status === 409 && rel.body?.code === "still_disagrees", `H-${kind}: releasing the hold is refused while the records still disagree (${rel.status} ${rel.body?.code})`);
+    } finally { await srv.stop(); }
+    fs.rmSync(c.dir, { recursive: true, force: true });
+  }
+  // ── I. The office's release, once the records agree. Killed after BOTH
+  // writes (D), then the journal damaged: the files agree, but recovery
+  // can't prove it, so the records are held until a person releases them.
+  {
+    const c = await crashRun("I", "journal-unlink:1", receiveAll);
+    const journal = readText(c.dir, "purchasing-journal.json");
+    fs.writeFileSync(path.join(c.dir, "purchasing-journal.json"), journal ? journal.slice(0, Math.floor(journal.length / 3)) : "");
+    const srv = await restart(c.dir);
+    try {
+      let r = await receiveAll(srv);
+      ok(r.status === 423, `I: the held PO refuses a receive (${r.status})`);
+      r = await srv.api("POST", "/api/purchasing/recovery-holds/release", { scope: "purchase_order", id: "PO-2026-0001", note: "" });
+      ok(r.status === 400 && r.body?.code === "note_required", `I: a release needs a note saying what was checked (${r.status} ${r.body?.code})`);
+      await srv.login({ role: "tech" });
+      r = await srv.api("POST", "/api/purchasing/recovery-holds/release", { scope: "purchase_order", id: "PO-2026-0001", note: "x" });
+      ok(r.status === 403, `I: a technician can't release a hold (${r.status})`);
+      await srv.login();
+      for (const [scope, id] of [["purchase_order", "PO-2026-0001"], ["material_list", "ML-2026-0001"]]) {
+        r = await srv.api("POST", "/api/purchasing/recovery-holds/release", { scope, id, note: "Checked PO-2026-0001 against the delivery slip: both lines arrived." });
+        ok(r.status === 200, `I: with the records agreeing, the office releases the ${scope} hold (${r.status} ${S(r.body?.errors)})`);
+      }
+      const log = readJson(srv.DATA, "purchasing-recovery-log.json") || [];
+      ok(log.filter((e) => e.kind === "hold_released").length === 2 && log.every((e) => e.kind !== "hold_released" || /delivery slip/.test(e.note)), "I: each release is logged with who and what they checked");
+      const before = readText(srv.DATA, "purchase-orders.json") + readText(srv.DATA, "material-lists.json");
+      r = await receiveAll(srv);
+      ok(r.status === 200 && readText(srv.DATA, "purchase-orders.json") + readText(srv.DATA, "material-lists.json") === before,
+        `I: the PO works again — a repeat receive is accepted and changes nothing (${r.status})`);
     } finally { await srv.stop(); }
     fs.rmSync(c.dir, { recursive: true, force: true });
   }
