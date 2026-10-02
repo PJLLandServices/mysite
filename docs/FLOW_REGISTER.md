@@ -2,6 +2,39 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02 (The open bucket is placed where Patrick says, not where the engine allows):**
+Patrick: *"right now currently I have someone in an open bucket, but I cannot place them
+wherever I want."* Three walls, all from the 2026-09-09 placement fix: the drawer listed only
+the three cheapest days; every placement rode the afternoon (a morning drop was refused); and
+`POST /api/admin/open-bucket/slot` asked `listAvailableSlots` for a slot and refused the
+placement when the engine had none — `day_unavailable` for a customer too far off the route,
+`afternoon_full` at the cap, nothing at all past `publicBookingThrough`. **The open bucket holds
+exactly the customers the public calendar could not seat; asking the same engine for permission
+to place them refused the placement for the same reason it refused the booking.** Nov 1–6 — the
+admin tail the booking window reserves "for admin placement" — was unreachable from the one
+screen built to place people. Fixed: the resolver takes `bucket` (morning | afternoon, afternoon
+by default — "on our way home" is still the default, no longer the only answer), returns the
+engine's slot in that half when it has one, and otherwise the first half-hour of that half with
+no physical overlap against `activeBookings()` — the same posture as the `admin_custom` reserve
+path it books through (corridor, caps, hours and the season window step aside; a double-booking
+never does) — flagged `forced: true` so the toast says "past the route filter — your call". The
+only refusal left is `no_room`: every half-hour of that half already holds a stop. The drawer
+lists best days (with cost) → every other route day → "Any other date…" with a date box, plus a
+Morning/Afternoon select; a chip dropped on a half-day block takes that half, dropped on the day
+takes the afternoon; `dropRefusal` no longer refuses a morning. The customer still hears only the
+half-day window. Coverage: `test-open-bucket-placement.mjs` 16 → 24 — the full-afternoon case
+now asserts `no_room` and that the MORNING of the same day is placeable; a Mississauga standby
+against an all-Newmarket day (far past the 90 bound) is placed, `forced`, books through the
+ordinary admin path and loses its standby envelope; a placement on the first weekday after
+`publicBookingThrough` (the admin tail) lands. That suite also stops writing its day down
+(`"2026-10-06"`, four days from going stale the way `test-day-order`'s did on Oct 1): the next
+weekday three days out, pulled forward to the fall window's first day, with the Toronto UTC
+offset computed for the day so the fixture survives the November clock change.
+`test-place-tray.mjs` 34 → 35: a morning drop is allowed, the drawer's day list carries the full
+plan and a date box. **Patrick's acceptance test — not yet walked:** open the Open bucket
+drawer; the waiting customer's row should show a day list with "Best days / Other route days /
+Any other date…", a Morning/Afternoon select, and Book + notify; pick the day you wanted, press
+it — the booking lands and the toast says whether it was past the filter.
 **2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
 The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
 (`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already
