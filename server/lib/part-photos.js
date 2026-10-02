@@ -903,7 +903,9 @@ function createPartPhotos({ dataDir, sharp }) {
   // stay; the old hash goes to the history as "quality-upgrade" and the
   // source records what it was upgraded from. Refused (skipped, not
   // thrown) when the photo is no longer the one the plan looked at.
-  async function upgradePhotoQuality(groupId, { fromHash, to, imageUrl, by }) {
+  // `confirmed` ({ basis: "visual", similarity }) is recorded when Patrick's
+  // eye, not the 0.98 line, said it is the same photograph (Oct 2 2026).
+  async function upgradePhotoQuality(groupId, { fromHash, to, imageUrl, by, confirmed = null }) {
     if (!HASH_RE.test(String(fromHash || "")) || !to || !HASH_RE.test(String(to.hash || ""))) throw new Error("Bad upgrade.");
     if (!fileExists(to.hash)) throw new Error("The larger copy's file is missing — rebuild the plan.");
     return mutate(async (groups) => {
@@ -915,9 +917,9 @@ function createPartPhotos({ dataDir, sharp }) {
       const before = { hash: g.photo.hash, width: g.photo.width || null, height: g.photo.height || null, imageUrl: (g.source && g.source.imageUrl) || null };
       (g.history ||= []).push({ hash: before.hash, replacedAt: now, replacedBy: "quality-upgrade", by });
       g.photo = { hash: to.hash, width: to.width || null, height: to.height || null, sizes: to.sizes || null, source: to.source || null, quality: to.quality || null };
-      g.source = { ...(g.source || {}), imageUrl: imageUrl || (g.source && g.source.imageUrl) || null, upgradedFrom: { ...before, at: now, by } };
+      g.source = { ...(g.source || {}), imageUrl: imageUrl || (g.source && g.source.imageUrl) || null, upgradedFrom: { ...before, at: now, by, ...(confirmed ? { confirmed } : {}) } };
       g.updatedAt = now;
-      await log({ action: "photo.quality-upgrade", groupId, from: before.hash, to: to.hash, by });
+      await log({ action: "photo.quality-upgrade", groupId, from: before.hash, to: to.hash, by, ...(confirmed ? { confirmed } : {}) });
       return { groupId, from: before.hash, to: to.hash };
     });
   }
@@ -932,7 +934,7 @@ function createPartPhotos({ dataDir, sharp }) {
   // recorded (it may be soft or blurry — that never blocked a restoration
   // of the same picture, and it is shown on the card). Skipped, never
   // thrown, when the candidate is no longer what the plan looked at.
-  async function restoreCandidateImage(groupId, { fromHash, to, imageUrl, by }) {
+  async function restoreCandidateImage(groupId, { fromHash, to, imageUrl, by, confirmed = null }) {
     if (!HASH_RE.test(String(fromHash || "")) || !to || !HASH_RE.test(String(to.hash || ""))) throw new Error("Bad restoration.");
     if (!fileExists(to.hash)) throw new Error("The larger copy's file is missing — rebuild the plan.");
     return mutate(async (groups) => {
@@ -954,10 +956,10 @@ function createPartPhotos({ dataDir, sharp }) {
         ...c,
         hash: to.hash, width: to.width || null, height: to.height || null, sizes: to.sizes || null,
         imageSource: to.source || null, sharpness: to.sharpness ?? null, quality: to.quality || null,
-        source: { ...(c.source || {}), imageUrl: imageUrl || before.imageUrl, restoredFrom: { ...before, at: now, by } }
+        source: { ...(c.source || {}), imageUrl: imageUrl || before.imageUrl, restoredFrom: { ...before, at: now, by, ...(confirmed ? { confirmed } : {}) } }
       };
       g.candidates = list;
-      await log({ action: "candidate.quality-restore", groupId, from: before.hash, to: to.hash, by });
+      await log({ action: "candidate.quality-restore", groupId, from: before.hash, to: to.hash, by, ...(confirmed ? { confirmed } : {}) });
       return { groupId, from: before.hash, to: to.hash };
     });
   }
