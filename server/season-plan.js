@@ -1770,7 +1770,7 @@
         best: stuck ? "address not pinpointed — place from the CRM"
           : top ? `best ${top.label || prettyDate(top.date)} · +${top.addedDriveMinutes} min` : "no routed day near them yet",
         stuck,
-        hint: stuck ? "" : "drag onto a day — books their afternoon and sends the confirmation"
+        hint: stuck ? "" : "drag onto a day (afternoon) or onto a half-day — books it and sends the confirmation"
       }));
     }
     el("trayStandbyCount").textContent = String(lastStandby.length);
@@ -1809,7 +1809,6 @@
     const day = ((current && current.days) || []).find((d) => d.date === date);
     if (drag.kind === "standby") {
       if (drag.row && !drag.row.resolved) return "Their address isn't pinpointed — place them from the CRM.";
-      if (bucket === "morning") return "Open-bucket pickups ride the afternoon — drop on the afternoon, or on the day.";
     }
     if (drag.kind === "unplanned" && day && day.bookedOnly) return "That's a booked-only day — drop on a route day.";
     return "";
@@ -1824,7 +1823,9 @@
       return;
     }
     if (!drag.row) { showToast("That customer is no longer waiting.", "bad"); loadStandby(); return; }
-    await bookStandby(drag.row, date);
+    // A drop on the day (no half named) rides the afternoon — "on our
+    // way home"; a drop on a half-day block takes that half.
+    await bookStandby(drag.row, date, bucket || "afternoon");
   }
 
   // ---- Day preview: the day as it would be, with this stop on it -------
@@ -3212,8 +3213,9 @@
         return;
       }
       standbyNote.textContent = `${data.rows.length} customer${data.rows.length === 1 ? "" : "s"} waiting. `
-        + "Best days use the same added-drive math as the booking filter — placing one books them, "
-        + "sends their confirmation, and takes them off this list.";
+        + "Best days use the same added-drive math as the booking filter, but any day and either half is yours "
+        + "to pick — placing one books them, sends their confirmation, and takes them off this list. "
+        + "The only refusal is a half-day the crew is already physically booked through.";
       for (const row of data.rows) standbyList.appendChild(standbyRow(row));
       lastStandby = data.rows || [];
       renderTray();
@@ -3244,25 +3246,19 @@
     return data;
   }
 
-  async function bookStandby(row, date) {
+  async function bookStandby(row, date, bucket) {
     try {
-      // Ask the engine where this customer actually fits.
-      //
-      // This used to hard-code 13:00 as the anchor minute, which
-      // collided with whatever already sat at 13:00 and came back 409
-      // physical_conflict — on exactly the days this panel had just
-      // recommended. The geographic re-stamp made that worse, not
-      // better: the afternoon fills from 12:00 in half-hour steps, so
-      // 13:00 is precisely where the third afternoon booking lands.
-      //
-      // The resolver returns an afternoon slot that is actually free and
-      // passes the day's capacity and corridor checks, or refuses with a
-      // reason. The customer is still told the 12–5 window and never a
-      // minute.
+      // Ask the engine where this customer actually fits — and when the
+      // engine has no slot in the half Patrick chose, the server places
+      // them anyway, at the first half-hour the crew is not already
+      // standing in. The open bucket holds the customers the public
+      // calendar could not seat; the placement is his call, not the
+      // corridor's. The customer is still told the half-day window and
+      // never a minute.
       const slotRes = await fetch("/api/admin/open-bucket/slot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: row.leadId, date })
+        body: JSON.stringify({ leadId: row.leadId, date, bucket: bucket || "afternoon" })
       });
       const slotData = await slotRes.json().catch(() => ({}));
       if (!slotRes.ok || !slotData.ok) {
@@ -3277,7 +3273,9 @@
         zoneCount: row.zoneCount || null,
         contact: { address: row.address }
       });
-      showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} — confirmation sent.`);
+      const half = slotData.bucketKey === "morning" ? "morning" : "afternoon";
+      showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} ${half}`
+        + `${slotData.forced ? " (past the route filter — your call)" : ""} — confirmation sent.`);
       loadStandby();
       await load();
       selectDay(date);
@@ -3307,30 +3305,68 @@
       warn.className = "sp-tag is-warn";
       warn.textContent = "address not pinpointed — place by hand from the CRM";
       act.appendChild(warn);
-    } else if (!row.bestDays.length) {
-      const none = document.createElement("span");
-      none.className = "sp-standby-meta";
-      none.textContent = "No routed day near them yet.";
-      act.appendChild(none);
     } else {
+      // Every day, not just the three cheapest: the best days first with
+      // their cost, then every other day on the plan, then any date at
+      // all. Where this customer goes is Patrick's decision; the costs
+      // are there to inform it, not to make it.
       const select = document.createElement("select");
       select.setAttribute("aria-label", `Day for ${row.name || row.leadId}`);
-      for (const d of row.bestDays) {
+      const listed = new Set();
+      const bestGroup = document.createElement("optgroup");
+      bestGroup.label = "Best days";
+      for (const d of row.bestDays || []) {
         const opt = document.createElement("option");
         opt.value = d.date;
         opt.textContent = `${d.label || (d.bookingsOnly ? "Booked day" : d.date)} · ${prettyDate(d.date)} · +${d.addedDriveMinutes} min`;
-        select.appendChild(opt);
+        bestGroup.appendChild(opt);
+        listed.add(d.date);
       }
+      if (bestGroup.children.length) select.appendChild(bestGroup);
+      const restGroup = document.createElement("optgroup");
+      restGroup.label = "Other route days";
+      for (const day of ((current && current.days) || [])) {
+        if (listed.has(day.date) || day.date < todayKey()) continue;
+        const opt = document.createElement("option");
+        opt.value = day.date;
+        opt.textContent = `${day.bookedOnly ? "Booked day" : (day.label || "—")} · ${prettyDate(day.date)}`;
+        restGroup.appendChild(opt);
+        listed.add(day.date);
+      }
+      if (restGroup.children.length) select.appendChild(restGroup);
+      const other = document.createElement("option");
+      other.value = "__other";
+      other.textContent = "Any other date…";
+      select.appendChild(other);
+      const dateInput = document.createElement("input");
+      dateInput.type = "date";
+      dateInput.min = todayKey();
+      dateInput.hidden = true;
+      dateInput.setAttribute("aria-label", `Any date for ${row.name || row.leadId}`);
+      select.addEventListener("change", () => { dateInput.hidden = select.value !== "__other"; });
+      if (!listed.size) { select.value = "__other"; dateInput.hidden = false; }
+
+      const half = document.createElement("select");
+      half.setAttribute("aria-label", `Half-day for ${row.name || row.leadId}`);
+      for (const [v, t] of [["afternoon", "Afternoon"], ["morning", "Morning"]]) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = t;
+        half.appendChild(opt);
+      }
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "pjl-btn pjl-btn-primary sp-standby-book";
       btn.textContent = "Book + notify";
       btn.addEventListener("click", async () => {
+        const date = select.value === "__other" ? dateInput.value : select.value;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showToast("Pick a date first.", "bad"); return; }
         btn.disabled = true;
-        const booked = await bookStandby(row, select.value);
+        const booked = await bookStandby(row, date, half.value);
         if (!booked) btn.disabled = false;
       });
-      act.append(select, btn);
+      act.append(select, dateInput, half, btn);
     }
     li.appendChild(act);
     return li;

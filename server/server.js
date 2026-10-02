@@ -28459,6 +28459,9 @@ async function orderDayForDriving(rows) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const leadId = normalizeString(payload.leadId, 40);
       const date = normalizeString(payload.date, 10);
+      // The half Patrick asked for. Afternoon unless he said morning —
+      // "on our way home" is still the default, no longer the only answer.
+      const bucketKey = normalizeString(payload.bucket, 10) === "morning" ? "morning" : "afternoon";
       if (!leadId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return sendJson(res, 422, { ok: false, code: "bad_request", errors: ["Pick a waiting customer and a day."] });
       }
@@ -28493,26 +28496,56 @@ async function orderDayForDriving(rows) {
       });
 
       const onDay = slots.filter((sl) => geoFilter.localDateKey(new Date(sl.start)) === date);
-      const afternoon = onDay.filter((sl) => new Date(sl.start).getHours() >= 12);
-      const pick = afternoon[0] || null;
+      const inHalf = onDay.filter((sl) => (new Date(sl.start).getHours() >= 12 ? "afternoon" : "morning") === bucketKey);
+      let pick = inHalf[0] || null;
+      let forced = false;
+
+      // THE ENGINE'S "NO" IS NOT PATRICK'S "NO". The open bucket holds
+      // exactly the customers the public calendar could not seat — too
+      // far off every route, a full half-day, a date past the public
+      // window (Nov 1–6 is reserved for THIS). Asking the same engine for
+      // permission to place them refused the placement for the same
+      // reason it refused the booking (Patrick, 2026-10-02: "I cannot
+      // place them wherever I want"). So when the engine has no slot in
+      // the half he chose, the placement is his call: the first half-hour
+      // of that half the crew is not already standing in. Same posture
+      // as the admin custom-time path this books through — the corridor,
+      // the caps and the season window step aside; a physical double-
+      // booking never does. He is told it was forced, with the half-day
+      // still the only time the customer hears.
+      if (!pick) {
+        const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
+        const minutes = Number(BOOKABLE_SERVICES[s.serviceKey]?.minutes) || 30;
+        const [y, mo, d] = date.split("-").map(Number);
+        const from = parseHHmmToMinutes(bucket.from);
+        const to = parseHHmmToMinutes(bucket.to);
+        for (let mm = from; mm + minutes <= to; mm += 30) {
+          const start = new Date(y, mo - 1, d, 0, 0, 0, 0);
+          start.setMinutes(mm);
+          const end = new Date(start.getTime() + minutes * 60 * 1000);
+          const clash = bookingsNow.some((b) => b.start && b.end
+            && new Date(b.start).getTime() < end.getTime() && new Date(b.end).getTime() > start.getTime());
+          if (clash) continue;
+          pick = { start: start.toISOString(), bucketKey, bucketWindow: bucket.windowLabel };
+          forced = true;
+          break;
+        }
+      }
       if (!pick) {
         return sendJson(res, 409, {
           ok: false,
-          code: onDay.length ? "afternoon_full" : "day_unavailable",
-          message: onDay.length
-            ? "That day's afternoon is full — try another day from the list."
-            : "The engine won't put this customer on that day — try another from the list.",
-          errors: [onDay.length
-            ? "That day's afternoon is full. Pick another day."
-            : "That day isn't available for this customer. Pick another day."]
+          code: "no_room",
+          message: `Every half-hour of that ${bucketKey} already has a stop on it — pick the other half, or another day.`,
+          errors: [`That ${bucketKey} is physically full. Pick the other half-day or another day.`]
         });
       }
 
       return sendJson(res, 200, {
         ok: true,
         slotStart: pick.start,
-        bucketKey: pick.bucketKey || "afternoon",
-        bucketWindow: pick.bucketWindow || "12 PM – 5 PM"
+        bucketKey: pick.bucketKey || bucketKey,
+        bucketWindow: pick.bucketWindow || (bucketKey === "morning" ? "8 AM – 12 PM" : "12 PM – 5 PM"),
+        forced
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't find a slot."] });

@@ -78,7 +78,9 @@ const dropRefusal = lift("dropRefusal", `
   ok("a booked-only day refuses a plan stop", /booked-only/.test(dropRefusal(u, { date: "2026-10-28", bucket: null }) || ""), j(dropRefusal(u, { date: "2026-10-28", bucket: null })));
   ok("an open-bucket customer on a day → allowed (the afternoon is chosen)", dropRefusal(s, { date: "2026-10-06", bucket: null }) === "", j(dropRefusal(s, { date: "2026-10-06", bucket: null })));
   ok("…on the afternoon → allowed", dropRefusal(s, { date: "2026-10-06", bucket: "afternoon" }) === "", j(dropRefusal(s, { date: "2026-10-06", bucket: "afternoon" })));
-  ok("…on the MORNING → refused, saying why", /afternoon/.test(dropRefusal(s, { date: "2026-10-06", bucket: "morning" }) || ""), j(dropRefusal(s, { date: "2026-10-06", bucket: "morning" })));
+  // Patrick, 2026-10-02: "I cannot place them wherever I want." A morning
+  // drop is his call now, like every other half-day.
+  ok("…on the MORNING → allowed too", dropRefusal(s, { date: "2026-10-06", bucket: "morning" }) === "", j(dropRefusal(s, { date: "2026-10-06", bucket: "morning" })));
   ok("…with an unpinpointed address → refused", /pinpointed/.test(dropRefusal({ ...s, row: { resolved: false } }, { date: "2026-10-06", bucket: null }) || ""), j(dropRefusal({ ...s, row: { resolved: false } }, { date: "2026-10-06", bucket: null })));
   ok("no day → refused", dropRefusal(u, { date: "", bucket: null }) !== "", j(dropRefusal(u, { date: "", bucket: null })));
 }
@@ -98,8 +100,10 @@ const dropRefusal = lift("dropRefusal", `
     /annotateRailForDrag\(\)/.test(page) && /badge\.textContent = `\+\$\{c\.addedDriveMinutes\} min`/.test(page) && /badge\.classList\.add\("is-best"\)/.test(page), "no costs on the rail");
   ok("a property drop adds through addToDay, the ONE plan write on this page",
     /await addToDay\(drag\.id, date, bucket \|\| lighterBucketOf\(day\)\)/.test(page) && (page.match(/\$\{base\(\)\}\/add`/g) || []).length === 1, "a second add path");
-  ok("a standby drop books through bookStandby", /await bookStandby\(drag\.row, date\)/.test(page), "drops book some other way");
-  ok("…and the drawer's button uses the SAME function", /const booked = await bookStandby\(row, select\.value\)/.test(page), "the drawer books its own way");
+  ok("a standby drop books through bookStandby, carrying the half it landed on", /await bookStandby\(drag\.row, date, bucket \|\| "afternoon"\)/.test(page), "drops book some other way");
+  ok("…and the drawer's button uses the SAME function", /const booked = await bookStandby\(row, date, half\.value\)/.test(page), "the drawer books its own way");
+  ok("the drawer offers every route day and any date, not just the three cheapest",
+    /restGroup\.label = "Other route days"/.test(page) && /other\.value = "__other"/.test(page) && /dateInput\.type = "date"/.test(page), "the day list is still the top three");
   ok("…which asks the slot resolver, never a hard-coded minute",
     (page.match(/\/api\/admin\/open-bucket\/slot/g) || []).length === 1 && (page.match(/\/api\/booking\/reserve/g) || []).length === 1, "slot/reserve called from more than one place");
   ok("a refused drop is said on the drop, not swallowed", /const why = dropRefusal\(drag, \{ date, bucket \}\);\s*if \(why\) \{ showToast\(why, "bad"\); return; \}/.test(page), "silent refusal");

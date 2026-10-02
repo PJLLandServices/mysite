@@ -33,7 +33,41 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = path.join(ROOT, "server", "data");
 const require2 = createRequire(path.join(ROOT, "package.json"));
 const PORT = 4831;
-const DAY = "2026-10-06";
+// Computed, not written down: the server reads the real clock, and a fixed
+// date goes into the past (test-day-order's did on 2026-10-01). The next
+// weekday at least three days out, inside the fall public window.
+const seasonsLib = require2(path.join(ROOT, "server", "lib", "seasons.js"));
+const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function pickTestDay() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(today); d.setDate(d.getDate() + 3);
+  const fall = seasonsLib.publicBookingStatus("fall", dateKey(today));
+  const from = fall && (fall.from || fall.startsOn);
+  if (from && dateKey(d) < from) { const [y, m, dd] = from.split("-").map(Number); d.setFullYear(y, m - 1, dd); }
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return dateKey(d);
+}
+const DAY = pickTestDay();
+// Toronto's UTC offset on DAY (-04:00 in summer time, -05:00 after the
+// November clock change) — the fixture's bookings must sit on local
+// afternoon minutes whatever the season.
+const OFF = (() => {
+  const m = /GMT([+-]\d+)/.exec(new Date(`${DAY}T12:00:00Z`).toLocaleString("en-US", { timeZone: "America/Toronto", timeZoneName: "shortOffset" }));
+  const h = m ? Number(m[1]) : -4;
+  return `${h < 0 ? "-" : "+"}${String(Math.abs(h)).padStart(2, "0")}:00`;
+})();
+// The admin tail: the first weekday after the public window closes, which
+// the engine never offers and the open bucket must still reach.
+function pickTailDay() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const fall = seasonsLib.publicBookingStatus("fall", dateKey(today));
+  if (!fall || !fall.through) return null;
+  const [y, m, dd] = fall.through.split("-").map(Number);
+  const d = new Date(y, m - 1, dd); d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return dateKey(d) > dateKey(today) ? dateKey(d) : null;
+}
+const TAIL = pickTailDay();
 
 let passed = 0;
 const failures = [];
@@ -63,7 +97,7 @@ const booked = (id, hhmm) => ({
   id, customerId: `C-${id}`, propertyId: `P-${id}`,
   contact: { name: `Booked ${id}`, address: `${id} Main St, Newmarket, ON`, town: "Newmarket" },
   booking: {
-    start: `${DAY}T${hhmm}:00.000-04:00`, end: `${DAY}T${hhmm}:30.000-04:00`,
+    start: `${DAY}T${hhmm}:00.000${OFF}`, end: `${DAY}T${hhmm}:30.000${OFF}`,
     serviceKey: "fall_close_4z", serviceLabel: "Fall winterization",
     status: "confirmed", coords: NEWMARKET
   }
@@ -128,7 +162,7 @@ try {
   // This is precisely what the Book + notify button sends today.
   const collide = await post("/api/booking/reserve", {
     leadId: "L-SB", serviceKey: "fall_close_4z",
-    slotStart: new Date(`${DAY}T13:00:00.000-04:00`).toISOString(),
+    slotStart: new Date(`${DAY}T13:00:00.000${OFF}`).toISOString(),
     source: "admin_custom", zoneCount: 4,
     contact: { address: "100 Davis Dr, Newmarket, ON L3Y 2N1" }
   });
@@ -146,7 +180,7 @@ try {
     slot.status === 200 && Boolean(slot.body.slotStart),
     `${slot.status} ${JSON.stringify(slot.body).slice(0, 200)}`);
   ok("…and it is NOT the old hard-coded 13:00 anchor",
-    slot.body.slotStart !== new Date(`${DAY}T13:00:00.000-04:00`).toISOString(),
+    slot.body.slotStart !== new Date(`${DAY}T13:00:00.000${OFF}`).toISOString(),
     slot.body.slotStart);
   ok("…it is in the afternoon, which is what 'on our way home' means",
     slot.body.slotStart ? new Date(slot.body.slotStart).getHours() >= 12 : false,
@@ -182,13 +216,74 @@ try {
     .map((hhmm, i) => booked(`L-F${i}`, hhmm));
   write("leads", [...fullAfternoon, standby("L-SB2")]);
   const overCap = await post("/api/admin/open-bucket/slot", { leadId: "L-SB2", date: DAY });
-  ok("a full afternoon refuses rather than overfilling the day",
+  ok("a physically full afternoon refuses rather than stacking two stops on one minute",
     overCap.status === 409, `${overCap.status} ${JSON.stringify(overCap.body).slice(0, 200)}`);
-  ok("…naming the reason, so Patrick can pick another day",
-    overCap.body.code === "afternoon_full" || overCap.body.code === "day_unavailable",
+  ok("…naming the reason, so Patrick can pick the other half or another day",
+    overCap.body.code === "no_room",
     JSON.stringify(overCap.body).slice(0, 200));
   ok("…leaving that customer in the open bucket",
     !read("leads").find((l) => l.id === "L-SB2")?.booking);
+
+  // ---- 4b. THE PLACEMENT IS PATRICK'S CALL, NOT THE ENGINE'S ------------
+  // Patrick, 2026-10-02: "I have someone in an open bucket, but I cannot
+  // place them wherever I want." The open bucket holds exactly the
+  // customers the public calendar could not seat; asking the same engine
+  // for permission to place them refused the placement for the same
+  // reason. Now: the engine's slot when it has one, otherwise the first
+  // free half-hour of the half he chose — the corridor, the caps and the
+  // season window step aside; a physical double-booking never does.
+
+  // The same full afternoon, but he asks for the MORNING: the morning is
+  // empty, so the placement lands there.
+  const morning = await post("/api/admin/open-bucket/slot", { leadId: "L-SB2", date: DAY, bucket: "morning" });
+  ok("the morning can be asked for", morning.status === 200 && morning.body.bucketKey === "morning",
+    `${morning.status} ${JSON.stringify(morning.body).slice(0, 200)}`);
+  ok("…and the slot is in it", morning.body.slotStart ? new Date(morning.body.slotStart).getHours() < 12 : false,
+    morning.body.slotStart);
+
+  // A customer the engine refuses on GEOGRAPHY: Mississauga against an
+  // all-Newmarket day is far past the 90-minute service bound, so the
+  // public calendar never offers them this day. The placement goes
+  // through anyway, and says it was forced.
+  const MISSISSAUGA = { lat: 43.5915, lng: -79.6410, source: "google" };
+  const far = {
+    ...standby("L-FAR"),
+    contact: { name: "Far Fay", firstName: "Far", lastName: "Fay", email: "fay@example.com",
+      phone: "9055550010", address: "100 City Centre Dr, Mississauga, ON L5B 2C9", town: "Mississauga" }
+  };
+  far.standby = { ...far.standby, coords: MISSISSAUGA };
+  write("leads", [booked("L-A", "12:00"), booked("L-B", "12:30"), far]);
+  const forced = await post("/api/admin/open-bucket/slot", { leadId: "L-FAR", date: DAY });
+  ok("a customer the engine refuses on geography is still placed — Patrick decided",
+    forced.status === 200 && Boolean(forced.body.slotStart),
+    `${forced.status} ${JSON.stringify(forced.body).slice(0, 200)}`);
+  ok("…and the answer says it was forced past the filter", forced.body.forced === true, JSON.stringify(forced.body).slice(0, 200));
+  ok("…in the afternoon he asked for, on a free half-hour",
+    forced.body.slotStart ? new Date(forced.body.slotStart).getHours() >= 13 : false, forced.body.slotStart);
+  const farBooked = await post("/api/booking/reserve", {
+    leadId: "L-FAR", serviceKey: "fall_close_4z",
+    slotStart: forced.body.slotStart, source: "admin_custom", zoneCount: 4,
+    contact: { address: "100 City Centre Dr, Mississauga, ON L5B 2C9" }
+  });
+  ok("…and booking that slot goes through the ordinary admin path",
+    farBooked.status === 201 || farBooked.body.ok === true,
+    `${farBooked.status} ${JSON.stringify(farBooked.body).slice(0, 200)}`);
+  ok("…which clears their standby", !read("leads").find((l) => l.id === "L-FAR")?.standby
+    && Boolean(read("leads").find((l) => l.id === "L-FAR")?.booking?.start));
+
+  // A date past the public booking window (Nov 1–6 is the admin tail the
+  // window reserves for exactly this) — the engine emits no slot there;
+  // the placement still lands.
+  if (TAIL) {
+    write("leads", [standby("L-SB3")]);
+    const tail = await post("/api/admin/open-bucket/slot", { leadId: "L-SB3", date: TAIL });
+    ok("a date in the admin-reserved tail is placeable",
+      tail.status === 200 && tail.body.forced === true
+        && new Date(tail.body.slotStart).toLocaleDateString("en-CA") === TAIL,
+      `${tail.status} ${JSON.stringify(tail.body).slice(0, 200)}`);
+  } else {
+    console.log("  (the fall window's tail is behind us — tail placement not exercised today)");
+  }
 
   // ---- 5. An unknown lead is refused cleanly ----------------------------
   // ---- 6. The button no longer carries an anchor minute of its own ------
