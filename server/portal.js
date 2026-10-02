@@ -740,6 +740,14 @@ function renderPortal(data) {
     service_scheduled: { title: "your service is scheduled.", bare: "Your service is scheduled.",
       intro: "Your appointment details are below. Anything you need to share before we arrive, drop us a message.",
       stage: "Service scheduled", follow: "Your appointment details are below." },
+    // PJL-31: specifically the fall closing — the last seasonal visit of
+    // the year — distinct from service_complete below, which is generic
+    // (one-off repair/install visits). Sits above it in priority since
+    // it's the more specific, more useful thing to tell a seasonal
+    // customer whose system is now shut down for the winter.
+    season_complete: { title: "your season with PJL is done.", bare: "Your season with PJL is done.",
+      intro: "Your fall closing is complete — your system is shut down for the winter. Reports and invoices for every visit are in your Service History below.",
+      stage: "Season complete", follow: "We'll be in touch when it's time to open your system again in spring." },
     service_complete: { title: "your service is complete.", bare: "Your service is complete.",
       intro: "Reports and invoices for every visit are in your Service History below. Book again any time.",
       stage: "Service complete", follow: "Warranty and reports for every visit live in Service History below." },

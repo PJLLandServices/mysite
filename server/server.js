@@ -4541,6 +4541,13 @@ async function customerPortalSections(lead) {
   const seasonPlanYear = new Date().getFullYear();
   let ownedProperties = [];
   let seasonPlanBookings = [];
+  // PJL-31: a completed fall-closing booking produces no Work Order (see
+  // outreach.deriveBookingState's comment), so hasCompletedWork below
+  // never sees it — this is the only signal that "the season's service
+  // already happened." Scoped to fall specifically: completing a spring
+  // opening means the system just turned ON for the year, not that the
+  // season is over, so it doesn't get the "your season is done" copy.
+  let fallClosingComplete = false;
   try {
     const allProps = await properties.list();
     ownedProperties = customerId
@@ -4548,16 +4555,21 @@ async function customerPortalSections(lead) {
       : allProps.filter((prop) => prop.id && prop.id === lead.propertyId);
     const states = await Promise.all(ownedProperties.map(async (prop) => {
       try {
-        const st = await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
-        return (st && st.hasBooking)
-          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
-          : null;
+        return await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
       } catch (err) {
         console.warn("[portal] season-plan booking state failed:", err?.message);
         return null;
       }
     }));
-    seasonPlanBookings = states.filter(Boolean);
+    seasonPlanBookings = ownedProperties
+      .map((prop, i) => {
+        const st = states[i];
+        return (st && st.hasBooking)
+          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
+          : null;
+      })
+      .filter(Boolean);
+    fallClosingComplete = seasonPlanSeason === "fall" && states.some((st) => st && st.completed);
   } catch (err) {
     console.warn("[portal] season-plan bookings build failed:", err?.message);
   }
@@ -4571,7 +4583,8 @@ async function customerPortalSections(lead) {
   const derivedFacts = {
     upcomingBooking: envelopeUpcoming || woUpcoming || seasonPlanBookings.length > 0,
     hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
-    projectUnderway: projectCards.some((p) => p.stage === "scheduled")
+    projectUnderway: projectCards.some((p) => p.stage === "scheduled"),
+    fallClosingComplete
   };
 
   // JOB-006 (CRM-12) — the "Next visit" card, replacing the frozen
@@ -4823,16 +4836,23 @@ async function portalPayloadForLead(lead, req) {
   }
 
   const sections = await customerPortalSections(lead);
-  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false };
+  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false, fallClosingComplete: false };
   delete sections.derivedFacts;
   // Priority order (JOB-005, adopted 2026-08-02 with Patrick's two
-  // additions): project underway > quote ready > scheduled > complete >
-  // closed (quiet) > request open.
+  // additions): project underway > quote ready > scheduled > season
+  // complete > complete > closed (quiet) > request open.
+  //
+  // PJL-31: season_complete sits ABOVE the generic service_complete —
+  // when a customer's fall closing just finished and nothing else is
+  // upcoming, "your season with PJL is done" is more specific and more
+  // useful than the generic "your service is complete" (which exists
+  // for one-off repair/install visits, not the seasonal cycle).
   const derived = {
     state:
       facts.projectUnderway ? "project_underway"
       : status === "quoted" ? "quote_ready"
       : facts.upcomingBooking ? "service_scheduled"
+      : facts.fallClosingComplete ? "season_complete"
       : facts.hasCompletedWork ? "service_complete"
       : status === "lost" ? "closed"
       : "request_open",
@@ -4840,7 +4860,7 @@ async function portalPayloadForLead(lead, req) {
     hasCompletedWork: facts.hasCompletedWork,
     projectUnderway: facts.projectUnderway,
     showIntakeRail: !facts.hasCompletedWork && !facts.upcomingBooking
-      && !facts.projectUnderway && status !== "lost"
+      && !facts.fallClosingComplete && !facts.projectUnderway && status !== "lost"
   };
 
   // Warranty claims filed under this customer's email. Read-only here —
