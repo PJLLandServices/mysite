@@ -328,11 +328,13 @@ try {
   await page.goBack();
   await page.waitForTimeout(200);
 
-  // Empty activity state does the asking, with the action in it.
+  // An empty job says what is missing rather than showing zeros. The
+  // Overview (stage 6, 2026-10-02) replaced the old "Recent activity" card:
+  // the Daily Records card now says nobody has clocked in yet.
   const overviewText = await page.locator("main").innerText();
   ok(
-    "empty activity state invites the first entry",
-    /no project updates have been recorded/i.test(overviewText),
+    "an empty job's Overview says what is missing",
+    /no days logged yet/i.test(overviewText),
     overviewText.slice(0, 600)
   );
 
