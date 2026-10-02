@@ -24,6 +24,11 @@
 //      stops a JS bundle landing on a build whose native code cannot run
 //      it. Pin it to a string and an update built against different native
 //      libraries will happily install and crash on launch.
+//      ONE EXCEPTION, TEMPORARY (docs/TTP_RUNTIME_PIN.md): the Tap to Pay
+//      release lane pins exactly the runtime of the phone hand-built from
+//      0c638a8, so its updates reach that phone. Only that value; and no
+//      native build is made while it is present (both build workflows
+//      refuse it, checked below).
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -62,14 +67,38 @@ check('there is a URL to ask', () => {
     'the update endpoint is missing or is not the EAS one');
 });
 
+// The runtime of Patrick's hand-built Tap to Pay phone (0c638a8, built on
+// his Mac). The one literal the release lane may pin; see
+// docs/TTP_RUNTIME_PIN.md for why, and for when it must go.
+const INSTALLED_TTP_RUNTIME = '41661c6ff465c4c52451347262fc9fc638271ed6';
+
 check('runtimeVersion stays a fingerprint, not a number', () => {
   // The fingerprint is the safety catch. A JS bundle can only land on a
   // build whose native side is identical — so an update published from
   // main can never install onto the Tap to Pay build, which carries an
   // extra native library. Pin this to a string and it would, then crash on
   // launch with no way back except the App Store.
+  //
+  // The lane's pin is the single exception: exactly the installed phone's
+  // runtime, never any other literal. The release guard
+  // (scripts/ttp-lane-guard.mjs) separately proves the native code under
+  // it is unchanged from the build that phone runs.
+  if (APP.runtimeVersion === INSTALLED_TTP_RUNTIME) return;
   assert.deepEqual(APP.runtimeVersion, { policy: 'fingerprint' },
     'runtimeVersion is no longer a fingerprint — an update can now land on native code that cannot run it');
+});
+
+check('no native build is made while a runtime is pinned', () => {
+  // A binary built with a pinned runtime takes every update published to
+  // it, whatever native code that update was built against. Both build
+  // workflows refuse a tree that is not on the fingerprint policy.
+  for (const wf of ['field-app-build.yml', 'field-app-taptopay-build.yml']) {
+    const text = read(`.github/workflows/${wf}`);
+    assert.match(text, /- name: Refuse while the runtime is pinned/, `${wf} would build with a pinned runtime`);
+    assert.match(text, /rt\.policy !== 'fingerprint'/, `${wf} does not test the policy`);
+    assert.ok(text.indexOf('Refuse while the runtime is pinned') < text.indexOf('npx eas-cli@23.2.0 build'),
+      `${wf} builds before it checks the runtime`);
+  }
 });
 
 check('the app still checks on cold start, and only on cold start', () => {

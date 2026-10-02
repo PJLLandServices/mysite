@@ -6862,6 +6862,91 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-02 — FIELD-TTP-LANE-01: the Tap to Pay release lane (built, not yet used; no PASS flow touched)
+
+**What it is.** `.github/workflows/field-app-ttp-lane.yml` is one gated way to put the Tap to Pay
+line (`claude/field-taptopay`, #305) on Patrick's working phone, and to roll the phone back. That
+phone is hand-built from `0c638a8`, runtime `41661c6ff465c4c52451347262fc9fc638271ed6`.
+
+It replaces hand-ported hotfixes on the old emergency branch
+(`claude/eas-update-pjl-field-wgmjtt`, `field-app-hotfix-taptopay.yml`). That branch stays
+untouched as the fallback until this lane has published and the phone has passed field
+acceptance.
+
+**Nothing runs by itself.** The workflow's only trigger is `workflow_dispatch`, and its default
+mode is check-only. Merging it publishes nothing.
+
+| Mode | What it needs | What it does |
+|---|---|---|
+| check-only | the lane commit | runs the guard, publishes nothing, holds no Expo token |
+| publish | run from main; the lane branch's head; the typed phrase `publish <12 of sha> to 41661c6f` | guard → stamp `src/buildInfo.json` → guard again → `eas update --platform ios --branch production --json` → checks every reported update is iOS, on the phone's runtime, in one group |
+| rollback | run from main; a known-good group in `config/ttp-lane.json`; the phrase `rollback to <group>` | `update:view` confirms the group is the recorded iOS update on the phone's runtime, then `update:republish --group … --platform ios --json` |
+
+**Permissions.**
+- The workflow level grants nothing.
+- The `release` job has `contents: read` only.
+- A separate `record` job has `contents: write`. It runs only after a successful publish or
+  rollback, and only pushes an annotated `field-ttp/<mode>/<UTC>-<id>` tag.
+- Every run also leaves its record in the job summary and a 90-day artifact.
+
+**The runtime pin (temporary; `docs/TTP_RUNTIME_PIN.md`).** On a Linux runner the lane tree
+fingerprints as `a7df9c32…`, not the phone's `41661c6f…`. So the lane commits
+`expo.runtimeVersion = "41661c6f…"`, and nothing rewrites `app.json` during publish.
+
+A literal runtime switches off the fingerprint's protection. `scripts/ttp-lane-guard.mjs` (main's
+copy, never the lane's) therefore proves native compatibility without trusting it:
+
+| Gate | Checks |
+|---|---|
+| G0 | The tree is the requested commit, clean, and descended from `0c638a8`. After the stamp, it is that commit plus `buildInfo.json` alone. |
+| G1 | Every native-relevant file equals `0c638a8`'s. The one exception is `expo.runtimeVersion`: policy → the exact literal, byte for byte. |
+| G2 | With that field put back, in a throwaway copy, the fingerprint is `a7df9c322260d841aac44036eef0d60a2d987459`. |
+| G3 | The published tree's fingerprint is `ebf53e3862fc12574e4c49540320c1f312fa5e22`, and everything the fingerprint reads is a file G1 compares. |
+| G4 | The tree resolves to runtime `41661c6f…`. |
+
+Both native-build workflows (`field-app-build.yml`, `field-app-taptopay-build.yml`) refuse while
+any literal runtime is present. `field-app-taptopay-build.yml` now checks out
+`claude/field-taptopay`; it had pointed at the stale #151 branch.
+
+**Not covered by any check:** a hand build in Xcode on the Mac. The pin must come out first; the
+removal steps are in the doc.
+
+**Guard proofs (real `expo-updates` fingerprints, Linux, eas-cli 23.2.0 tooling, 2026-10-02):**
+
+| Tree | G0 | G1 | G2 | G3 | G4 | Result |
+|---|---|---|---|---|---|---|
+| Pinned lane `2124cba` | ✅ | ✅ | ✅ a7df9c32 | ✅ ebf53e38 | ✅ | **PASS** |
+| …stamped, `--after-stamp` | ✅ | ✅ | ✅ | ✅ | ✅ | **PASS** |
+| #305 today `0c638a8` (unpinned) | ✅ | ❌ | — | ❌ a7df9c32 | ❌ | FAIL |
+| #368 `c8b533cb` (unpinned) | ✅ | ❌ | — | ❌ | ❌ | FAIL |
+| `ios.supportsTablet` edited | ✅ | ❌ names the field | — | ❌ 544e3180 | ✅ | FAIL |
+| pinned to another literal | ✅ | ❌ | — | ❌ 74fa725c | ❌ | FAIL |
+| `expo-location` 19.0.8 → 19.0.7 | ✅ | ❌ package files | ❌ 054f4b95 | ❌ a6b82c2b | ✅ | FAIL |
+| `node_modules` native file drifted, lockfile unchanged | ✅ | ✅ | ❌ 19984363 | ❌ 28754651 | ✅ | FAIL |
+| `app.json` rewritten in the checkout (the old lane's move) | ❌ dirty | ✅ | ✅ | ❌ | ❌ | FAIL |
+| "stamp" commit that also rewrites `app.json` | ❌ | ✅ | ✅ | ❌ | ❌ | FAIL |
+
+Two rows show why G4 alone proves nothing: the dependency change and the drifted module both still
+resolve to the phone's runtime.
+
+**Tests.**
+- `scripts/test-ttp-lane-workflow.mjs` (in `build:check`, 75 checks) covers:
+  - the trigger, permissions and step order;
+  - no step touching `app.json`;
+  - the guard on a git fixture with a stand-in fingerprint;
+  - the typed phrases and the EAS result shapes (eas-cli 23.2.0's own);
+  - both build workflows' refusal, run for real;
+  - that no other workflow can publish when these files merge.
+- Against main's old build workflows it fails 7 checks.
+- `scripts/test-ota-channel.mjs` allows a literal runtime only when it is exactly the phone's, and
+  requires both build workflows to refuse one.
+
+**Not yet done, each separately approved:**
+1. fast-forward #305 to the pinned lane head;
+2. Patrick's check-only run, then his publish run;
+3. field acceptance on the phone;
+4. retiring the old emergency branch.
+
 ## 2026-10-01 — FIELD (FLOW-31): Customer Summary "Done" crashed the whole app — fixed (#361)
 
 **Regression from #360, found on Patrick's phone within minutes of update 01a0f8f4.** The app
