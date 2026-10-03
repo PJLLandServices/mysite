@@ -1,0 +1,53 @@
+{
+  "_about": "Expectations for the Tap to Pay release lane (.github/workflows/field-app-ttp-lane.yml), read by scripts/ttp-lane-guard.mjs. Every value here was measured, not assumed; docs/FLOW_REGISTER.md (2026-10-02, Tap to Pay release lane) records how. Changing any of them is a release decision.",
+  "laneBranch": "claude/field-taptopay",
+  "appDir": "pjl-field",
+  "platform": "ios",
+  "updateBranch": "production",
+  "easCli": "23.2.0",
+  "installedBuild": {
+    "commit": "0c638a83434f9782d5a079af89e9bef7609f7fc7",
+    "how": "Hand-built by Patrick on his Mac in Xcode, 2026-09-25, from claude/field-taptopay (#305)",
+    "runtime": "41661c6ff465c4c52451347262fc9fc638271ed6",
+    "runtimeSource": "Reported by the phone itself on every request: GET /api/admin/field-clients",
+    "runtimeVersionField": { "policy": "fingerprint" },
+    "nativeFingerprint": "a7df9c322260d841aac44036eef0d60a2d987459"
+  },
+  "pin": {
+    "runtimeVersion": "41661c6ff465c4c52451347262fc9fc638271ed6",
+    "pinnedTreeFingerprint": "ebf53e3862fc12574e4c49540320c1f312fa5e22",
+    "doc": "docs/TTP_RUNTIME_PIN.md"
+  },
+  "nativeFiles": {
+    "files": [
+      "app.json",
+      "app.config.js",
+      "app.config.ts",
+      "package.json",
+      "package-lock.json",
+      "eas.json",
+      ".easignore",
+      ".gitignore",
+      ".fingerprintignore",
+      "fingerprint.config.js",
+      "react-native.config.js"
+    ],
+    "dirs": ["plugins/", "assets/", "ios/", "android/", "patches/"],
+    "contentsSources": {
+      "expoConfig": "app.json",
+      "packageJson:scripts": "package.json",
+      "package:react-native": "package-lock.json",
+      "expoAutolinkingConfig:ios": "package-lock.json",
+      "rncoreAutolinkingConfig:ios": "package-lock.json"
+    }
+  },
+  "knownGood": [
+    {
+      "group": "5f8d54eb-1f46-475b-87d5-cf214f173630",
+      "iosUpdate": "01a0f8fd-4c1f-72c3-969e-c065b82888de",
+      "commit": "15be412e33dd88a257eeed10376f685cfe70ad21",
+      "runtime": "41661c6ff465c4c52451347262fc9fc638271ed6",
+      "what": "Emergency hotfix 15be412 (old lane): Customer Summary Done fix (#361), arrows and summary (#360), Notify (#358). On the phone since 2026-10-01."
+    }
+  ]
+}

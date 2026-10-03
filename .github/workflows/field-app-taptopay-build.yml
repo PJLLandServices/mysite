@@ -97,8 +97,28 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: claude/pjl-field-taptopay
+          # The Tap to Pay line is #305's branch. The older branch of a
+          # similar name (#151) is stale and is not what the phone runs.
+          ref: claude/field-taptopay
 
+      # NO NATIVE BUILD WHILE THE RUNTIME IS PINNED (docs/TTP_RUNTIME_PIN.md).
+      # The Tap to Pay release lane commits a literal runtimeVersion so its
+      # updates reach the phone hand-built from 0c638a8. A binary built with
+      # that literal would accept every update published to it, whatever
+      # native code the update was built against — so a build refuses here,
+      # before anything is installed, signed or numbered.
+      - name: Refuse while the runtime is pinned
+        working-directory: pjl-field
+        run: |
+          node -e "
+            const rt = JSON.parse(require('fs').readFileSync('app.json', 'utf8')).expo.runtimeVersion;
+            if (!rt || typeof rt !== 'object' || rt.policy !== 'fingerprint') {
+              console.error('::error::app.json pins runtimeVersion to ' + JSON.stringify(rt) + '. That is the Tap to Pay release lane pin, which is for over-the-air updates to the installed phone only.');
+              console.error('::error::No native build is made while it is present. Remove the pin first: docs/TTP_RUNTIME_PIN.md, Removing it.');
+              process.exit(1);
+            }
+            console.log('runtimeVersion is the fingerprint policy; a native build may proceed.');
+          "
 
       - uses: actions/setup-node@v4
         with:
@@ -119,7 +139,7 @@ jobs:
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
             if (!pkg.dependencies['@stripe/stripe-terminal-react-native']) {
-              console.error('::error::The claude/pjl-field-taptopay branch has no Stripe Terminal SDK. Nothing you did wrong — the branch changed, or it was merged and deleted. Send this message to Claude.');
+              console.error('::error::The claude/field-taptopay branch has no Stripe Terminal SDK. Nothing you did wrong — the branch changed, or it was merged and deleted. Send this message to Claude.');
               process.exit(1);
             }
             const app = JSON.parse(require('fs').readFileSync('app.json','utf8'));
