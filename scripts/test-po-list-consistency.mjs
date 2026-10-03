@@ -64,9 +64,14 @@ try {
   const purchaseOrders = srv.lib("purchase-orders.js");
   const { auditPurchasingLines } = srv.lib("purchasing-audit.js");
   const audit = () => auditPurchasingLines({ purchaseOrders: JSON.parse(read(PO_FILE) || "[]"), materialLists: JSON.parse(read(ML_FILE) || "[]") });
+  // Findings the scenario creates on purpose, from the step that makes
+  // them on: they must be there, and nothing else may be.
+  const expected = new Set();
   const clean = (label) => {
     const r = audit();
-    ok(r.findings.length === 0, `${label}: no PO and list line disagree (${j(r.findings.map((f) => [f.kind, f.poId, f.sku]))})`);
+    const keys = r.findings.map((f) => `${f.kind}|${f.sku}`);
+    ok(keys.filter((k) => !expected.has(k)).length === 0 && [...expected].every((k) => keys.includes(k)),
+      `${label}: no PO and list line disagree (${j(r.findings.map((f) => [f.kind, f.poId, f.sku]))})`);
   };
   const call = async (method, p, body) => srv.api(method, p, body);
   const must = async (method, p, body) => {
@@ -194,6 +199,16 @@ try {
   ok(r.status === 200 && (await lineOf(listA.id, "61146")).status === "have", `7: receiving it completes them (${r.status})`);
   ok(po2.lineItems?.find((l) => l.sku === "61146")?.qty === 4, `7: the re-order asks only for the 4 that didn't arrive, not all 10 again (${po2.lineItems?.find((l) => l.sku === "61146")?.qty})`);
   ok(await received("61146") === 10, `7: the job counts both POs — 6 + 4 = 10 (${await received("61146")})`);
+  // The 6 came at $10.00 on the cancelled PO; the re-order took today's
+  // catalog price for the 4. The list keeps one price per line, so the
+  // checker flags it for a person — a review, never a hold or a repair
+  // (2026-10-03) — and each PO keeps its own price.
+  const mixed = audit().findings.filter((f) => f.sku === "61146");
+  const reorderPrice = rawPo(po2.id).lineItems.find((l) => l.sku === "61146").unitPriceCents;
+  ok(reorderPrice !== 1000 && S(mixed.map((f) => [f.kind, f.severity, f.repairable])) === S([["mixed_receipt_prices", "review", false]]),
+    `7: 6 at 1000¢ + 4 at ${reorderPrice}¢ — flagged for a person, not held, not repaired (${j(mixed.map((f) => f.kind))})`);
+  ok(rawPo(po1.id).lineItems.find((l) => l.sku === "61146").unitPriceCents === 1000, "7: the first PO keeps the price the 6 came at");
+  expected.add("mixed_receipt_prices|61146");
   const proj2 = await call("GET", `/api/projects/${encodeURIComponent(proj.id)}/materials`);
   ok((proj2.body?.stock || []).find((s) => s.sku === "61146")?.receivedFromPoIds?.includes(po2.id), "7: the re-order is linked to the project's materials");
   clean("7"); unrelatedUnchanged("7");

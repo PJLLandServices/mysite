@@ -255,6 +255,10 @@ function holdFor({ purchaseOrders = [], materialLists = [] } = {}) {
 }
 
 function holdMessage(h) {
+  if (h.source === "source_missing") {
+    return `Purchase order ${h.id} is locked for review: it was for material-list lines that no longer exist (${h.reason}). ` +
+      "What it ordered, received and paid is kept, but it can't be placed on a job. Nothing can send, receive, cancel, re-send or re-order it until the office reviews it and releases the hold with a note. Nothing has been changed automatically.";
+  }
   const what = h.scope === "all" ? "Purchase orders and material lists are"
     : h.scope === "purchase_order" ? `Purchase order ${h.id} is` : `Material list ${h.id} is`;
   return `Recovery required: ${what} locked because an interrupted save left records the system can't prove are correct (${h.reason}). ` +
@@ -364,6 +368,13 @@ function checkConsistency() {
   if (contradictions.length) {
     const holds = [];
     for (const f of contradictions) {
+      // A sent / received / cancelled PO whose list or list line is gone:
+      // the PO is held for review; there is no list left to hold.
+      if (f.kind === "source_missing") {
+        holds.push({ scope: "purchase_order", id: f.poId, source: "source_missing",
+          reason: `${f.poId} (${f.poStatus}) is for ${f.sku} — ${f.listMissing ? `list ${f.listId}` : `line ${f.lineId} of list ${f.listId}`}, which no longer exists` });
+        continue;
+      }
       const reason = `line ${f.lineId} (${f.sku}) on ${f.listId} disagrees with ${f.poId || "its purchase order"}: ${f.kind}`;
       const poIds = new Set([...String(f.poId || "").split(", "), ...(f.claims || []).map((c) => c.poId)]);
       for (const id of poIds) if (id && pos.some((p) => p && p.id === id)) holds.push({ scope: "purchase_order", id, reason, source: f.kind });
@@ -400,6 +411,7 @@ module.exports = {
   readHolds,
   holdFor,
   holdInfo,
+  addHolds,
   assertNotHeld,
   releaseHold,
   PurchasingError,

@@ -28,6 +28,17 @@
 //      a line twice is refused.
 //   5. NO RE-ORDER OF WHAT ARRIVED — after a partial delivery is cancelled,
 //      generating POs from the list orders only what is still to come.
+//   6. OPEN vs COMPLETED ORDERS (2026-10-03) — 6 received on one completed
+//      PO and 4 on another is history, not a contradiction; only two OPEN
+//      orders for one line are. Same price and different prices; the line
+//      "need" with 4 still to order after the first 6; "have" after all 10.
+//   7. MIXED PRICES — no repair ever locks one price on a line whose
+//      receipts came at different prices; that is "needs a person".
+//   8. MISSING SOURCES — a PO line whose list, or list line, is gone: a
+//      draft is a mistake to fix (review, can't be sent); a sent, partly
+//      received, received or cancelled PO is purchasing history (hold,
+//      needs a person, counted in the totals); once the office reviews it,
+//      a note.
 //
 // Run: node scripts/test-purchasing-matrix.mjs [--print]   (--print: the
 // matrix as a table)
@@ -40,6 +51,12 @@ import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
+// The missing-source checks write recovery holds to the store's holds
+// file; whatever was there before is put back after each one.
+import fs from "node:fs";
+const HOLDS_FILE = path.join(ROOT, "server", "data", "purchasing-holds.json");
+const HOLDS_BEFORE = fs.existsSync(HOLDS_FILE) ? fs.readFileSync(HOLDS_FILE) : null;
+const clearHolds = () => { if (HOLDS_BEFORE) fs.writeFileSync(HOLDS_FILE, HOLDS_BEFORE); else fs.rmSync(HOLDS_FILE, { force: true }); };
 const { auditPurchasingLines, formatPurchasingAudit } = require(path.join(ROOT, "server/lib/purchasing-audit.js"));
 const purchasing = require(path.join(ROOT, "server/lib/purchasing.js"));
 const purchaseOrders = require(path.join(ROOT, "server/lib/purchase-orders.js"));
@@ -100,8 +117,10 @@ const EXPECT = {
     "cancelled, all arrived": H("received_still_ordered", true)
   },
   "ordered on Q": {
-    "draft": A, "sent": H("multiple_active_claims"), "part-recvd, line part": H("multiple_active_claims"),
-    "part-recvd, line full": H("multiple_active_claims"), "received": H("multiple_active_claims"),
+    // P complete for the line (all 10 in) + Q still open for 10 more: one
+    // open order, so not a contradiction — but 10 more than needed.
+    "draft": A, "sent": H("multiple_open_orders"), "part-recvd, line part": H("multiple_open_orders"),
+    "part-recvd, line full": R("quantity_over"), "received": R("quantity_over"),
     "cancelled, none arrived": A, "cancelled, part arrived": R("quantity_over"), "cancelled, all arrived": R("quantity_over")
   },
   "ordered on gone": Object.fromEntries(Object.keys(PO_STATES).map((k) => [k, H("po_missing")])),
@@ -116,7 +135,7 @@ const EXPECT = {
 // Extra cases beyond the grid.
 const EXTRA = [
   ["duplicate links on one PO", { purchaseOrders: [po("P", "sent", [claim("L", 10, 0), claim("L", 10, 0, { id: "pl-dup" })])], materialLists: [list([line("ordered", { poId: "P" })])] }, H("duplicate_claim_on_po")],
-  ["two live POs, list on neither", { purchaseOrders: [po("P", "sent", [claim("L", 10, 0)]), po("Q", "sent", [claim("L", 10, 0, { id: "q" })])], materialLists: [list([line("need")])] }, H("multiple_active_claims")],
+  ["two live POs, list on neither", { purchaseOrders: [po("P", "sent", [claim("L", 10, 0)]), po("Q", "sent", [claim("L", 10, 0, { id: "q" })])], materialLists: [list([line("need")])] }, H("multiple_open_orders")],
   ["ordered on P, P has no line for it", { purchaseOrders: [po("P", "sent", [claim("OTHER", 3, 0)])], materialLists: [list([line("ordered", { poId: "P" })])] }, H("not_on_po")],
   ["list recorded P cancelled; P still sent", { purchaseOrders: [po("P", "sent", [claim("L", 10, 0)])], materialLists: [list([line("need")], [{ ts: "2026-10-01T10:00:00Z", action: "po_cancelled", note: "P: 1 line" }])] }, H("list_ahead_of_po")],
   ["list recorded P received; P still sent", { purchaseOrders: [po("P", "sent", [claim("L", 10, 0)])], materialLists: [list([line("have")], [{ ts: "2026-10-01T10:00:00Z", action: "po_received", note: "P: 1 line" }])] }, H("list_ahead_of_po")],
@@ -130,7 +149,30 @@ const EXTRA = [
   ["partial cancelled + remainder received, list have", { purchaseOrders: [po("P", "cancelled", [claim("L", 10, 4)]), po("P2", "received", [claim("L", 6, 6, { id: "r" })])], materialLists: [list([line("have")])] }, A],
   ["partial cancelled + remainder received, list still need", { purchaseOrders: [po("P", "cancelled", [claim("L", 10, 4)]), po("P2", "received", [claim("L", 6, 6, { id: "r" })])], materialLists: [list([line("need")])] }, H("received_never_marked", true)],
   ["locked price differs from the PO's", { purchaseOrders: [po("P", "received", [claim("L", 10, 10)])], materialLists: [list([line("ordered", { poId: "P", frozen: 999 })])] }, H("received_still_ordered", false)],
-  ["PO line points at a list line that's gone", { purchaseOrders: [po("P", "sent", [{ ...claim("GONE-LINE", 2, 0) }])], materialLists: [list([line("need")])] }, A]
+  ["PO line points at a list line that's gone (the list's own line unaffected)", { purchaseOrders: [po("P", "sent", [{ ...claim("GONE-LINE", 2, 0) }])], materialLists: [list([line("need")])] }, A],
+
+  // ── 6. Open vs completed orders. Line L needs 10.
+  //    P: 6 ordered, 6 received (complete). Q: 4 ordered.
+  ["6 in on P (complete), list need — 4 still to order", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)])], materialLists: [list([line("need")])] }, A],
+  ["6 in on P + 4 in on Q, same price, list have", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q" })])], materialLists: [list([line("have")])] }, A],
+  ["6 in on P + 4 in on Q, P part of a partly received PO, list have", { purchaseOrders: [po("P", "partially_received", [claim("L", 6, 6), claim("OTHER", 3, 0, { id: "o" })]), po("Q", "received", [claim("L", 4, 4, { id: "q" })])], materialLists: [list([line("have")])] }, A],
+  ["6 in on P + 4 in on Q, different prices, list have", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q", price: 600 })])], materialLists: [list([line("have", { frozen: 600 })])] }, R("mixed_receipt_prices")],
+  ["6 in on P + 4 on order on Q, list ordered on Q", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "sent", [claim("L", 4, 0, { id: "q" })])], materialLists: [list([line("ordered", { poId: "Q" })])] }, A],
+  ["6 in on P + 4 on order on Q, different prices, list ordered on Q", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "sent", [claim("L", 4, 0, { id: "q", price: 600 })])], materialLists: [list([line("ordered", { poId: "Q", frozen: 600 })])] }, A],
+  ["6 in on P + 4 on order on Q, list still on completed P", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "sent", [claim("L", 4, 0, { id: "q" })])], materialLists: [list([line("ordered", { poId: "P" })])] }, H("points_to_other_po")],
+  ["6 in on P (complete), list still ordered on P", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)])], materialLists: [list([line("ordered", { poId: "P" })])] }, H("completed_still_ordered", true)],
+  ["6 + 4 in, same price, list still ordered on Q", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q" })])], materialLists: [list([line("ordered", { poId: "Q" })])] }, H("received_still_ordered", true)],
+  ["6 + 4 in, same price, list still need", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q" })])], materialLists: [list([line("need")])] }, H("received_never_marked", true)],
+  ["two OPEN orders: 6 on P + 4 on Q, both sent, list on Q", { purchaseOrders: [po("P", "sent", [claim("L", 6, 0)]), po("Q", "sent", [claim("L", 4, 0, { id: "q" })])], materialLists: [list([line("ordered", { poId: "Q" })])] }, H("multiple_open_orders")],
+  ["two OPEN orders: both part-received, list on P", { purchaseOrders: [po("P", "partially_received", [claim("L", 6, 2)]), po("Q", "partially_received", [claim("L", 4, 1, { id: "q" })])], materialLists: [list([line("ordered", { poId: "P" })])] }, H("multiple_open_orders")],
+  ["6 in on P (complete) + TWO open orders for the rest", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "sent", [claim("L", 4, 0, { id: "q" })]), po("R", "sent", [claim("L", 4, 0, { id: "r" })])], materialLists: [list([line("ordered", { poId: "Q" })])] }, H("multiple_open_orders")],
+
+  // ── 7. Mixed prices: never one price by rule.
+  ["MIXED 6 @500 + 4 @600, list still ordered on Q", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q", price: 600 })])], materialLists: [list([line("ordered", { poId: "Q", frozen: 600 })])] }, H("received_still_ordered", false)],
+  ["MIXED 6 @500 + 4 @600, list still need", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q", price: 600 })])], materialLists: [list([line("need")])] }, H("received_never_marked", false)],
+  ["MIXED 6 @500 cancelled part + 4 @600, list need", { purchaseOrders: [po("P", "cancelled", [claim("L", 10, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q", price: 600 })])], materialLists: [list([line("need")])] }, H("received_never_marked", false)],
+  ["MIXED 6 @500 + 4 @600, list have locked at 500", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q", price: 600 })])], materialLists: [list([line("have", { frozen: 500 })])] }, R("mixed_receipt_prices")],
+  ["one price, list unlocked (null), still ordered on Q", { purchaseOrders: [po("P", "received", [claim("L", 6, 6)]), po("Q", "received", [claim("L", 4, 4, { id: "q" })])], materialLists: [list([line("ordered", { poId: "Q", frozen: null })])] }, H("received_still_ordered", true)]
 ];
 
 // ── The browser snippet, run as the browser would run it ───────────────
@@ -143,7 +185,9 @@ async function runSnippet(state) {
     location: { host: "matrix.test" },
     fetch: async (url, opts) => {
       urls.push({ url, method: (opts && opts.method) || "GET" });
-      const body = url.startsWith("/api/purchase-orders") ? { purchaseOrders: state.purchaseOrders } : { lists: state.materialLists };
+      const body = url.startsWith("/api/purchase-orders") ? { purchaseOrders: state.purchaseOrders }
+        : url.startsWith("/api/admin/trash/") ? { ok: true, resource: "material-lists", records: state.materialLists.filter((l) => l.deletedAt) }
+        : { lists: state.materialLists.filter((l) => !l.deletedAt) };
       return { ok: true, status: 200, json: async () => clone(body) };
     }
   });
@@ -163,9 +207,9 @@ async function check(name, state, [kind, severity, repairable]) {
 
   // 2. one definition: the snippet prints exactly the module's report.
   const snip = await runSnippet(state);
-  const expected = formatPurchasingAudit(r) + "\nSource: matrix.test — " + state.purchaseOrders.length + " purchase orders, " + state.materialLists.length + " material lists (Trash not included)";
+  const expected = formatPurchasingAudit(r) + "\nSource: matrix.test — " + state.purchaseOrders.length + " purchase orders, " + state.materialLists.length + " material lists (" + state.materialLists.filter((l) => l.deletedAt).length + " of them in the Trash)";
   ok(snip.text === expected, `${name}: the browser snippet prints the same report as the server classifier`);
-  ok(snip.urls.length === 2 && snip.urls.every((u) => u.method === "GET" && u.url.startsWith("/api/")), `${name}: the snippet made only two same-site GETs`);
+  ok(snip.urls.length === 3 && snip.urls.every((u) => u.method === "GET" && u.url.startsWith("/api/")), `${name}: the snippet made only three same-site GETs`);
 
   // 3. a repair by rule leaves the line agreeing, changes no PO, keeps
   //    the quantities and the price paid.
@@ -181,6 +225,14 @@ async function check(name, state, [kind, severity, repairable]) {
     ok(f.repair.frozenPriceCents == null || prices.has(f.repair.frozenPriceCents), `${name}: any price the repair locks is one a PO actually records`);
     ok(f.line.frozenPriceCents == null || f.repair.frozenPriceCents === f.line.frozenPriceCents || f.repair.status === "need",
       `${name}: the repair never replaces a locked price with a different one`);
+    // 7. Every receipt behind a line a repair marks "have" came at the one
+    //    price it locks — mixed prices are never made one by rule.
+    const receiptPrices = new Set(state.purchaseOrders.filter((p) => p.status !== "draft").flatMap((p) => p.lineItems)
+      .filter((x) => x.sourceLineId === "L" && x.receivedQty > 0).map((x) => x.unitPriceCents));
+    ok(f.repair.status !== "have" || (receiptPrices.size === 1 && receiptPrices.has(f.repair.frozenPriceCents)),
+      `${name}: a "have" repair locks the single price every receipt came at (${S([...receiptPrices])} → ${f.repair.frozenPriceCents})`);
+    ok(f.repair.frozenPriceCents == null || [...receiptPrices].every((p) => p === f.repair.frozenPriceCents),
+      `${name}: no repair locks a price that differs from any receipt (${S([...receiptPrices])} → ${f.repair.frozenPriceCents})`);
   }
 }
 
@@ -202,7 +254,7 @@ function step(state, poId, event, apply) {
   const p = state.purchaseOrders.find((x) => x.id === poId);
   const h = PO.hydrate(clone(p));
   apply(h);
-  const plan = purchasing.planListMoves(h, state.materialLists, event);
+  const plan = purchasing.planListMoves(h, state.materialLists, event, state.purchaseOrders);
   for (const w of plan.changedLists) state.materialLists[w.idx] = w.rec;
   state.purchaseOrders[state.purchaseOrders.indexOf(p)] = h;
   return state;
@@ -267,6 +319,119 @@ const cancel = (s, id = "P") => step(s, id, "cancelled", (h) => PO.transitionCan
   refuse({ purchaseOrders: [po("P", "draft", [claim("L", 10, 0)])], materialLists: [list([line("have")])] }, "the line is already received");
   refuse({ purchaseOrders: [po("P", "draft", [claim("L", 10, 0), claim("L", 10, 0, { id: "d" })])], materialLists: [list([line("need")])] }, "two lines of the PO claim the same list line");
   refuse({ purchaseOrders: [po("P", "draft", [claim("L", 10, 0)]), po("Q", "sent", [claim("L", 10, 0, { id: "q" })])], materialLists: [list([line("need")])] }, "another live PO already claims the line, though the list lost track");
+}
+
+// ── 6/7 continued: mixed prices are never repaired, whatever the state ──
+{
+  const mixedRows = rows.filter((r) => r.name.startsWith("MIXED"));
+  ok(mixedRows.length === 4 && mixedRows.every((r) => r.got[2] === false), `every mixed-price case is "needs a person" (${S(mixedRows.map((r) => r.got))})`);
+  // Exhaustively: P (6 @500) and Q (4 @600) in every PO state × every list
+  // state — no finding anywhere offers a repair that locks a price.
+  let tried = 0, offered = [];
+  for (const [ps, mkP] of Object.entries(PO_STATES)) for (const [qs, mkQ] of Object.entries(PO_STATES)) {
+    for (const ls of ["need", "ordered on P", "have"]) {
+      const P = mkP("P"); P.lineItems[0] = { ...P.lineItems[0], qty: 6, receivedQty: Math.min(6, P.lineItems[0].receivedQty) };
+      const Q = mkQ("Q"); Q.lineItems = Q.lineItems.map((x) => ({ ...x, id: "q-" + x.id, unitPriceCents: 600 })); Q.lineItems[0] = { ...Q.lineItems[0], qty: 4, receivedQty: Math.min(4, Q.lineItems[0].receivedQty) };
+      const st = { purchaseOrders: [P, Q], materialLists: [list([LIST_STATES[ls]().lines[0]])] };
+      const both = [P, Q].every((p) => p.status !== "draft" && p.lineItems[0].receivedQty > 0);
+      if (!both) continue;
+      tried += 1;
+      for (const f of auditPurchasingLines(st).findings) if (f.repair && f.repair.frozenPriceCents != null) offered.push(`${ps} + ${qs} / ${ls}: ${f.kind}`);
+    }
+  }
+  ok(tried > 20 && offered.length === 0, `mixed prices: ${tried} combinations, no repair locks a price (${S(offered.slice(0, 3))})`);
+}
+
+// ── 6 continued: the live rule through two orders for one line ─────────
+for (const secondPrice of [PRICE, 600]) {
+  const tag = secondPrice === PRICE ? "same price" : "different prices";
+  const s = fresh();
+  s.purchaseOrders[0].lineItems[0].qty = 6;
+  send(s);
+  const short = auditPurchasingLines(clone(s)).findings;
+  ok(S(short.map((f) => [f.kind, f.severity])) === S([["quantity_short", "review"]]), `${tag}: the first order, for 6 of 10, sent — no contradiction; 6 on order for 10 needed is flagged for review (${S(short.map((f) => f.kind))})`);
+  recv(s, null); clean(s, `${tag}: 6 of 10 arrived on it — complete`);
+  const after6 = ML.hydrateLine(s.materialLists[0].lineItems[0]);
+  ok(after6.status === "need" && after6.poId == null, `${tag}: after the first 6 the line is "need" on no order (${after6.status})`);
+  const c = purchaseOrders.commitmentsByListLine(s.purchaseOrders, "ML-1");
+  ok(purchaseOrders.stillToOrder(after6, c) === 4, `${tag}: exactly 4 still to order (${purchaseOrders.stillToOrder(after6, c)})`);
+  const plan = purchaseOrders.planDraftsFromMaterialList(ML.hydrate(s.materialLists[0]), { 61146: { priceCents: secondPrice, supplierIds: ["SUP"] } }, { committed: c });
+  ok(S(plan.drafts.flatMap((d) => d.lineItems).map((l) => l.qty)) === S([4]), `${tag}: generating from the list proposes 4`);
+  // The send gate: 4 more is allowed (P is complete, not open); 5 is not.
+  const draft = (qty) => PO.hydrate({ id: "Q", status: "draft", lineItems: [claim("L", qty, 0, { id: "q", price: secondPrice })] });
+  let code = null;
+  try { purchasing.assertLinesOrderable(draft(4), s.purchaseOrders, s.materialLists); } catch (e) { code = e.code; }
+  ok(code === null, `${tag}: sending the second order for 4 is allowed — the first is complete, not open (${code})`);
+  code = null;
+  try { purchasing.assertLinesOrderable(draft(5), s.purchaseOrders, s.materialLists); } catch (e) { code = e.code; }
+  ok(code === "lines_not_orderable", `${tag}: an order for 5 would re-order what came — refused (${code})`);
+  s.purchaseOrders.push(draft(4));
+  send(s, "Q"); clean(s, `${tag}: the second order, for 4, sent`);
+  recv(s, null, "Q");
+  const end = ML.hydrateLine(s.materialLists[0].lineItems[0]);
+  ok(end.status === "have" && end.poId == null, `${tag}: all 10 arrived — the line is "have" (${end.status})`);
+  const r = auditPurchasingLines(clone(s));
+  if (secondPrice === PRICE) ok(r.findings.length === 0, `${tag}: all 10 in — agrees (${S(r.findings.map((f) => f.kind))})`);
+  else {
+    ok(S(r.findings.map((f) => [f.kind, f.severity, f.repairable])) === S([["mixed_receipt_prices", "review", false]]),
+      `${tag}: all 10 in — no contradiction, but the mixed prices are flagged for a person (${S(r.findings.map((f) => f.kind))})`);
+    ok(S(s.purchaseOrders.map((p) => [p.id, p.lineItems[0].receivedQty, p.lineItems[0].unitPriceCents])) === S([["P", 6, 500], ["Q", 4, 600]]),
+      `${tag}: each PO keeps what arrived on it and at what price`);
+  }
+}
+
+// ── 8. Missing sources ──────────────────────────────────────────────────
+{
+  const SRC_STATES = { "draft": [0, "draft"], "sent": [0, "sent"], "partially received": [4, "partially_received"], "received": [10, "received"], "cancelled": [4, "cancelled"] };
+  for (const [gone, mkClaim] of [["list", () => ({ ...claim("L", 10, 0), sourceListId: "ML-GONE" })], ["line", () => claim("L-GONE", 10, 0)]]) {
+    for (const [label, [got, status]] of Object.entries(SRC_STATES)) {
+      const st = { purchaseOrders: [po("P", status, [{ ...mkClaim(), receivedQty: got }])], materialLists: [list([line("need", { id: "OTHER" })])] };
+      const r = auditPurchasingLines(clone(st));
+      const f = r.findings.find((x) => x.poId === "P");
+      const want = status === "draft" ? ["draft_source_missing", "review", false] : ["source_missing", "hold", false];
+      ok(f && S([f.kind, f.severity, f.repairable]) === S(want), `missing ${gone} × PO ${label}: ${S(want)} (${S(f && [f.kind, f.severity, f.repairable])})`);
+      ok(r.totals.lines === 1 && r.totals.needsAPerson === 1 && r.totals.purchaseOrders === 1 && r.totals[want[1]] === 1,
+        `missing ${gone} × PO ${label}: counted in the totals (${S(r.totals)})`);
+      ok(f && f.quantities.received === got && f.claims[0].unitPriceCents === PRICE, `missing ${gone} × PO ${label}: the report keeps what arrived and its price`);
+      ok(f && f.listMissing === (gone === "list"), `missing ${gone} × PO ${label}: says whether the list or just the line is gone`);
+      const text = formatPurchasingAudit(r);
+      ok(/no longer exists/.test(text) && (status === "draft" ? /can't be sent/.test(text) : /locked until the office reviews it/.test(text)),
+        `missing ${gone} × PO ${label}: the report says ${status === "draft" ? "the draft can't be sent" : "the PO is locked for review"}`);
+      // Reviewed by the office: a note, not a finding.
+      if (status !== "draft") {
+        const ack = clone(st); ack.purchaseOrders[0].lineItems[0].sourceMissingAcknowledged = { at: "2026-10-03T12:00:00Z", by: "patrick", note: "Old job, deleted by mistake; parts used" };
+        const ra = auditPurchasingLines(ack);
+        ok(ra.findings.length === 0 && ra.notes.length === 1 && ra.notes[0].kind === "source_missing_acknowledged", `missing ${gone} × PO ${label}: once reviewed, a note only`);
+      }
+      // A draft with a missing source can't be sent.
+      if (status === "draft") {
+        let code = null, msg = "";
+        try { purchasing.assertLinesOrderable(PO.hydrate(st.purchaseOrders[0]), st.purchaseOrders, st.materialLists); } catch (e) { code = e.code; msg = e.message; }
+        ok(code === "lines_not_orderable" && /no longer/.test(msg), `missing ${gone} × draft: sending is refused (${code})`);
+      }
+      // A non-draft one is locked before any lifecycle step.
+      if (status !== "draft") {
+        const before = S(st);
+        let code = null;
+        const { readHolds } = require(path.join(ROOT, "server/lib/purchasing-store.js"));
+        try { purchaseOrders.assertSourcesPresent(PO.hydrate(st.purchaseOrders[0]), st.materialLists); } catch (e) { code = e.code; }
+        ok(code === "recovery_required" && readHolds().some((h) => h.scope === "purchase_order" && h.id === "P" && h.source === "source_missing"),
+          `missing ${gone} × PO ${label}: any further action is refused and the PO is held (${code})`);
+        ok(S(st) === before, `missing ${gone} × PO ${label}: nothing is changed`);
+        const ackd = clone(st); ackd.purchaseOrders[0].lineItems[0].sourceMissingAcknowledged = { at: "x", by: "y", note: "z" };
+        let code2 = null;
+        try { purchaseOrders.assertSourcesPresent(PO.hydrate(ackd.purchaseOrders[0]), ackd.materialLists); } catch (e) { code2 = e.code; }
+        ok(code2 === null, `missing ${gone} × PO ${label}: once reviewed, the source check passes`);
+        clearHolds();
+      }
+    }
+  }
+}
+
+{
+  // A draft in the Trash orders nothing: its missing source isn't reported.
+  const st = { purchaseOrders: [{ ...po("P", "draft", [{ ...claim("L", 10, 0), sourceListId: "ML-GONE" }]), deletedAt: "2026-10-01T00:00:00Z" }], materialLists: [list([line("need", { id: "OTHER" })])] };
+  ok(auditPurchasingLines(st).findings.length === 0, "missing list × draft in the Trash: not reported");
 }
 
 if (process.argv.includes("--print")) {

@@ -16746,6 +16746,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.code === "purchasing_history") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
     }
   }
@@ -16757,6 +16758,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, removed });
     } catch (err) {
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.code === "purchasing_history") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       throw err;
     }
   }
@@ -17256,12 +17258,21 @@ async function handleApi(req, res, pathname) {
     const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
     const workOrderIds = Array.isArray(proj.workOrderIds) ? proj.workOrderIds : [];
 
+    const keptLists = [];
     if (cascade) {
       // Test project — the customer wants a clean wipe, not an orphan
       // trail. Delete every attached material list and work order, then
-      // the project itself.
+      // the project itself. A list a purchase order was placed for is
+      // never deleted (2026-10-03) — that order would belong to nothing —
+      // so it is detached and kept, and the reply says which.
       for (const rec of attached) {
-        await materialLists.remove(rec.id);
+        try {
+          await materialLists.remove(rec.id);
+        } catch (err) {
+          if (!err || err.code !== "purchasing_history") throw err;
+          await materialLists.update(rec.id, { parentType: null, parentId: null });
+          keptLists.push({ id: rec.id, reason: err.message });
+        }
       }
       for (const woId of workOrderIds) {
         await workOrders.remove(woId).catch(() => {});
@@ -17283,7 +17294,7 @@ async function handleApi(req, res, pathname) {
     await fs.rm(path.join(PROJECT_JOURNAL_PHOTOS_DIR, id), { recursive: true, force: true }).catch(() => {});
 
     const removed = await projects.remove(id);
-    return sendJson(res, 200, { ok: true, removed, cascade });
+    return sendJson(res, 200, { ok: true, removed, cascade, keptLists });
   }
 
   // POST /api/projects/:id/attach-work-order { workOrderId }
@@ -20639,6 +20650,8 @@ async function handleApi(req, res, pathname) {
       if (po.status !== "sent" && po.status !== "partially_received") {
         return sendJson(res, 409, { ok: false, errors: [`Can't re-send a "${po.status}" PO.`] });
       }
+      // Held, or for a list line that's gone: refused before any email.
+      await purchaseOrders.assertActionable(po);
       const payload = await parseRequestBody(req).catch(() => ({}));
       const toEmail = String(payload.toEmail || po.emailedToEmail || po.supplierEmail || "").trim().toLowerCase();
       if (!toEmail) {

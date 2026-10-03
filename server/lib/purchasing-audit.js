@@ -1,7 +1,8 @@
 "use strict";
 
 // The ONE definition of "a purchase order and its material list agree"
-// (2026-10-02). READ-ONLY: it classifies, it never writes.
+// (2026-10-02, revised 2026-10-03). READ-ONLY: it classifies, it never
+// writes.
 //
 // Used, unchanged, by:
 //   • purchasing-store.checkConsistency() — the boot check that puts
@@ -17,36 +18,38 @@
 // The model. The PO line is the record of what was ordered, what arrived
 // (receivedQty) and at what price (unitPriceCents) — never rewritten by
 // anything on the list side. A PO line "claims" the list line its
-// sourceListId + sourceLineId point at. For each list line L (qty Q):
-//   received   = Σ arrived on every non-draft claim (cancelled ones too)
-//   remaining  = Q − received          (what is still to be ordered)
-//   active     = the claims on POs that are not cancelled (sent, partially
-//                received, received). At most ONE may exist; cancelled
-//                claims can sit beside it (a partial delivery, then the
-//                rest re-ordered).
+// sourceListId + sourceLineId point at. For each list line L (quantity Q),
+// across its non-draft claims:
+//   open       — on a sent / partially received PO, still outstanding.
+//                At most ONE may exist.
+//   completed  — on a PO that isn't cancelled, arrived in full. Any number
+//                may exist (6 on one order, the other 4 on a later one).
+//   cancelled  — on a cancelled PO (what arrived on it still counts).
+//   received   = Σ arrived on all of them; remaining = Q − received.
 // L agrees with its POs when:
-//   • L is "ordered" on P            ⇔ P is the active claim and its line is
-//                                       still outstanding;
-//   • L is "have"                    ⇔ the active claim arrived in full (or
-//                                       there are no claims at all — stock
-//                                       already on hand);
-//   • L is "need" (and on no PO)     ⇔ no active claim is outstanding or
-//                                       done, and something remains to order.
+//   • "ordered" on P   ⇔ P holds the one open claim;
+//   • "have"           ⇔ nothing is open and received ≥ Q (or no PO has ever
+//                        claimed it — stock already on hand);
+//   • "need" (no PO)   ⇔ nothing is open and received < Q — the rest is
+//                        what PO generation orders (stillToOrder).
+// A purchase-order line whose list or list line no longer exists is
+// historical evidence the checker can't place: on a sent, received or
+// cancelled PO it is a contradiction ("source_missing", the PO held); on a
+// draft it is a mistake to fix before sending ("draft_source_missing").
 //
 // Severity:
 //   "hold"   — the records contradict each other: which one is right can't
-//              be proven. The boot check holds both (purchasing-store).
-//   "review" — the records agree on state, but the quantities don't add up
-//              (e.g. fewer ordered or received than the list needs). A
-//              person should look; nothing is held — a draft PO's quantity
-//              can be edited on purpose.
+//              be proven. The boot check holds them (purchasing-store).
+//   "review" — the records agree on state, but the quantities or prices
+//              don't add up. A person should look; nothing is held.
 // Repairable by rule ONLY when the repair changes nothing but the list
-// line's status / poId / frozenPriceCents, the PO line already records
-// exactly what arrived and at what price (it is never touched), the list
-// line's locked price is either empty or equal to that PO line's price (so
-// no price is lost), and the quantities add up. Anything else: "needs a
-// person". A cancelled PO with part of the line delivered is ALWAYS "needs
-// a person" (Patrick, 2026-10-02).
+// line's status / poId / frozenPriceCents, every PO record already holds
+// exactly what arrived and at what price (none is touched), the list's
+// locked price is empty or equal to the PO price, the quantities add up,
+// and — for any repair that locks a price — every receipt behind the line
+// came at that ONE price (and, for "ordered", the open order is at it too).
+// Mixed prices are never turned into one price by rule. A cancelled PO with part of the line delivered is "needs a person"
+// whenever the list still points at it.
 //
 // Self-contained on purpose (no require, no outside names).
 
@@ -56,57 +59,62 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
   for (const p of purchaseOrders) if (p && p.id) poById.set(p.id, p);
   const listById = new Map();
   for (const l of materialLists) if (l && l.id) listById.set(l.id, l);
-
-  // Every PO line, by the list line it claims. Drafts are kept apart: a
-  // draft has not been sent, so it says nothing about the list yet.
-  const claimsByLine = new Map();     // "listId|lineId" -> [claim]
-  const notes = [];
   const findings = [];
+  const notes = [];
+  const PERSON = "Needs a person — the records can't show which is right.";
+
+  // Every PO line, by the list line it claims; and every claim whose list
+  // or line is gone.
+  const claimsByLine = new Map();     // "listId|lineId" -> [claim]
   for (const po of purchaseOrders) {
     if (!po || !po.id) continue;
-    const seen = new Map();
+    const poStatus = po.status || "draft";
+    if (poStatus === "draft" && po.deletedAt) continue;   // a draft in the Trash orders nothing
     for (const pl of po.lineItems || []) {
       if (!pl || !pl.sourceListId || !pl.sourceLineId) continue;
-      const key = pl.sourceListId + "|" + pl.sourceLineId;
       const qty = Math.max(0, num(pl.qty));
       const claim = {
-        poId: po.id,
-        poStatus: po.status || "draft",
-        poLineId: pl.id || null,
-        sku: pl.sku || "",
-        qty,
+        poId: po.id, poStatus, poLineId: pl.id || null, sku: pl.sku || "", qty,
         receivedQty: Math.min(qty, Math.max(0, num(pl.receivedQty))),
         unitPriceCents: num(pl.unitPriceCents)
       };
       claim.outstandingQty = claim.qty - claim.receivedQty;
-      seen.set(key, (seen.get(key) || 0) + 1);
+      const list = listById.get(pl.sourceListId);
+      const exists = Boolean(list && (list.lineItems || []).some((l) => l && l.id === pl.sourceLineId));
+      if (!exists) {
+        const what = list ? `line ${pl.sourceLineId} of list ${pl.sourceListId}` : `list ${pl.sourceListId}`;
+        const base = {
+          severity: poStatus === "draft" ? "review" : "hold", repairable: false, repair: null,
+          projectId: list && list.parentType === "project" ? (list.parentId || null) : null,
+          listId: pl.sourceListId, listName: list ? (list.name || "") : "", listMissing: !list,
+          lineId: pl.sourceLineId, sku: claim.sku, poId: po.id, poStatus,
+          line: null, quantities: { needed: null, received: claim.receivedQty, onOrder: poStatus === "sent" || poStatus === "partially_received" ? claim.outstandingQty : 0, remaining: null },
+          claims: [{ poId: po.id, poStatus, qty: claim.qty, receivedQty: claim.receivedQty, outstandingQty: claim.outstandingQty, unitPriceCents: claim.unitPriceCents }]
+        };
+        if (pl.sourceMissingAcknowledged) {
+          notes.push({ kind: "source_missing_acknowledged", poId: po.id, poStatus, listId: pl.sourceListId, lineId: pl.sourceLineId, sku: claim.sku,
+            by: pl.sourceMissingAcknowledged.by || null, at: pl.sourceMissingAcknowledged.at || null });
+        } else if (poStatus === "draft") {
+          findings.push({ ...base, kind: "draft_source_missing",
+            repairText: `Draft ${po.id} is for ${what}, which no longer exists. Nothing was bought on it; it can't be sent until the line is removed from the draft or the draft is deleted.` });
+        } else {
+          findings.push({ ...base, kind: "source_missing",
+            repairText: `${po.id} (${poStatus}) — ordered ${claim.qty}, received ${claim.receivedQty}, at ${claim.unitPriceCents}¢ — is for ${what}, which no longer exists, so this purchase can't be placed on any job. The PO is locked until the office reviews it. ${PERSON}` });
+        }
+        continue;
+      }
+      const key = pl.sourceListId + "|" + pl.sourceLineId;
       if (!claimsByLine.has(key)) claimsByLine.set(key, []);
       claimsByLine.get(key).push(claim);
-      const list = listById.get(pl.sourceListId);
-      if (!list || !(list.lineItems || []).some((l) => l && l.id === pl.sourceLineId)) {
-        notes.push({ kind: "source_missing", poId: po.id, poStatus: claim.poStatus, listId: pl.sourceListId, lineId: pl.sourceLineId, sku: claim.sku });
-      }
-    }
-    for (const [key, n] of seen) {
-      if (n > 1) {
-        const [listId, lineId] = key.split("|");
-        notes.push({ kind: "duplicate_claim_on_po", poId: po.id, listId, lineId, count: n });
-      }
     }
   }
 
   const finding = (ctx, kind, severity, repair, text) => {
     findings.push({
-      kind,
-      severity,
-      repairable: Boolean(repair),
-      repair: repair || null,
-      repairText: text,
+      kind, severity, repairable: Boolean(repair), repair: repair || null, repairText: text,
       projectId: ctx.list.parentType === "project" ? (ctx.list.parentId || null) : null,
-      listId: ctx.list.id,
-      listName: ctx.list.name || "",
-      lineId: ctx.line.id,
-      sku: ctx.line.sku || "",
+      listId: ctx.list.id, listName: ctx.list.name || "", listMissing: false,
+      lineId: ctx.line.id, sku: ctx.line.sku || "",
       poId: ctx.poId,
       poStatus: ctx.poId && poById.has(ctx.poId) ? (poById.get(ctx.poId).status || "draft") : null,
       line: { status: ctx.status, qty: ctx.qty, poId: ctx.line.poId || null, frozenPriceCents: ctx.frozen },
@@ -114,138 +122,121 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
       claims: ctx.claims.map((c) => ({ poId: c.poId, poStatus: c.poStatus, qty: c.qty, receivedQty: c.receivedQty, outstandingQty: c.outstandingQty, unitPriceCents: c.unitPriceCents }))
     });
   };
-  const PERSON = "Needs a person — the records can't show which is right.";
 
   for (const list of materialLists) {
     if (!list || !list.id) continue;
     for (const line of list.lineItems || []) {
       if (!line || !line.id) continue;
-      const all = claimsByLine.get(list.id + "|" + line.id) || [];
-      const claims = all.filter((c) => c.poStatus !== "draft");
+      const claims = (claimsByLine.get(list.id + "|" + line.id) || []).filter((c) => c.poStatus !== "draft");
       const status = ["need", "ordered", "have"].includes(line.status) ? line.status : "need";
       const qty = Math.max(0, num(line.qty) || 1);
       const frozen = line.frozenPriceCents == null ? null : num(line.frozenPriceCents);
       const received = claims.reduce((n, c) => n + c.receivedQty, 0);
-      const active = claims.filter((c) => c.poStatus !== "cancelled");
-      const live = active.filter((c) => (c.poStatus === "sent" || c.poStatus === "partially_received") && c.outstandingQty > 0);
-      const done = active.filter((c) => c.outstandingQty <= 0);
+      const open = claims.filter((c) => (c.poStatus === "sent" || c.poStatus === "partially_received") && c.outstandingQty > 0);
+      const completed = claims.filter((c) => c.poStatus !== "cancelled" && c.outstandingQty <= 0);
       const cancelledPartial = claims.filter((c) => c.poStatus === "cancelled" && c.receivedQty > 0 && c.outstandingQty > 0);
-      const onOrder = live.reduce((n, c) => n + c.outstandingQty, 0);
-      const ctx = { list, line, status, qty, frozen, received, onOrder, claims, poId: line.poId || (active[0] && active[0].poId) || null };
-      const priceKept = (c) => frozen == null || frozen === c.unitPriceCents;
+      const onOrder = open.reduce((n, c) => n + c.outstandingQty, 0);
+      // Prices behind what arrived. One price → a repair may lock it; more
+      // than one → no single price is true for the line.
+      const receiptPrices = [...new Set(claims.filter((c) => c.receivedQty > 0).map((c) => c.unitPriceCents))];
+      const onePrice = receiptPrices.length === 1 ? receiptPrices[0] : null;
+      const mixed = receiptPrices.length > 1;
+      const priceList = () => claims.filter((c) => c.receivedQty > 0).map((c) => `${c.receivedQty} at ${c.unitPriceCents}¢ on ${c.poId}`).join(", ");
+      const ctx = { list, line, status, qty, frozen, received, onOrder, claims, poId: line.poId || (open[0] && open[0].poId) || null };
+      const lockOk = (price) => frozen == null || frozen === price;
       const dup = claims.some((c, i) => claims.findIndex((d) => d.poId === c.poId) !== i);
-
-      // Records the history on the list itself says moved, while the PO
-      // didn't — the list's half of a save landed, the PO's half was lost.
       const ahead = (poId) => (list.history || []).find((h) => h && (h.action === "po_received" || h.action === "po_cancelled") &&
         String(h.note || "").startsWith(poId + ":"));
 
-      if (dup) {
-        finding(ctx, "duplicate_claim_on_po", "hold", null, `Two lines on one purchase order are both for this list line. ${PERSON}`);
+      if (dup) { finding(ctx, "duplicate_claim_on_po", "hold", null, `Two lines on one purchase order are both for this list line. ${PERSON}`); continue; }
+      if (open.length > 1) {
+        ctx.poId = open.map((c) => c.poId).join(", ");
+        finding(ctx, "multiple_open_orders", "hold", null, `More than one open purchase order is for this list line (${open.map((c) => `${c.poId}: ${c.outstandingQty} outstanding`).join("; ")}). ${PERSON}`);
         continue;
       }
-      if (active.length > 1) {
-        ctx.poId = active.map((c) => c.poId).join(", ");
-        finding(ctx, "multiple_active_claims", "hold", null, `More than one purchase order that isn't cancelled is for this list line (${active.map((c) => c.poId + " " + c.poStatus).join(", ")}). ${PERSON}`);
-        continue;
-      }
-      if (status === "need" && line.poId) {
-        finding(ctx, "need_with_po", "hold", null, `The line says "need" but also names ${line.poId}. ${PERSON}`);
-        continue;
-      }
+      if (status === "need" && line.poId) { finding(ctx, "need_with_po", "hold", null, `The line says "need" but also names ${line.poId}. ${PERSON}`); continue; }
+      const o = open[0] || null;
 
-      const a = active[0] || null;
       if (status === "ordered") {
         const p = poById.get(line.poId);
         if (!p) { ctx.poId = line.poId || null; finding(ctx, "po_missing", "hold", null, `Says ordered on ${line.poId || "(no PO)"}, which doesn't exist. ${PERSON}`); continue; }
         if ((p.status || "draft") === "draft") { ctx.poId = p.id; finding(ctx, "ordered_on_draft", "hold", null, `Says ordered on ${p.id}, which was never sent. ${PERSON}`); continue; }
         const c = claims.find((x) => x.poId === p.id);
         ctx.poId = p.id;
-        if (!c) { finding(ctx, a ? "points_to_other_po" : "not_on_po", "hold", null, `Says ordered on ${p.id}, but ${p.id} has no line for it${a ? ` — ${a.poId} does` : ""}. ${PERSON}`); continue; }
-        if (c.poStatus === "cancelled") {
-          if (a) {
-            finding(ctx, "points_to_other_po", "hold", null, `Says ordered on ${p.id}, which was cancelled, while ${a.poId} (${a.poStatus}) is the order for it now. ${PERSON}`);
-          } else if (c.receivedQty > 0 && c.outstandingQty > 0) {
-            finding(ctx, "cancelled_partial_still_ordered", "hold", null,
-              `${p.id} was cancelled after ${c.receivedQty} of ${c.qty} arrived (at ${c.unitPriceCents}¢ each); the list still says ordered. ${received} received, ${qty - received} still to order. Needs a person to confirm what remains — not changed by rule.`);
-          } else if (c.outstandingQty <= 0) {
-            finding(ctx, "received_still_ordered", "hold",
-              priceKept(c) && received >= qty ? { status: "have", poId: null, frozenPriceCents: c.unitPriceCents } : null,
-              priceKept(c) && received >= qty ? `All ${c.qty} arrived on ${p.id} before it was cancelled: mark "have", keep the price paid (${c.unitPriceCents}¢).` : `Everything on ${p.id}'s line arrived, but the quantities or the locked price don't match. ${PERSON}`);
-          } else {
-            const ok = priceKept(c) && received === 0;
-            finding(ctx, "cancelled_still_ordered", "hold",
-              ok ? { status: "need", poId: null, frozenPriceCents: null } : null,
-              ok ? `${p.id} was cancelled before anything arrived: mark "need" (all ${qty} still to order) and release the price lock — the price stays on ${p.id}'s record.` : `${p.id} was cancelled, but other receipts or a different locked price are involved. ${PERSON}`);
-          }
+        if (!c) { finding(ctx, o ? "points_to_other_po" : "not_on_po", "hold", null, `Says ordered on ${p.id}, but ${p.id} has no line for it${o ? ` — ${o.poId} is the open order` : ""}. ${PERSON}`); continue; }
+        if (o && o.poId !== p.id) { finding(ctx, "points_to_other_po", "hold", null, `Says ordered on ${p.id} (${c.poStatus}), but the open order for it is ${o.poId}. ${PERSON}`); continue; }
+        if (o && o.poId === p.id) {
+          // The open order — agrees. Quantities: short, or more than needed
+          // once something has arrived.
+          if (received + o.outstandingQty < qty) finding(ctx, "quantity_short", "review", null, `${received} received + ${o.outstandingQty} on order on ${p.id} is less than the ${qty} the list needs. A person should check the quantity.`);
+          else if (received >= qty) finding(ctx, "quantity_over", "review", null, `All ${qty} needed have already arrived (${received}), yet ${o.outstandingQty} more are on order on ${p.id}. A person should check before more arrives.`);
+          else if (received > 0 && received + o.outstandingQty > qty) finding(ctx, "quantity_over", "review", null, `${received} already arrived, and ${p.id} has ${o.outstandingQty} more on order — ${received + o.outstandingQty - qty} more than the ${qty} the list needs. A person should check.`);
           continue;
         }
-        // p is the active claim.
-        if (c.outstandingQty > 0) {
-          if (received + c.outstandingQty < qty) finding(ctx, "quantity_short", "review", null, `${received} received + ${c.outstandingQty} on order on ${p.id} is less than the ${qty} the list needs. A person should check the quantity.`);
-          else if (received >= qty) finding(ctx, "quantity_over", "review", null, `All ${qty} needed have already arrived (${received}), yet ${c.outstandingQty} more are on order on ${p.id}. A person should check before more arrives.`);
-          else if (cancelledPartial.length && received + c.outstandingQty > qty) finding(ctx, "quantity_over", "review", null, `${received} already arrived on a cancelled order, and ${p.id} has ${c.outstandingQty} more on order — ${received + c.outstandingQty - qty} more than the ${qty} the list needs. It looks like what arrived was ordered again; a person should check.`);
-          continue; // agrees
+        // The list still points at P, which is no longer open.
+        if (c.poStatus === "cancelled" && c.receivedQty > 0 && c.outstandingQty > 0) {
+          finding(ctx, "cancelled_partial_still_ordered", "hold", null,
+            `${p.id} was cancelled after ${c.receivedQty} of ${c.qty} arrived (at ${c.unitPriceCents}¢ each); the list still says ordered. ${received} received, ${Math.max(0, qty - received)} still to order. Needs a person to confirm what remains — not changed by rule.`);
+          continue;
         }
-        const ok = priceKept(c) && received >= qty;
-        finding(ctx, "received_still_ordered", "hold",
-          ok ? { status: "have", poId: null, frozenPriceCents: c.unitPriceCents } : null,
-          ok ? `All ${c.qty} arrived on ${p.id}: mark "have" and keep the price paid (${c.unitPriceCents}¢).` : `${p.id}'s line arrived in full, but ${received} received is short of the ${qty} needed, or the locked price differs. ${PERSON}`);
+        if (received >= qty) {
+          const ok = !mixed && onePrice != null && lockOk(onePrice);
+          finding(ctx, "received_still_ordered", "hold",
+            ok ? { status: "have", poId: null, frozenPriceCents: onePrice } : null,
+            ok ? `All ${qty} arrived (${priceList()}): mark "have" at the one price paid, ${onePrice}¢.`
+               : mixed ? `All ${qty} arrived, but at different prices (${priceList()}); the list can lock only one price, so no single price is set by rule. ${PERSON}`
+               : `All ${qty} arrived, but the list's locked price (${frozen}¢) differs from what was paid. ${PERSON}`);
+          continue;
+        }
+        // Less than the line arrived and nothing is open: the rest is still
+        // to order. The arrivals stay on their POs.
+        const ok = lockOk(c.unitPriceCents);
+        finding(ctx, c.poStatus === "cancelled" ? "cancelled_still_ordered" : "completed_still_ordered", "hold",
+          ok ? { status: "need", poId: null, frozenPriceCents: null } : null,
+          ok ? `${p.id} is ${c.poStatus === "cancelled" ? "cancelled" : "complete"} with ${received} of ${qty} arrived in all: mark "need" — ${qty - received} still to order. What arrived, and its price, stays on the PO records.`
+             : `${p.id} is no longer open, but the list's locked price differs from it. ${PERSON}`);
         continue;
       }
 
       if (status === "have") {
-        if (a && live.length) {
-          ctx.poId = a.poId;
-          finding(ctx, ahead(a.poId) ? "list_ahead_of_po" : "have_but_po_outstanding", "hold", null,
-            `The list says "have", but ${a.poId} (${a.poStatus}) still has ${a.outstandingQty} of ${a.qty} outstanding. ${PERSON}`);
-          continue;
+        if (o) { ctx.poId = o.poId; finding(ctx, ahead(o.poId) ? "list_ahead_of_po" : "have_but_po_outstanding", "hold", null, `The list says "have", but ${o.poId} (${o.poStatus}) still has ${o.outstandingQty} of ${o.qty} outstanding. ${PERSON}`); continue; }
+        if (!claims.length) continue;   // stock already on hand — no purchase order involved
+        if (received >= qty) {
+          if (mixed) { ctx.poId = completed.concat(claims).find((c) => c.receivedQty > 0).poId; finding(ctx, "mixed_receipt_prices", "review", null, `All ${qty} arrived at different prices (${priceList()}), but the list locks one price${frozen != null ? ` (${frozen}¢)` : ""} for all ${qty}. The PO records hold the true cost; a person should check the list's figure.`); }
+          continue;   // agrees
         }
-        if (!claims.length) continue; // stock already on hand — no purchase order involved
-        if (a) {
-          // The active order arrived in full; a draft PO's quantity may have
-          // been edited, so a shortfall is for review, not a contradiction.
-          if (received < qty) { ctx.poId = a.poId; finding(ctx, "quantity_short", "review", null, `The list says "have" ${qty}, but only ${received} arrived on its purchase orders. A person should check the quantity.`); }
-          continue; // agrees
-        }
-        if (received < qty) {
-          ctx.poId = claims[claims.length - 1].poId;
-          finding(ctx, "have_without_delivery", "hold", null,
-            `The list says "have", but its purchase orders were cancelled with only ${received} of ${qty} delivered. ${PERSON}`);
-        }
-        continue; // all of it arrived before the cancellation: agrees
+        ctx.poId = (completed[0] || claims[claims.length - 1]).poId;
+        if (completed.length) finding(ctx, "quantity_short", "review", null, `The list says "have" ${qty}, but only ${received} arrived on its purchase orders. A person should check the quantity.`);
+        else finding(ctx, "have_without_delivery", "hold", null, `The list says "have", but its purchase orders were cancelled with only ${received} of ${qty} delivered. ${PERSON}`);
+        continue;
       }
 
       // status === "need", on no PO.
-      if (a && live.length) {
-        ctx.poId = a.poId;
-        const h = ahead(a.poId);
-        if (h) {
-          finding(ctx, "list_ahead_of_po", "hold", null,
-            `The list recorded ${a.poId} as ${h.action === "po_received" ? "received" : "cancelled"} (${h.ts || "?"}), but ${a.poId} is still ${a.poStatus} with ${a.outstandingQty} outstanding. ${PERSON}`);
-          continue;
-        }
-        const ok = received + a.outstandingQty >= qty && frozen == null;
+      if (o) {
+        ctx.poId = o.poId;
+        const h = ahead(o.poId);
+        if (h) { finding(ctx, "list_ahead_of_po", "hold", null, `The list recorded ${o.poId} as ${h.action === "po_received" ? "received" : "cancelled"} (${h.ts || "?"}), but ${o.poId} is still ${o.poStatus} with ${o.outstandingQty} outstanding. ${PERSON}`); continue; }
+        const covered = received + o.outstandingQty >= qty;
+        const onePriceOk = receiptPrices.every((pr) => pr === o.unitPriceCents);
+        const ok = covered && onePriceOk;
         finding(ctx, "sent_never_marked", "hold",
-          ok ? { status: "ordered", poId: a.poId, frozenPriceCents: a.unitPriceCents } : null,
-          ok ? `${a.poId} is out with the supplier (${a.outstandingQty} outstanding, ${a.receivedQty} arrived): mark "ordered" on it, price locked at its ${a.unitPriceCents}¢.` : `${a.poId} is out with the supplier, but the quantities don't cover the ${qty} needed. ${PERSON}`);
+          ok ? { status: "ordered", poId: o.poId, frozenPriceCents: o.unitPriceCents } : null,
+          ok ? `${o.poId} is out with the supplier (${o.outstandingQty} outstanding at ${o.unitPriceCents}¢): mark "ordered" on it, its price locked as the price on order.`
+             : !covered ? `${o.poId} is out with the supplier, but ${received} received + ${o.outstandingQty} on order don't cover the ${qty} needed. ${PERSON}`
+             : `${o.poId} is out with the supplier at ${o.unitPriceCents}¢, but what already arrived came at a different price (${priceList()}); the list can lock only one price, so none is set by rule. ${PERSON}`);
         continue;
       }
-      if (a && done.length) {
-        ctx.poId = a.poId;
-        const ok = received >= qty;
+      if (received >= qty && claims.length) {
+        ctx.poId = (completed[0] || claims[claims.length - 1]).poId;
+        if (!completed.length) { finding(ctx, "need_but_all_arrived", "hold", null, `The list says "need", but all ${qty} already arrived on cancelled purchase orders. ${PERSON}`); continue; }
+        const ok = !mixed && onePrice != null;
         finding(ctx, "received_never_marked", "hold",
-          ok ? { status: "have", poId: null, frozenPriceCents: a.unitPriceCents } : null,
-          ok ? `${a.poId} arrived in full (${received} of ${qty} received in all): mark "have" at the price paid on ${a.poId} (${a.unitPriceCents}¢).` : `${a.poId} arrived, but ${received} received doesn't cover the ${qty} needed. ${PERSON}`);
+          ok ? { status: "have", poId: null, frozenPriceCents: onePrice } : null,
+          ok ? `All ${qty} arrived (${priceList()}): mark "have" at the one price paid, ${onePrice}¢.`
+             : `All ${qty} arrived, but at different prices (${priceList()}); the list can lock only one price, so no single price is set by rule. ${PERSON}`);
         continue;
       }
-      if (claims.length && received >= qty) {
-        ctx.poId = claims[claims.length - 1].poId;
-        finding(ctx, "need_but_all_arrived", "hold", null, `The list says "need", but all ${qty} already arrived on cancelled purchase orders. ${PERSON}`);
-        continue;
-      }
-      // Agrees: nothing active; remaining = qty − received is what
-      // generating a PO from this list orders.
+      // Agrees: nothing open; qty − received is what PO generation orders.
     }
   }
 
@@ -279,8 +270,12 @@ function formatPurchasingAudit(result) {
     out.push("");
     out.push(`[${f.kind}] ${f.severity === "hold" ? "RECORDS DISAGREE" : "REVIEW"} · ${f.repairable ? "repairable by rule" : "needs a person"}`);
     out.push(`  project ${f.projectId || "(none)"} · list ${f.listId}${f.listName ? ` "${f.listName}"` : ""} · line ${f.lineId} (${f.sku})`);
-    out.push(`  list line now: ${f.line.status} ×${f.line.qty}${f.line.poId ? ` on ${f.line.poId}` : ""}${f.line.frozenPriceCents != null ? `, price locked ${f.line.frozenPriceCents}¢` : ""}`);
-    out.push(`  quantities: needed ${f.quantities.needed} · received ${f.quantities.received} · on order ${f.quantities.onOrder} · still to order ${Math.max(0, f.quantities.remaining - f.quantities.onOrder)}`);
+    if (f.line) {
+      out.push(`  list line now: ${f.line.status} ×${f.line.qty}${f.line.poId ? ` on ${f.line.poId}` : ""}${f.line.frozenPriceCents != null ? `, price locked ${f.line.frozenPriceCents}¢` : ""}`);
+      out.push(`  quantities: needed ${f.quantities.needed} · received ${f.quantities.received} · on order ${f.quantities.onOrder} · still to order ${Math.max(0, f.quantities.remaining - f.quantities.onOrder)}`);
+    } else {
+      out.push(`  ${f.listMissing ? "material list" : "list line"} not found — ${f.listMissing ? "the list" : "the line"} was deleted or never existed`);
+    }
     for (const c of f.claims) {
       out.push(`  ${c.poId} (${c.poStatus}): ordered ${c.qty}, received ${c.receivedQty}, outstanding ${c.outstandingQty}, at ${c.unitPriceCents}¢ each`);
     }
@@ -290,9 +285,7 @@ function formatPurchasingAudit(result) {
     out.push("");
     out.push(`For information (${result.notes.length}):`);
     for (const n of result.notes) {
-      out.push(n.kind === "source_missing"
-        ? `  ${n.poId} (${n.poStatus}) points at list ${n.listId} line ${n.lineId} (${n.sku}), which no longer exists`
-        : `  ${n.poId} has ${n.count} lines for list ${n.listId} line ${n.lineId}`);
+      out.push(`  ${n.poId} (${n.poStatus}) is for list ${n.listId} line ${n.lineId} (${n.sku}), which no longer exists — reviewed and acknowledged by ${n.by || "the office"}${n.at ? ` on ${n.at}` : ""}`);
     }
   }
   return out.join("\n");

@@ -23,7 +23,7 @@
 // wholesale replacement of a bought-from list's lines) is untouched: this
 // path never replaces a line array, and nothing else can reach it.
 
-const { withPurchasingLock, commitFiles, PurchasingError, assertNotHeld } = require("./purchasing-store");
+const { withPurchasingLock, commitFiles, PurchasingError, assertNotHeld, addHolds } = require("./purchasing-store");
 const purchaseOrders = require("./purchase-orders");
 const materialLists = require("./material-lists");
 
@@ -37,18 +37,26 @@ function isFullyReceived(poLine) {
 }
 
 // What one source line becomes, given the PO's state after the event.
-// null = leave it exactly as it is.
+// null = leave it exactly as it is. `receivedTotal` — how many of the list
+// line have arrived on every sent / received / cancelled PO, this one
+// included as it will be after the event (2026-10-03).
 //   • a fully-received PO line: its source line, ordered on THIS PO, → have
-//     (the frozen price stays — it is what was paid);
+//     once everything the list line needs has arrived (the frozen price
+//     stays — the price this order was sent at); if earlier orders and this
+//     one together still fall short, → need, so the rest is ordered
+//     (6 arrived on one order of a line of 10: 4 still to order);
 //   • an outstanding line on a cancelled PO: ordered on THIS PO → need,
 //     price lock released, so it can be ordered again;
 //   • sending: an outstanding line still "need" and on no PO → ordered on
 //     this PO, price frozen at the PO line's price.
 // A line ordered on a different PO, or already received, is never moved.
-function lineMove(po, poLine, line, event) {
+function lineMove(po, poLine, line, event, receivedTotal = Number(poLine.receivedQty) || 0) {
   if (po.status === "draft") return null;
   const onThisPo = line.status === "ordered" && line.poId === po.id;
-  if (isFullyReceived(poLine)) return onThisPo ? { status: "have", poId: null } : null;
+  if (isFullyReceived(poLine)) {
+    if (!onThisPo) return null;
+    return receivedTotal >= line.qty ? { status: "have", poId: null } : { status: "need", poId: null, frozenPriceCents: null };
+  }
   if (po.status === "cancelled") return onThisPo ? { status: "need", poId: null, frozenPriceCents: null } : null;
   if (event === "sent" && line.status === "need" && !line.poId) {
     return { status: "ordered", poId: po.id, frozenPriceCents: Number(poLine.unitPriceCents) || 0 };
@@ -58,11 +66,11 @@ function lineMove(po, poLine, line, event) {
 
 // Why a source line was left alone when the PO says it should have moved
 // — reported back, never guessed at.
-function leftReason(po, poLine, line) {
+function leftReason(po, poLine, line, receivedTotal) {
   if (po.status === "draft") return null;
   const onThisPo = line.status === "ordered" && line.poId === po.id;
   if (isFullyReceived(poLine)) {
-    if (line.status === "have") return null;
+    if (line.status === "have" || (line.status === "need" && receivedTotal < line.qty)) return null;
     return line.status === "ordered" ? `ordered on ${line.poId}` : "still marked need";
   }
   if (po.status === "cancelled") return null;
@@ -70,9 +78,27 @@ function leftReason(po, poLine, line) {
   return line.status === "ordered" ? `already ordered on ${line.poId}` : line.status === "have" ? "already received" : "on no purchase order";
 }
 
+// How many of one list line have arrived, across every PO that isn't a
+// draft — `po` as it will be after the event, the rest as stored.
+function receivedAcross(po, posRaw, listId, lineId) {
+  const all = [po, ...(posRaw || []).filter((p) => p && p.id !== po.id && !p.deletedAt)];
+  let n = 0;
+  for (const p of all) {
+    if ((p.status || "draft") === "draft") continue;
+    for (const l of p.lineItems || []) {
+      if (!l || l.sourceListId !== listId || l.sourceLineId !== lineId) continue;
+      const qty = Math.max(0, Number(l.qty) || 0);
+      n += Math.min(qty, Math.max(0, Number(l.receivedQty) || 0));
+    }
+  }
+  return n;
+}
+
 // Every list line this PO touches, worked out on copies of the stored
 // records. Returns the lists to write (changed ones only) and what moved.
-function planListMoves(po, listsRaw, event) {
+// `posRaw` — every PO as stored, so a receipt counts what earlier orders
+// for the same line already brought.
+function planListMoves(po, listsRaw, event, posRaw = []) {
   const working = new Map();          // listId -> { idx, rec (copy), moved }
   const moved = [];
   const notMoved = [];
@@ -85,9 +111,10 @@ function planListMoves(po, listsRaw, event) {
     const li = (w.rec.lineItems || []).findIndex((l) => l && l.id === poLine.sourceLineId);
     if (li === -1) { notMoved.push({ listId: w.rec.id, lineId: poLine.sourceLineId, sku: poLine.sku, reason: "line not on the list" }); continue; }
     const line = ML.hydrateLine(w.rec.lineItems[li]);
-    const move = lineMove(po, poLine, line, event);
+    const got = receivedAcross(po, posRaw, w.rec.id, line.id);
+    const move = lineMove(po, poLine, line, event, got);
     if (!move) {
-      const reason = leftReason(po, poLine, line);
+      const reason = leftReason(po, poLine, line, got);
       if (reason) notMoved.push({ listId: w.rec.id, lineId: line.id, sku: line.sku, reason });
       continue;
     }
@@ -110,13 +137,17 @@ function planListMoves(po, listsRaw, event) {
   return { changedLists, moved, notMoved };
 }
 
-// Before a send (2026-10-02): every list line the PO claims must still be
-// waiting to be ordered — "need", on no PO, with no other live or received
-// PO claiming it — or already ordered on THIS PO (a retry). A line on
-// another order, or already received, or claimed twice on this PO, refuses
-// the whole send before anything is written or emailed, so a send can never
-// leave a list line claimed by two orders (purchasing-audit
-// multiple_active_claims / have_but_po_outstanding).
+// Before a send (2026-10-02, revised 2026-10-03): every list line the PO
+// claims must exist and still be waiting to be ordered — "need", on no PO,
+// with no other OPEN order for it (sent / partly received, still
+// outstanding) — or already ordered on THIS PO (a retry). Earlier orders
+// that are complete or cancelled don't block: what they brought counts
+// against the quantity (below). A line that's gone, on another open order,
+// already received, or claimed twice on this PO refuses the whole send
+// before anything is written or emailed, so a send can never leave a list
+// line with two open orders (purchasing-audit multiple_open_orders /
+// have_but_po_outstanding) or create a sent PO for a line that no longer
+// exists (source_missing).
 function assertLinesOrderable(po, posRaw, listsRaw) {
   const problems = [];
   const seen = new Set();
@@ -127,18 +158,22 @@ function assertLinesOrderable(po, posRaw, listsRaw) {
     seen.add(key);
     const list = listsRaw.find((r) => r && r.id === pl.sourceListId);
     const raw = list && (list.lineItems || []).find((l) => l && l.id === pl.sourceLineId);
-    if (!raw) continue;   // the list line is gone — nothing to keep in step (reported by the audit)
+    if (!raw) {
+      problems.push(`${pl.sku}: ${list ? `line ${pl.sourceLineId} is no longer on ${list.id}` : `material list ${pl.sourceListId} no longer exists`} — nothing was bought on this draft, so remove the line or delete the draft`);
+      continue;
+    }
     const line = ML.hydrateLine(raw);
     const mine = line.status === "ordered" && line.poId === po.id;
     if (!mine && !(line.status === "need" && !line.poId)) {
       problems.push(`${pl.sku} on ${list.id}: ${line.status === "ordered" ? `already ordered on ${line.poId}` : line.status === "have" ? "already received" : `marked need but linked to ${line.poId}`}`);
       continue;
     }
-    const other = posRaw.find((p) => p && p.id !== po.id && p.status !== "draft" && p.status !== "cancelled" &&
-      (p.lineItems || []).some((l) => l && l.sourceListId === pl.sourceListId && l.sourceLineId === pl.sourceLineId));
+    const other = posRaw.find((p) => p && p.id !== po.id && !p.deletedAt && (p.status === "sent" || p.status === "partially_received") &&
+      (p.lineItems || []).some((l) => l && l.sourceListId === pl.sourceListId && l.sourceLineId === pl.sourceLineId &&
+        (Number(l.receivedQty) || 0) < (Number(l.qty) || 0)));
     if (other) { problems.push(`${pl.sku} on ${list.id}: ${other.id} (${other.status}) is already the order for it`); continue; }
     // Never re-order what already arrived (2026-10-02): once part of a line
-    // has been delivered (on a cancelled PO), this order may bring the line
+    // has been delivered (on an earlier or cancelled PO), this order may bring the line
     // up to its quantity and no further. Ordering more than needed with
     // nothing yet delivered (a pack size) is the office's call and allowed.
     const c = purchaseOrders.commitmentsByListLine(posRaw, pl.sourceListId, { excludePoId: po.id }).get(pl.sourceLineId);
@@ -165,10 +200,13 @@ async function transact(poId, event, apply, beforeCommit = null) {
     // A recovery hold on this PO or any list it touches: refuse before
     // anything — the state it would build on is unconfirmed.
     assertNotHeld(purchaseOrders.poRefs(stored));
+    const listsRaw = await ML.readRaw();
+    // A sent / received / cancelled PO whose list or list line is gone:
+    // locked for review (a recovery hold), nothing written.
+    purchaseOrders.assertSourcesPresent(stored, listsRaw);
     const po = PO.hydrate(clone(posRaw[idx]));
     const t = apply(po);
-    const listsRaw = await ML.readRaw();
-    const plan = planListMoves(po, listsRaw, event);
+    const plan = planListMoves(po, listsRaw, event, posRaw);
     if (!t.changed && !plan.changedLists.length) {
       return { ...t, po: stored, changed: false, moved: [], notMoved: plan.notMoved };
     }
@@ -179,6 +217,11 @@ async function transact(poId, event, apply, beforeCommit = null) {
       plan.changedLists.length ? { file: materialLists.FILE, after: ML.serialize(listsRaw) } : null,
       t.changed ? { file: purchaseOrders.FILE, after: PO.serialize(posRaw) } : null
     ], { purchaseOrders: [po.id], materialLists: plan.changedLists.map((w) => w.rec.id) });
+    // An interrupted send the office confirmed went, for a line deleted in
+    // the meantime: the truth is recorded, then the PO is locked for review.
+    if ((stored.status || "draft") === "draft") {
+      try { purchaseOrders.assertSourcesPresent(po, listsRaw); } catch { /* held — reported on the PO */ }
+    }
     return { ...t, po: t.changed ? po : stored, changed: true, moved: plan.moved, notMoved: plan.notMoved };
   });
 }
@@ -213,7 +256,7 @@ async function sendPurchaseOrder(poId, { toEmail, toName, subject, by = "admin" 
     PO.transitionSent(probe, { toEmail, toName, subject, by });   // throws if it can't be sent
     const listsNow = await ML.readRaw();                           // every list readable
     assertLinesOrderable(probe, posRaw, listsNow);                 // every line still waiting to be ordered
-    planListMoves(probe, listsNow, "sent");
+    planListMoves(probe, listsNow, "sent", posRaw);
 
     const inFlight = { at: PO.nowIso(), by, to: probe.emailedToEmail };
     const marked = clone(posRaw[idx]);
@@ -285,20 +328,46 @@ async function cancelPurchaseOrder(poId, { reason = "" } = {}) {
 // The office releases a recovery hold once it has checked the records
 // (purchasing-store.js). Refused while the read-only audit still finds the
 // held PO or list disagreeing — that is repaired first, by a person.
+//
+// A PO held because its list or list line is gone (source_missing,
+// 2026-10-03) has nothing left to repair: releasing that hold IS the
+// review. Its note is stamped on each such PO line
+// (sourceMissingAcknowledged: who, when, what they checked), in the same
+// step, so the checker reports it as reviewed history from then on. A
+// hold on a list, or on everything, never clears a missing source: that
+// PO keeps (or is given) its own hold.
 async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" } = {}) {
-  const { releaseHold } = require("./purchasing-store");
+  const { releaseHold, readHolds } = require("./purchasing-store");
   const { auditPurchasingLines } = require("./purchasing-audit");
   return withPurchasingLock(async () => {
-    const r = auditPurchasingLines({ purchaseOrders: await PO.readRaw(), materialLists: await ML.readRaw() });
-    return releaseHold({
-      scope, id, note, by,
-      stillDisagrees: (h) => {
-        const involves = (f) => h.scope === "all" || (h.scope === "material_list" && f.listId === h.id) ||
-          (h.scope === "purchase_order" && (String(f.poId || "").split(", ").includes(h.id) || (f.claims || []).some((c) => c.poId === h.id)));
-        const hits = r.findings.filter((f) => f.severity === "hold" && involves(f));
-        return hits.length ? hits.slice(0, 3).map((f) => `${f.listId} line ${f.lineId} ${f.kind}`).join("; ") : false;
+    const posRaw = await PO.readRaw();
+    const r = auditPurchasingLines({ purchaseOrders: posRaw, materialLists: await ML.readRaw() });
+    const orphans = r.findings.filter((f) => f.kind === "source_missing");
+    const involves = (h, f) => h.scope === "all" || (h.scope === "material_list" && f.listId === h.id) ||
+      (h.scope === "purchase_order" && (String(f.poId || "").split(", ").includes(h.id) || (f.claims || []).some((c) => c.poId === h.id)));
+    const stillDisagrees = (h) => {
+      const hits = r.findings.filter((f) => f.severity === "hold" && f.kind !== "source_missing" && involves(h, f));
+      return hits.length ? hits.slice(0, 3).map((f) => `${f.listId} line ${f.lineId} ${f.kind}`).join("; ") : false;
+    };
+    const match = readHolds().find((h) => h.scope === scope && (h.id || null) === (id || null));
+    const mine = scope === "purchase_order" ? orphans.filter((f) => f.poId === id) : [];
+    // Every other PO with a missing source stays locked on its own hold.
+    const others = orphans.filter((f) => !mine.includes(f));
+    if (others.length) addHolds(others.map((f) => ({ scope: "purchase_order", id: f.poId, source: "source_missing",
+      reason: `${f.poId} (${f.poStatus}) is for ${f.sku} — ${f.listMissing ? `list ${f.listId}` : `line ${f.lineId} of list ${f.listId}`}, which no longer exists` })));
+    if (mine.length && match && String(note || "").trim() && !stillDisagrees(match)) {
+      const idx = posRaw.findIndex((p) => p && p.id === id);
+      const rec = clone(posRaw[idx]);
+      const ack = { at: PO.nowIso(), by, note: String(note).trim().slice(0, 500) };
+      for (const l of rec.lineItems || []) {
+        if (l && mine.some((f) => f.listId === l.sourceListId && f.lineId === l.sourceLineId)) l.sourceMissingAcknowledged = ack;
       }
-    });
+      rec.updatedAt = ack.at;
+      PO.appendHistory(rec, { action: "source_missing_reviewed", by, note: `${mine.length} line${mine.length === 1 ? "" : "s"} for a deleted list or list line reviewed: ${ack.note}` });
+      posRaw[idx] = rec;
+      await commitFiles([{ file: purchaseOrders.FILE, after: PO.serialize(posRaw) }], { purchaseOrders: [id], materialLists: [] });
+    }
+    return releaseHold({ scope, id, note, by, stillDisagrees });
   });
 }
 

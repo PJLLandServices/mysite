@@ -12,13 +12,15 @@
 //
 //   node scripts/audit-po-list-lines.mjs                 server/data on this machine
 //   node scripts/audit-po-list-lines.mjs --data <dir>    another data directory
-//   node scripts/audit-po-list-lines.mjs --from po.json lists.json
-//        saved responses of GET /api/purchase-orders and
-//        GET /api/material-lists?includeArchived=1
+//   node scripts/audit-po-list-lines.mjs --from po.json lists.json [trash.json]
+//        saved responses of GET /api/purchase-orders,
+//        GET /api/material-lists?includeArchived=1 and (optional)
+//        GET /api/admin/trash/material-lists
 //   node scripts/audit-po-list-lines.mjs --browser
 //        prints a snippet to paste into the browser console while signed in
-//        to the admin site: it READS those two endpoints and prints this
-//        report. GET requests only.
+//        to the admin site: it READS those three endpoints and prints this
+//        report. GET requests only. Lists in the Trash still exist, so they
+//        are read too — otherwise their orders would look orphaned.
 //   add --json for the raw findings.
 
 import fs from "node:fs";
@@ -35,7 +37,7 @@ const flag = (name) => args.includes(name);
 const after = (name, n = 1) => { const i = args.indexOf(name); return i === -1 ? null : args.slice(i + 1, i + 1 + n); };
 
 if (flag("--browser")) {
-  // Read-only by construction: two same-origin GETs (fetch's default
+  // Read-only by construction: three same-origin GETs (fetch's default
   // method), no headers, no body. Nothing is stored in the page or sent
   // anywhere; the report is printed to this Console and, if the browser
   // allows it, copied to the clipboard.
@@ -49,9 +51,13 @@ if (flag("--browser")) {
   };
   const po = await get("/api/purchase-orders");
   const ml = await get("/api/material-lists?includeArchived=1");
-  const result = auditPurchasingLines({ purchaseOrders: po.purchaseOrders || [], materialLists: ml.lists || [] });
+  let trash = [], trashNote = "";
+  try { trash = (await get("/api/admin/trash/material-lists")).records || []; trashNote = trash.length + " of them in the Trash"; }
+  catch (e) { trashNote = "the Trash could not be read (" + e.message + ") — a purchase order whose list is in the Trash will show as 'list no longer exists'"; }
+  const lists = (ml.lists || []).concat(trash.filter((t) => t && !(ml.lists || []).some((l) => l && l.id === t.id)));
+  const result = auditPurchasingLines({ purchaseOrders: po.purchaseOrders || [], materialLists: lists });
   let text = formatPurchasingAudit(result);
-  text += "\\nSource: " + location.host + " — " + (po.purchaseOrders || []).length + " purchase orders, " + (ml.lists || []).length + " material lists (Trash not included)";
+  text += "\\nSource: " + location.host + " — " + (po.purchaseOrders || []).length + " purchase orders, " + lists.length + " material lists (" + trashNote + ")";
   if (po.purchasingRecovery) text += "\\nServer recovery status: " + JSON.stringify(po.purchasingRecovery);
   console.log(text);
   try { copy(text); console.log("(The report above is also on your clipboard.)"); } catch (e) {}
@@ -62,13 +68,18 @@ if (flag("--browser")) {
 
 const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 let purchaseOrders, materialLists, source;
-const from = after("--from", 2);
-if (from && from.length === 2) {
+const from = after("--from", 3);
+if (from && from.length >= 2) {
   const po = readJson(from[0]);
   const ml = readJson(from[1]);
   purchaseOrders = Array.isArray(po) ? po : po.purchaseOrders || [];
   materialLists = Array.isArray(ml) ? ml : ml.lists || [];
-  source = `${from[0]} + ${from[1]}`;
+  const files = from.filter((f) => !f.startsWith("--"));
+  if (files[2]) {
+    const tr = readJson(files[2]);
+    for (const t of Array.isArray(tr) ? tr : tr.records || []) if (t && !materialLists.some((l) => l && l.id === t.id)) materialLists.push(t);
+  }
+  source = files.join(" + ");
 } else {
   const dir = (after("--data") || [path.join(ROOT, "server", "data")])[0];
   const read = (name) => { const p = path.join(dir, name); return fs.existsSync(p) ? readJson(p) : []; };

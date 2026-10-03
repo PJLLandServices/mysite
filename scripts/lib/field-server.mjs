@@ -104,7 +104,7 @@ export async function bootServer({ port, env = {}, seedData = null, preload = []
   let exited = null;
   child.stdout.on("data", (c) => { logs += c; });
   child.stderr.on("data", (c) => { logs += c; });
-  child.on("exit", (code) => { exited = code ?? "signal"; });
+  child.on("exit", (code, sig) => { exited = code ?? sig ?? "signal"; });   // the signal name, so a kill seen late reads the same as one seen live
   let up = false;
   for (let i = 0; i < 100 && !up && exited === null; i++) {
     await new Promise((r) => setTimeout(r, 150));

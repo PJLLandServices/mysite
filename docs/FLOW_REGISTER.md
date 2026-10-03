@@ -7910,4 +7910,40 @@ for 10 answered after the delivery; quote comparison; applying the cheapest; the
 quote; the 4 arriving (10 in all, "have"); a hand-made order for 10 refused at send; and
 cancellation and re-order after a quoted purchase.
 
-All six suites run in `build:check`.
+**2026-10-03 — three checker corrections (Codex line-by-line review).**
+- **Open vs completed orders.** A list line may have any number of COMPLETED orders behind it (6
+  on one, the other 4 on a later one); that is history, not a contradiction. Only two OPEN orders
+  (sent / partly received, still outstanding) for one line are (`multiple_open_orders`, replacing
+  `multiple_active_claims`). The live receive rule now matches: a fully received order moves its
+  line to "have" only when everything that arrived on every order covers the line; otherwise to
+  "need", unlinked, so the rest is ordered (6 of 10 in → "need", 4 still to order). The send gate
+  blocks only another OPEN order; a completed one counts against the quantity instead.
+- **Mixed prices.** The list holds one locked price per line. A repair that locks a price is offered
+  only when every receipt behind the line (and, for "ordered", the open order) came at that one
+  price; otherwise "needs a person". A "have" line whose receipts span prices is reported as
+  `mixed_receipt_prices` (review, not held): the PO records keep the true cost of each receipt.
+- **Missing sources.** A PO line whose list, or list line, no longer exists is classified by the
+  PO's state. Draft: `draft_source_missing` (review) — a mistake, and the send gate refuses it.
+  Sent, partly received, received or cancelled: `source_missing` (hold, needs a person, in the
+  totals) — purchasing history. That PO is held (boot check, and at runtime before any send,
+  receive, cancel, re-send or re-order: 423 `recovery_required`); no list is held. Releasing the
+  PO's hold is the office's review: it needs a note, stamps `sourceMissingAcknowledged` on those
+  PO lines and the PO history, and the checker then lists them as reviewed history. A browser
+  can't send that stamp. Releasing a hold on a list or on everything never clears a missing
+  source; that PO gets its own hold.
+- **No new orphans.** A material list a non-draft PO (or an interrupted send) points at can't be
+  permanently deleted (`DELETE`, bulk purge, timed Trash purge — 409 `purchasing_history`), and its
+  lines that such a PO points at can't be removed by a line-replacing save, even once back at
+  "need". It can still go to the Trash and come back. A project deleted "with everything" detaches
+  and keeps such a list and names it in the reply (`keptLists`); the project page says so.
+- **Browser audit** also reads `GET /api/admin/trash/material-lists`, so a list in the Trash is not
+  reported missing (three GETs, still read-only).
+
+`scripts/test-po-source-missing.mjs` (50 checks through the real routes; 32 fail on the previous
+commit) covers line removal and list deletion refused, Trash and purge, project cascade, the draft
+send refusal, the locked sent PO (receive, cancel, re-send, re-order; no email; nothing changed),
+the boot hold, the review on release, the forged review dropped, and release of a hold on
+everything. The matrix gained the open/completed, mixed-price and missing-source cases (115 of its
+checks fail on the previous classifier).
+
+All seven suites run in `build:check`.

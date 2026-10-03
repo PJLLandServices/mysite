@@ -40,7 +40,7 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { resolveLineDescription } = require("./format");
-const { withPurchasingLock, atomicWrite, PurchasingError, assertNotHeld, holdFor } = require("./purchasing-store");
+const { withPurchasingLock, atomicWrite, PurchasingError, assertNotHeld, holdFor, addHolds } = require("./purchasing-store");
 
 // The records a PO touches: itself and every material list it links to.
 // A recovery hold on any of them blocks writing it (purchasing-store.js).
@@ -132,8 +132,64 @@ function hydrateLine(line) {
     lineTotalCents: unitCents * safeQty,
     notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : "",
     receivedQty,
-    receivedAt: typeof line?.receivedAt === "string" ? line.receivedAt : null
+    receivedAt: typeof line?.receivedAt === "string" ? line.receivedAt : null,
+    // The office's review of a line whose material list or list line no
+    // longer exists (2026-10-03) — set ONLY by releasing that PO's
+    // recovery hold (purchasing.js releaseRecoveryHold); stripped from
+    // anything a browser sends (fromClient, below).
+    ...(line && line.sourceMissingAcknowledged && typeof line.sourceMissingAcknowledged === "object"
+      ? { sourceMissingAcknowledged: {
+          at: String(line.sourceMissingAcknowledged.at || ""), by: String(line.sourceMissingAcknowledged.by || ""),
+          note: String(line.sourceMissingAcknowledged.note || "").slice(0, 500) } }
+      : {})
   };
+}
+
+// A line as typed or sent by a browser: never carries the office's
+// missing-source acknowledgment.
+function fromClient(line) {
+  if (!line || typeof line !== "object") return hydrateLine(line);
+  const { sourceMissingAcknowledged, ...rest } = line;
+  return hydrateLine(rest);
+}
+
+// The lines of this PO whose material list, or line on it, no longer
+// exists (2026-10-03) and that the office hasn't yet reviewed. `lists` —
+// every material list, archived and trashed included.
+function missingSources(po, lists) {
+  const out = [];
+  for (const l of (po && po.lineItems) || []) {
+    if (!l || !l.sourceListId || !l.sourceLineId || l.sourceMissingAcknowledged) continue;
+    const list = (lists || []).find((x) => x && x.id === l.sourceListId);
+    if (!list) out.push({ sku: l.sku, listId: l.sourceListId, lineId: l.sourceLineId, what: `list ${l.sourceListId}` });
+    else if (!(list.lineItems || []).some((x) => x && x.id === l.sourceLineId)) {
+      out.push({ sku: l.sku, listId: l.sourceListId, lineId: l.sourceLineId, what: `line ${l.sourceLineId} of list ${l.sourceListId}` });
+    }
+  }
+  return out;
+}
+
+// A sent, received or cancelled PO whose source is gone is historical
+// purchasing evidence the system can't place on a job: it is locked
+// (a recovery hold, released only by the office with a note) before any
+// further send, receive, cancel, re-send or re-order. A draft is left to
+// the send gate, which refuses it (purchasing.js assertLinesOrderable).
+function assertSourcesPresent(po, lists) {
+  if (!po || (po.status || "draft") === "draft") return;
+  const missing = missingSources(po, lists);
+  if (!missing.length) return;
+  addHolds([{
+    scope: "purchase_order", id: po.id, source: "source_missing",
+    reason: `${po.id} (${po.status}) is for ${missing.map((m) => `${m.sku} — ${m.what}`).join("; ")}, which no longer exist${missing.length === 1 ? "s" : ""}`
+  }]);
+  assertNotHeld({ purchaseOrders: [po.id] });
+}
+
+// Every check a lifecycle action on this PO makes before it does anything
+// — a recovery hold, or a source that is gone. Reads the lists itself.
+async function assertActionable(po) {
+  assertNotHeld(poRefs(po));
+  assertSourcesPresent(po, await require("./material-lists").list({ includeArchived: true, includeDeleted: true }));
 }
 
 // Walk PO lines and decide whether the PO is sent / partially_received /
@@ -311,7 +367,7 @@ async function create({
   rec.supplierPhone = String(supplierPhone || "").trim().slice(0, 40);
   rec.supplierAddress = String(supplierAddress || "").trim().slice(0, 400);
   rec.sourceMaterialListIds = Array.isArray(sourceMaterialListIds) ? sourceMaterialListIds.filter(Boolean).map(String) : [];
-  rec.lineItems = Array.isArray(lineItems) ? lineItems.map(hydrateLine) : [];
+  rec.lineItems = Array.isArray(lineItems) ? lineItems.map(fromClient) : [];
   rec.notes = String(notes || "").slice(0, 4000);
   rec.internalNotes = String(internalNotes || "").slice(0, 4000);
   rec.createdBy = String(createdBy || "admin").slice(0, 80);
@@ -350,7 +406,7 @@ async function update(id, patch = {}) {
     next.supplierId = patch.supplierId ? String(patch.supplierId) : null;
   }
   if (Array.isArray(patch.lineItems)) {
-    next.lineItems = patch.lineItems.map(hydrateLine);
+    next.lineItems = patch.lineItems.map(fromClient);
     recomputeSubtotal(next);
   }
   next.updatedAt = nowIso();
@@ -655,6 +711,7 @@ async function reorderFrom(sourcePoId, parts) {
   // sourceMaterialListIds) but claims no line, so no list line is ever
   // "on order" twice. Read under the purchasing lock.
   const listsNow = await require("./material-lists").list({ includeArchived: true, includeDeleted: true });
+  assertSourcesPresent(source, listsNow);   // a PO whose list is gone: locked until reviewed
   const lineNow = (listId, lineId) => {
     const l = listsNow.find((x) => x.id === listId);
     return l ? (l.lineItems || []).find((x) => x.id === lineId) || null : null;
@@ -726,7 +783,7 @@ async function markResent(id, { toEmail, toName, subject } = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const rec = records[idx];
-  assertNotHeld(poRefs(rec));
+  await assertActionable(rec);
   if (rec.status !== "sent" && rec.status !== "partially_received") {
     throw new Error(`Can only re-send a sent or partially-received PO. This one is "${rec.status}".`);
   }
@@ -810,5 +867,8 @@ module.exports = {
   purgeDeleted: locked(purgeDeleted),
   // purchasing.js only — it holds the lock and commits the result.
   poRefs,
+  missingSources,
+  assertSourcesPresent,
+  assertActionable,
   _internal: { readRaw, serialize, hydrate, assertSendable, uncertainSendError, appendHistory, nowIso, transitionSent, transitionReceived, transitionCancelled }
 };

@@ -62,7 +62,8 @@ const expect = {
   "ghost": ["po_missing", null],
   "not-on": ["not_on_po", null],
   "draft": ["ordered_on_draft", null],
-  "ahead": ["list_ahead_of_po", null]
+  "ahead": ["list_ahead_of_po", null],
+  "nope": ["source_missing", null]                 // PO-GONE: sent, for a list that no longer exists
 };
 for (const [lineId, [kind, repair]] of Object.entries(expect)) {
   ok(by[lineId] && by[lineId].kind === kind, `${lineId}: found as ${kind} (${by[lineId]?.kind})`);
@@ -70,12 +71,14 @@ for (const [lineId, [kind, repair]] of Object.entries(expect)) {
 }
 ok(!by["ok-ordered"] && !by["ok-have"], "lines that agree with their PO are not reported");
 ok(r.findings.length === Object.keys(expect).length, `exactly the disagreeing lines are reported (${r.findings.length})`);
-ok(r.notes.length === 1 && r.notes[0].poId === "PO-GONE", "a sent PO line whose list line is gone is noted for information, not as a disagreement");
-ok(S(r.totals) === S({ projects: 1, materialLists: 2, purchaseOrders: 6, lines: 9, hold: 9, review: 0, repairable: 4, needsAPerson: 5 }), `totals (${S(r.totals)})`);
+ok(by["nope"] && by["nope"].severity === "hold" && !by["nope"].repairable && by["nope"].listMissing && by["nope"].poId === "PO-GONE",
+  "a sent PO whose list is gone is a contradiction for a person — held, not a footnote (2026-10-03)");
+ok(r.notes.length === 0, "nothing is left as a mere note");
+ok(S(r.totals) === S({ projects: 1, materialLists: 3, purchaseOrders: 7, lines: 10, hold: 10, review: 0, repairable: 4, needsAPerson: 6 }), `totals (${S(r.totals)})`);
 const canc = by["canc-stuck"];
 ok(canc && S(canc.quantities) === S({ needed: 4, received: 1, onOrder: 0, remaining: 3 }) && canc.claims[0].unitPriceCents === 250,
   `a cancelled, part-delivered line shows what arrived, what remains and the price (${S(canc && canc.quantities)})`);
-ok(r.findings.every((f) => f.projectId === "PRJ-1"), "each finding names its project");
+ok(r.findings.filter((f) => !f.listMissing).every((f) => f.projectId === "PRJ-1"), "each finding whose list still exists names its project");
 
 // Each repair leaves the line exactly as the one-commit rule (lineMove)
 // would have — same status, link and locked price.
@@ -94,7 +97,7 @@ for (const lineId of ["recv-stuck", "canc-got"]) {
 }
 
 const text = formatPurchasingAudit(r);
-ok(/read-only — nothing was changed/.test(text) && /Affected: 1 project\(s\), 2 material list\(s\), 6 purchase order\(s\), 9 line\(s\)/.test(text), "the report states the totals and that nothing was changed");
+ok(/read-only — nothing was changed/.test(text) && /Affected: 1 project\(s\), 3 material list\(s\), 7 purchase order\(s\), 10 line\(s\)/.test(text), "the report states the totals and that nothing was changed");
 
 console.log(`\npurchasing audit: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
