@@ -35,6 +35,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { withPurchasingLock, atomicWrite, assertNotHeld, holdFor, PurchasingError } = require("./purchasing-store");
 
 const FILE = path.join(__dirname, "..", "data", "material-lists.json");
 
@@ -62,9 +63,24 @@ async function readAll() {
   }
 }
 
+function serialize(records) {
+  return JSON.stringify(records, null, 2) + "\n";
+}
+
+// Temp file + rename: a crash mid-write can never leave half a file.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await atomicWrite(FILE, serialize(records));
+}
+
+// The file exactly as stored — no hydrate, and a parse failure THROWS
+// rather than reading as empty. purchasing.js changes only the lines a
+// purchase order owns; every other record and line goes back byte-for-byte.
+async function readRaw() {
+  await ensureFile();
+  const parsed = JSON.parse((await fs.readFile(FILE, "utf8")) || "[]");
+  if (!Array.isArray(parsed)) throw new Error("material-lists.json is not a list");
+  return parsed;
 }
 
 // ---- Helpers ---------------------------------------------------------
@@ -244,6 +260,7 @@ async function create({
   lineItems = [],
   createdBy = "admin"
 } = {}) {
+  assertNotHeld({});   // only a hold on everything stops a new list
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextListId(year);
@@ -304,11 +321,43 @@ function lineItemsLockedBy(list) {
   };
 }
 
+// Purchase orders that bought — or may have emailed — against list lines
+// (2026-10-03): every PO that isn't a draft, plus a draft whose send was
+// interrupted. Their lines are the purchasing record, so the list and the
+// lines they point at must outlive them: deleting one would leave a sent,
+// received or cancelled order that belongs to no job (purchasing-audit
+// source_missing). A plain draft points at nothing bought and doesn't
+// count — deleting its list is fixing a mistake, and its send is refused.
+// Returns listId -> [{ poId, poStatus, lineId, sku }].
+async function purchasingClaims() {
+  const pos = await require("./purchase-orders")._internal.readRaw();
+  const out = new Map();
+  for (const p of pos || []) {
+    if (!p || p.deletedAt) continue;
+    if ((p.status || "draft") === "draft" && !p.sendInFlight) continue;
+    for (const l of p.lineItems || []) {
+      if (!l || !l.sourceListId || !l.sourceLineId) continue;
+      if (!out.has(l.sourceListId)) out.set(l.sourceListId, []);
+      out.get(l.sourceListId).push({ poId: p.id, poStatus: p.status || "draft", lineId: l.sourceLineId, sku: l.sku || "" });
+    }
+  }
+  return out;
+}
+
+function purchasingHistoryError(listId, claims, what, advice = "Archive the list instead, or detach it from the project.") {
+  const pos = [...new Set(claims.map((c) => `${c.poId} (${c.poStatus})`))];
+  return new PurchasingError(
+    `Can't ${what} ${listId}: purchase order${pos.length === 1 ? "" : "s"} ${pos.slice(0, 5).join(", ")} ${pos.length === 1 ? "was" : "were"} placed for it, and ` +
+    `that record has to stay with its job. ${advice}`,
+    { status: 409, code: "purchasing_history" });
+}
+
 async function update(id, patch = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  assertNotHeld({ materialLists: [current.id] });   // a recovery hold: read-only until the office releases it
   const next = { ...current };
 
   const allowedTop = ["name", "customerName", "customerEmail", "address", "notes", "parentType", "parentId"];
@@ -366,6 +415,18 @@ async function update(id, patch = {}) {
       );
     }
     next.lineItems = patch.lineItems.map(hydrateLine);
+    // Never drop a line an order was placed for (2026-10-03) — even once
+    // it's back to "need" (part arrived; the rest still to order), when the
+    // test above no longer sees purchasing state on it.
+    const kept = new Set(next.lineItems.map((l) => l.id));
+    const dropped = ((await purchasingClaims()).get(current.id) || []).filter((c) => !kept.has(c.lineId));
+    // (The System Builder's re-sync of a list with nothing yet ordered on it
+    // lands here when earlier orders were completed or cancelled: refusing
+    // keeps what arrived counted, so it isn't ordered again.)
+    if (dropped.length) {
+      throw purchasingHistoryError(current.id, dropped, "replace the lines on",
+        "Change quantities on the list itself, or start a new list for the new design.");
+    }
     lineItemsChanged = true;
   }
 
@@ -409,6 +470,9 @@ async function remove(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
+  assertNotHeld({ materialLists: [records[idx].id] });
+  const claims = (await purchasingClaims()).get(records[idx].id) || [];
+  if (claims.length) throw purchasingHistoryError(records[idx].id, claims, "permanently delete");
   const [removed] = records.splice(idx, 1);
   await writeAll(records);
   return removed;
@@ -482,6 +546,7 @@ async function softDelete(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Material list not found");
+  assertNotHeld({ materialLists: [records[idx].id] });
   if (records[idx].deletedAt) throw new Error("Already in Trash");
   records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
   await writeAll(records);
@@ -492,6 +557,7 @@ async function restore(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Material list not found");
+  assertNotHeld({ materialLists: [records[idx].id] });
   if (!records[idx].deletedAt) throw new Error("Not in Trash");
   records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
   await writeAll(records);
@@ -505,9 +571,13 @@ async function listDeleted() {
 
 async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   const records = await readAll();
+  assertNotHeld({ materialLists: [] });                         // a hold on everything stops the purge
+  const claimed = await purchasingClaims();
   const cutoff = Date.now() - olderThanMs;
   const kept = records.filter((r) => {
     if (!r.deletedAt) return true;
+    if (holdFor({ materialLists: [r.id] })) return true;       // never purge a held list
+    if (claimed.has(r.id)) return true;                        // nor one an order was placed for — it stays in Trash
     const t = Date.parse(r.deletedAt);
     return !Number.isFinite(t) || t > cutoff;
   });
@@ -516,22 +586,30 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// Every write verb queues behind the shared purchasing lock, so a list
+// edit can't land between the two halves of a purchase-order commit.
+const locked = (fn) => (...args) => withPurchasingLock(() => fn(...args));
+
 module.exports = {
   STATUSES,
   LINE_STATUSES,
   PARENT_TYPES,
+  FILE,
   list,
   get,
   listByParent,
-  create,
-  update,
-  remove,
+  create: locked(create),
+  update: locked(update),
+  remove: locked(remove),
   computeTotals,
   resolveLineUnitPriceCents,
   lineItemsLockedBy,
+  purchasingClaims,
   deriveStatus,
-  softDelete,
-  restore,
+  softDelete: locked(softDelete),
+  restore: locked(restore),
   listDeleted,
-  purgeDeleted
+  purgeDeleted: locked(purgeDeleted),
+  // purchasing.js only — it holds the lock and commits the result.
+  _internal: { readRaw, serialize, hydrate, hydrateLine, deriveStatus, appendHistory, nowIso }
 };

@@ -40,6 +40,16 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { resolveLineDescription } = require("./format");
+const { withPurchasingLock, atomicWrite, PurchasingError, assertNotHeld, holdFor, addHolds } = require("./purchasing-store");
+
+// The records a PO touches: itself and every material list it links to.
+// A recovery hold on any of them blocks writing it (purchasing-store.js).
+function poRefs(rec) {
+  return {
+    purchaseOrders: [rec && rec.id].filter(Boolean),
+    materialLists: [...(rec && rec.sourceMaterialListIds || []), ...((rec && rec.lineItems) || []).map((l) => l && l.sourceListId)].filter(Boolean)
+  };
+}
 
 const FILE = path.join(__dirname, "..", "data", "purchase-orders.json");
 
@@ -65,9 +75,26 @@ async function readAll() {
   }
 }
 
+function serialize(records) {
+  return JSON.stringify(records, null, 2) + "\n";
+}
+
+// Temp file + rename: a crash mid-write can never leave half a file.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await atomicWrite(FILE, serialize(records));
+}
+
+// The file exactly as stored — no hydrate, and a parse failure THROWS
+// rather than reading as empty, so a purchasing commit can never write
+// back an empty list over records it failed to read. purchasing.js
+// replaces only the record it changes; every other one goes back
+// byte-for-byte.
+async function readRaw() {
+  await ensureFile();
+  const parsed = JSON.parse((await fs.readFile(FILE, "utf8")) || "[]");
+  if (!Array.isArray(parsed)) throw new Error("purchase-orders.json is not a list");
+  return parsed;
 }
 
 // ---- Helpers ---------------------------------------------------------
@@ -105,8 +132,65 @@ function hydrateLine(line) {
     lineTotalCents: unitCents * safeQty,
     notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : "",
     receivedQty,
-    receivedAt: typeof line?.receivedAt === "string" ? line.receivedAt : null
+    receivedAt: typeof line?.receivedAt === "string" ? line.receivedAt : null,
+    // The office's review of a line whose material list or list line no
+    // longer exists (2026-10-03) — set ONLY by releasing that PO's
+    // recovery hold (purchasing.js releaseRecoveryHold); stripped from
+    // anything a browser sends (fromClient, below).
+    ...(line && line.sourceMissingAcknowledged && typeof line.sourceMissingAcknowledged === "object"
+      ? { sourceMissingAcknowledged: {
+          at: String(line.sourceMissingAcknowledged.at || ""), by: String(line.sourceMissingAcknowledged.by || ""),
+          note: String(line.sourceMissingAcknowledged.note || "").slice(0, 500) } }
+      : {})
   };
+}
+
+// A line as typed or sent by a browser: never carries the office's
+// missing-source acknowledgment.
+function fromClient(line) {
+  if (!line || typeof line !== "object") return hydrateLine(line);
+  const { sourceMissingAcknowledged, ...rest } = line;
+  return hydrateLine(rest);
+}
+
+// The lines of this PO whose material list, or line on it, no longer
+// exists (2026-10-03) and that the office hasn't yet reviewed — or, with
+// includeReviewed, every such line. `lists` — every material list,
+// archived and trashed included.
+function missingSources(po, lists, { includeReviewed = false } = {}) {
+  const out = [];
+  for (const l of (po && po.lineItems) || []) {
+    if (!l || !l.sourceListId || !l.sourceLineId || (l.sourceMissingAcknowledged && !includeReviewed)) continue;
+    const list = (lists || []).find((x) => x && x.id === l.sourceListId);
+    if (!list) out.push({ sku: l.sku, listId: l.sourceListId, lineId: l.sourceLineId, what: `list ${l.sourceListId}` });
+    else if (!(list.lineItems || []).some((x) => x && x.id === l.sourceLineId)) {
+      out.push({ sku: l.sku, listId: l.sourceListId, lineId: l.sourceLineId, what: `line ${l.sourceLineId} of list ${l.sourceListId}` });
+    }
+  }
+  return out;
+}
+
+// A sent, received or cancelled PO whose source is gone is historical
+// purchasing evidence the system can't place on a job: it is locked
+// (a recovery hold, released only by the office with a note) before any
+// further send, receive, cancel, re-send or re-order. A draft is left to
+// the send gate, which refuses it (purchasing.js assertLinesOrderable).
+function assertSourcesPresent(po, lists) {
+  if (!po || (po.status || "draft") === "draft") return;
+  const missing = missingSources(po, lists);
+  if (!missing.length) return;
+  addHolds([{
+    scope: "purchase_order", id: po.id, source: "source_missing",
+    reason: `${po.id} (${po.status}) is for ${missing.map((m) => `${m.sku} — ${m.what}`).join("; ")}, which no longer exist${missing.length === 1 ? "s" : ""}`
+  }]);
+  assertNotHeld({ purchaseOrders: [po.id] });
+}
+
+// Every check a lifecycle action on this PO makes before it does anything
+// — a recovery hold, or a source that is gone. Reads the lists itself.
+async function assertActionable(po) {
+  assertNotHeld(poRefs(po));
+  assertSourcesPresent(po, await require("./material-lists").list({ includeArchived: true, includeDeleted: true }));
 }
 
 // Walk PO lines and decide whether the PO is sent / partially_received /
@@ -160,6 +244,14 @@ function blankPo() {
     emailSubject: "",
 
     sentAt: null,
+    // A send that started — marked ON DISK before the supplier email goes
+    // (2026-10-02), cleared in the same save that records the outcome. If
+    // the server dies in between, it survives the restart and the PO is
+    // "delivery uncertain": it will not be emailed again until the office
+    // records whether it went (purchasing.resolveUncertainPoSend). The
+    // same pattern as a change request's sendInFlight (2026-09-27).
+    sendInFlight: null,       // { at, by, to }
+    sendAttempts: [],         // [{ at, by, to, ok, reason, … }] — kept for good
     receivedAt: null,
     cancelledAt: null,
     cancelReason: "",
@@ -198,6 +290,8 @@ function hydrate(rec) {
     sourceMaterialListIds: Array.isArray(rec?.sourceMaterialListIds) ? rec.sourceMaterialListIds.slice() : [],
     lineItems: Array.isArray(rec?.lineItems) ? rec.lineItems.map(hydrateLine) : [],
     history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
+    sendInFlight: rec?.sendInFlight && typeof rec.sendInFlight === "object" ? rec.sendInFlight : null,
+    sendAttempts: Array.isArray(rec?.sendAttempts) ? rec.sendAttempts : [],
     deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null,
     pdfPath: typeof rec?.pdfPath === "string" ? rec.pdfPath : null,
     csvPath: typeof rec?.csvPath === "string" ? rec.csvPath : null,
@@ -260,7 +354,8 @@ async function create({
   notes = "",
   internalNotes = "",
   createdBy = "admin"
-} = {}) {
+} = {}, { extraHistory = [] } = {}) {
+  assertNotHeld({ purchaseOrders: [], materialLists: [...(sourceMaterialListIds || []), ...(lineItems || []).map((l) => l && l.sourceListId)] });
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextPoId(year);
@@ -273,24 +368,27 @@ async function create({
   rec.supplierPhone = String(supplierPhone || "").trim().slice(0, 40);
   rec.supplierAddress = String(supplierAddress || "").trim().slice(0, 400);
   rec.sourceMaterialListIds = Array.isArray(sourceMaterialListIds) ? sourceMaterialListIds.filter(Boolean).map(String) : [];
-  rec.lineItems = Array.isArray(lineItems) ? lineItems.map(hydrateLine) : [];
+  rec.lineItems = Array.isArray(lineItems) ? lineItems.map(fromClient) : [];
   rec.notes = String(notes || "").slice(0, 4000);
   rec.internalNotes = String(internalNotes || "").slice(0, 4000);
   rec.createdBy = String(createdBy || "admin").slice(0, 80);
   recomputeSubtotal(rec);
+  for (const entry of extraHistory) appendHistory(rec, entry);
   records.unshift(rec);
   await writeAll(records);
   return rec;
 }
 
-// Update editable fields. Status changes ALWAYS go through the dedicated
-// markSent / markReceived / markCancelled functions so the source-line
-// state flips happen atomically with the PO state.
+// Update editable fields. Status changes ALWAYS go through purchasing.js
+// (send / receive / cancel), which moves the source material-list lines in
+// the same commit as the PO.
 async function update(id, patch = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  assertNotHeld(poRefs(current));
+  if (Array.isArray(patch.lineItems)) assertNotHeld({ materialLists: patch.lineItems.map((l) => l && l.sourceListId) });
   if (current.status !== "draft" && (Array.isArray(patch.lineItems) || patch.supplierId !== undefined)) {
     throw new Error(`Cannot edit line items or supplier on a ${current.status} PO`);
   }
@@ -309,7 +407,7 @@ async function update(id, patch = {}) {
     next.supplierId = patch.supplierId ? String(patch.supplierId) : null;
   }
   if (Array.isArray(patch.lineItems)) {
-    next.lineItems = patch.lineItems.map(hydrateLine);
+    next.lineItems = patch.lineItems.map(fromClient);
     recomputeSubtotal(next);
   }
   next.updatedAt = nowIso();
@@ -318,159 +416,131 @@ async function update(id, patch = {}) {
   return next;
 }
 
-// Mark a draft as sent. Records the email send-state snapshot AND the
-// stored-document paths (PO Document Redesign brief §3.5 — snapshot-on-
-// send). Caller (server.js) is responsible for: rendering the PDF +
-// CSV, writing them to disk, calling the email sender, and flipping
-// the source material-list lines to "ordered" with poId backref.
+// ---- Lifecycle transitions ------------------------------------------
 //
+// Pure: each takes a hydrated PO, changes it in place, and returns what
+// changed. None of them reads or writes a file — purchasing.js does that,
+// in one commit with the source material-list lines, under the shared
+// purchasing lock (2026-10-02). An illegal transition throws a
+// PurchasingError BEFORE anything is written.
+
+// Draft → sent. Records the email send-state snapshot AND the stored-
+// document paths (PO Document Redesign brief §3.5 — snapshot-on-send).
 // `pdfPath` and `csvPath` are repo-relative paths under server/data/.
-// Once set on a sent PO they are IMMUTABLE — the resend path reads
-// these files verbatim; the supplier always receives the same bytes.
-async function markSent(id, { toEmail, toName, subject, pdfPath, csvPath } = {}) {
-  const records = await readAll();
-  const idx = records.findIndex((r) => r.id === id);
-  if (idx === -1) return null;
-  const rec = records[idx];
+// Once set on a sent PO they are IMMUTABLE — the resend path reads these
+// files verbatim; the supplier always receives the same bytes.
+function uncertainSendError(rec) {
+  const f = rec.sendInFlight || {};
+  return new PurchasingError(
+    `A send of ${rec.id} to ${f.to || "the supplier"} started ${f.at || "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved, so we can't tell whether the email arrived. Check your sent mail or ask the supplier, then record whether it went — it will not be emailed again until you do.`,
+    { status: 409, code: "delivery_uncertain" }
+  );
+}
+
+function assertSendable(rec) {
+  if (rec.sendInFlight) throw uncertainSendError(rec);
   if (rec.status !== "draft") {
-    throw new Error(`Can only send a draft PO. This one is "${rec.status}".`);
+    throw new PurchasingError(`Can only send a draft PO. This one is "${rec.status}".`, { status: 409, code: "not_draft" });
   }
-  if (!rec.lineItems.length) throw new Error("Can't send a PO with no line items.");
+  if (!rec.lineItems.length) throw new PurchasingError("Can't send a PO with no line items.", { status: 422, code: "no_lines" });
+}
+
+// `inFlight` — the send this PO was marked with before its email went;
+// the outcome is saved in the same write that clears the mark.
+function transitionSent(rec, { toEmail, toName, subject, pdfPath, csvPath, inFlight = null, by = "admin" } = {}) {
+  if (!inFlight || !rec.sendInFlight || rec.sendInFlight.at !== inFlight.at) assertSendable(rec);
+  else if (rec.status !== "draft") throw new PurchasingError(`Can only send a draft PO. This one is "${rec.status}".`, { status: 409, code: "not_draft" });
+  rec.sendInFlight = null;
   rec.status = "sent";
   rec.sentAt = nowIso();
   rec.emailedToEmail = String(toEmail || rec.supplierEmail || "").trim().toLowerCase();
   rec.emailedToName = String(toName || rec.supplierContactName || rec.supplierName || "");
   rec.emailSubject = String(subject || `Purchase Order ${rec.id}`).slice(0, 200);
   rec.updatedAt = rec.sentAt;
-  // Stored-document paths. The caller passes both — partial snapshots
-  // (one without the other) would break the resend idempotency guarantee.
+  // The caller passes both — partial snapshots (one without the other)
+  // would break the resend idempotency guarantee.
   if (pdfPath) rec.pdfPath = String(pdfPath);
   if (csvPath) rec.csvPath = String(csvPath);
   if (pdfPath || csvPath) rec.documentsGeneratedAt = rec.sentAt;
+  rec.sendAttempts = [...(rec.sendAttempts || []), { at: rec.sentAt, by, to: rec.emailedToEmail, ok: true, reason: null }];
   appendHistory(rec, { action: "sent", note: rec.emailedToEmail });
-  records[idx] = rec;
-  await writeAll(records);
-  return rec;
+  return { changed: true };
 }
 
-// Record a receipt event. `lineUpdates` is a `{ [lineId]: newReceivedQty }`
-// map of ABSOLUTE quantities (not deltas). Pass an empty object (or omit
-// it) to mark every line fully received at once. Each line's receivedQty
-// is clamped to [0, line.qty]. PO status is auto-derived from the line
-// states after the update.
+// A receipt event. `lineUpdates` is a `{ [lineId]: newReceivedQty }` map
+// of ABSOLUTE quantities (not deltas), so the same request sent twice
+// lands on the same numbers — a retry can never count a delivery twice.
+// Omit it to mark every line fully received. Each line's receivedQty is
+// clamped to [0, line.qty]; the PO status is derived from the lines.
 //
-// Returns:
-//   {
-//     po: <updated record>,
-//     fullyReceivedLineIds: [...] // lines that crossed into receivedQty >= qty
-//                                 // on THIS event (caller flips source lines)
-//   }
-//
-// The caller (server.js /receive endpoint) flips source material-list
-// lines to "have" only for the IDs in fullyReceivedLineIds — partial
-// lines stay "ordered" with poId backref so a subsequent receive event
-// can complete them.
-async function markReceived(id, { lineUpdates = null, note = "" } = {}) {
-  const records = await readAll();
-  const idx = records.findIndex((r) => r.id === id);
-  if (idx === -1) return null;
-  const rec = records[idx];
-  if (rec.status !== "sent" && rec.status !== "partially_received") {
-    throw new Error(`Can only receive a sent or partially-received PO. This one is "${rec.status}".`);
-  }
-  const ts = nowIso();
-  const fullyReceivedLineIds = [];
-
-  // Resolve the requested per-line qtys. If the caller didn't pass any,
-  // treat as "mark every line fully received."
+// Asking again for what is already recorded changes nothing (no history
+// entry, no write) — including "mark all received" on a received PO. A
+// DIFFERENT quantity on a received PO is refused, as before.
+function transitionReceived(rec, { lineUpdates = null, note = "" } = {}) {
   const updatesMap = (lineUpdates && typeof lineUpdates === "object" && !Array.isArray(lineUpdates))
     ? lineUpdates
     : null;
-
-  for (const line of rec.lineItems) {
-    const wasFullyReceived = (Number(line.receivedQty) || 0) >= (Number(line.qty) || 0);
-    let newReceived;
-    if (updatesMap) {
-      // Only touch lines explicitly in the updates map. Absent lines keep
-      // their current receivedQty.
-      if (!Object.prototype.hasOwnProperty.call(updatesMap, line.id)) continue;
-      const requested = Number(updatesMap[line.id]);
-      newReceived = Number.isFinite(requested) && requested >= 0
-        ? Math.min(Math.floor(requested), line.qty)
-        : line.receivedQty;
-    } else {
-      newReceived = line.qty;
-    }
-    if (newReceived === line.receivedQty) continue;
-    line.receivedQty = newReceived;
-    line.receivedAt = ts;
-    if (!wasFullyReceived && newReceived >= line.qty) {
-      fullyReceivedLineIds.push(line.id);
-    }
+  const wanted = (line) => {
+    if (!updatesMap) return line.qty;
+    if (!Object.prototype.hasOwnProperty.call(updatesMap, line.id)) return line.receivedQty;
+    const requested = Number(updatesMap[line.id]);
+    return Number.isFinite(requested) && requested >= 0 ? Math.min(Math.floor(requested), line.qty) : line.receivedQty;
+  };
+  const changes = rec.lineItems.filter((l) => wanted(l) !== l.receivedQty);
+  if (rec.status === "received" && !changes.length) return { changed: false, fullyReceivedLineIds: [] };
+  if (rec.status !== "sent" && rec.status !== "partially_received") {
+    throw new PurchasingError(`Can only receive a sent or partially-received PO. This one is "${rec.status}".`, { status: 400, code: "not_receivable" });
   }
+  if (!changes.length) return { changed: false, fullyReceivedLineIds: [] };
 
-  // Derive new PO status from line states.
+  const ts = nowIso();
+  const fullyReceivedLineIds = [];
+  for (const line of changes) {
+    const wasFullyReceived = (Number(line.receivedQty) || 0) >= (Number(line.qty) || 0);
+    line.receivedQty = wanted(line);
+    line.receivedAt = ts;
+    if (!wasFullyReceived && line.receivedQty >= line.qty) fullyReceivedLineIds.push(line.id);
+  }
   const newStatus = deriveReceiveStatus(rec.lineItems);
   const statusChanged = newStatus !== rec.status;
   rec.status = newStatus;
   if (newStatus === "received" && !rec.receivedAt) rec.receivedAt = ts;
   rec.updatedAt = ts;
-
-  // Concise history entry — "received 8 of 12 lines" or "partial: 3 lines"
+  // Concise history entry — "8/12 lines fully received"
   const totalLines = rec.lineItems.length;
   const fullyDoneCount = rec.lineItems.filter((l) => (l.receivedQty || 0) >= l.qty).length;
   appendHistory(rec, {
     action: statusChanged ? `status:${newStatus}` : "receipt_recorded",
     note: note ? `${fullyDoneCount}/${totalLines} lines fully received — ${note}` : `${fullyDoneCount}/${totalLines} lines fully received`
   });
-
-  records[idx] = rec;
-  await writeAll(records);
-  return { po: rec, fullyReceivedLineIds };
+  return { changed: true, fullyReceivedLineIds };
 }
 
-// Cancel a PO. Allowed from draft / sent / partially_received. Already-
-// received lines stay "have" on their source lists (can't undo a delivery
-// — the supplier already shipped). Outstanding (not fully received) lines
-// flip back to "need" — those line ids are returned so server.js can do
-// the source-list flip.
-//
-// Returns:
-//   {
-//     po: <cancelled record>,
-//     outstandingLineIds: [...]   // lines that were NOT fully received,
-//                                  // caller flips their source lines back
-//                                  // to "need" and clears poId
-//   }
-async function markCancelled(id, { reason = "" } = {}) {
-  const records = await readAll();
-  const idx = records.findIndex((r) => r.id === id);
-  if (idx === -1) return null;
-  const rec = records[idx];
+// Cancel. Allowed from draft / sent / partially_received. What already
+// arrived stays received (can't undo a delivery); the outstanding lines'
+// source lines go back to "need" (purchasing.js). Cancelling a cancelled
+// PO changes nothing.
+function transitionCancelled(rec, { reason = "" } = {}) {
   if (rec.status === "received") {
-    throw new Error("Can't cancel a fully-received PO. Mark a return separately.");
+    throw new PurchasingError("Can't cancel a fully-received PO. Mark a return separately.", { status: 400, code: "already_received" });
   }
-  if (rec.status === "cancelled") return { po: rec, outstandingLineIds: [] }; // idempotent
-  const outstandingLineIds = [];
-  for (const line of rec.lineItems) {
-    if ((Number(line.receivedQty) || 0) < (Number(line.qty) || 0)) {
-      outstandingLineIds.push(line.id);
-    }
-  }
+  if (rec.status === "cancelled") return { changed: false, outstandingLineIds: [] };
+  const outstandingLineIds = rec.lineItems
+    .filter((l) => (Number(l.receivedQty) || 0) < (Number(l.qty) || 0))
+    .map((l) => l.id);
   rec.status = "cancelled";
   rec.cancelledAt = nowIso();
   rec.cancelReason = String(reason || "").slice(0, 500);
   rec.updatedAt = rec.cancelledAt;
   appendHistory(rec, { action: "cancelled", note: rec.cancelReason });
-  records[idx] = rec;
-  await writeAll(records);
-  return { po: rec, outstandingLineIds };
+  return { changed: true, outstandingLineIds };
 }
 
 async function remove(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
+  assertNotHeld(poRefs(records[idx]));
   const [removed] = records.splice(idx, 1);
   await writeAll(records);
   return removed;
@@ -505,7 +575,58 @@ async function remove(id) {
 //     (part.supplierPrices[supplierId], lib/part-supplier-prices.js) and
 //     falls back to the catalog price otherwise. `unpricedForSupplier`
 //     names the fallbacks so the UI can say which lines are a guess.
-function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}) {
+// THE "still to order" calculation (2026-10-02) — one function, used by
+// every path that proposes a quantity for a list line: PO generation
+// (plan + generate, assigned or one supplier), re-order, quote-request
+// planning (plan + generate), and the send gate. For each line of a list,
+// across every PO that claims it:
+//   received — arrived on any non-draft PO, cancelled ones included (the
+//              same arithmetic as purchasing-audit's "received")
+//   onOrder  — still outstanding on a sent / partially received PO
+//   drafted  — on a draft PO not yet sent
+// A cancelled PO that delivered part of a line leaves the line at "need"
+// for the REST: what to order is the line's quantity less what arrived,
+// never the whole line again.
+function commitmentsByListLine(purchaseOrders, listId, { excludePoId = null } = {}) {
+  const out = new Map();
+  const slot = (id) => { if (!out.has(id)) out.set(id, { received: 0, onOrder: 0, drafted: 0 }); return out.get(id); };
+  for (const po of purchaseOrders || []) {
+    if (!po || po.deletedAt || (excludePoId && po.id === excludePoId)) continue;
+    for (const l of po.lineItems || []) {
+      if (!l || l.sourceListId !== listId || !l.sourceLineId) continue;
+      const qty = Math.max(0, Number(l.qty) || 0);
+      const got = Math.min(qty, Math.max(0, Number(l.receivedQty) || 0));
+      const c = slot(l.sourceLineId);
+      if (po.status === "draft") { c.drafted += qty; continue; }
+      c.received += got;
+      if (po.status === "sent" || po.status === "partially_received") c.onOrder += qty - got;
+    }
+  }
+  return out;
+}
+
+// How many of a line are still to be ordered. `includeDrafts`: count a
+// draft PO as already arranged — true for anything that CREATES a PO (so a
+// second Generate, a double-click or a re-order can't draft the same parts
+// twice); false for a quote request, which may ask about parts a draft is
+// waiting on.
+function stillToOrder(line, commitments, { includeDrafts = true } = {}) {
+  const c = (commitments && commitments.get(line.id)) || { received: 0, onOrder: 0, drafted: 0 };
+  const qty = Math.max(0, Math.floor(Number(line.qty) || 0));
+  return Math.max(0, qty - c.received - c.onOrder - (includeDrafts ? c.drafted : 0));
+}
+
+// Back-compat for callers that only want what arrived.
+function receivedByListLine(purchaseOrders, listId) {
+  const out = new Map();
+  for (const [id, c] of commitmentsByListLine(purchaseOrders, listId)) out.set(id, c.received);
+  return out;
+}
+
+// `committed` — commitmentsByListLine() for this list. A "need" line orders
+// only what is still to come (stillToOrder, drafts counted); one already
+// covered in full is skipped. Without it, the whole line quantity.
+function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, committed = null } = {}) {
   if (!list || !Array.isArray(list.lineItems)) {
     return { ok: false, drafts: [], missingSupplier: [], missingSupplierLines: [], unpricedForSupplier: [] };
   }
@@ -516,6 +637,8 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
   const unpricedForSupplier = [];
   for (const line of list.lineItems) {
     if (line.status !== "need") continue;
+    const toOrder = committed ? stillToOrder(line, committed) : Math.max(1, Math.floor(Number(line.qty) || 1));
+    if (toOrder <= 0) continue;
     const part = parts && parts[line.sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!forced && !supplierIds.length) {
@@ -538,7 +661,7 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
       else unpricedForSupplier.push(line.sku);
     }
     const unitCents = Number.isFinite(Number(sourceCents)) ? Math.max(0, Math.floor(Number(sourceCents))) : 0;
-    const qty = Math.max(1, Math.floor(Number(line.qty) || 1));
+    const qty = toOrder;
     draft.lineItems.push({
       sku: line.sku,
       qty,
@@ -567,37 +690,80 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}
 // Clone a PO into a new draft (Phase 4 "re-order" feature). Same supplier,
 // same line items at the same quantities, prices snapshotted at clone
 // time from parts.json (passed in by caller — same shape as
-// planDraftsFromMaterialList). Drops sourceMaterialListIds — re-orders
-// aren't tied to a list. Returns the freshly-created PO.
+// planDraftsFromMaterialList). Returns the freshly-created PO.
+//
+// A re-order KEEPS the source PO's material-list link — the PO's
+// sourceMaterialListIds and each line's sourceListId / sourceLineId
+// (2026-10-02). It used to drop them ("re-orders aren't tied to a list"),
+// and a job's materials are found through that link, so whatever arrived
+// on a re-order counted toward no job. A PO that never had a link (made by
+// hand) gives its re-order none; nothing is inferred.
 //
 // `note` is optional; defaults to a back-reference like "Re-order from
 // PO-2026-0001" so the audit trail makes the lineage obvious.
 async function reorderFrom(sourcePoId, parts) {
   const source = await get(sourcePoId);
   if (!source) throw new Error(`Source PO ${sourcePoId} not found`);
+  // A re-order links to the same lists — never to one whose state is in doubt.
+  assertNotHeld(poRefs(source));
+  // What a re-order may claim (2026-10-02): only a list line that still
+  // needs ordering — "need" and on no PO. A repeat purchase of parts the
+  // list already has keeps the list and project link (sourceListId,
+  // sourceMaterialListIds) but claims no line, so no list line is ever
+  // "on order" twice. Read under the purchasing lock.
+  const listsNow = await require("./material-lists").list({ includeArchived: true, includeDeleted: true });
+  assertSourcesPresent(source, listsNow);   // a PO whose list is gone: locked until reviewed
+  // …and, once reviewed, still never re-ordered: the new order would be for
+  // a job that no longer exists. Receiving and cancelling it stay allowed —
+  // they record what happened; a re-order makes a new purchase.
+  const gone = missingSources(source, listsNow, { includeReviewed: true });
+  if (gone.length) {
+    throw new PurchasingError(`Can't re-order ${source.id}: it was for ${gone.map((m) => `${m.sku} — ${m.what}`).join("; ")}, which no longer exist${gone.length === 1 ? "s" : ""}, so a re-order would belong to no job. ` +
+      "Make a new purchase order from the job's current material list instead.", { status: 409, code: "source_missing" });
+  }
+  const lineNow = (listId, lineId) => {
+    const l = listsNow.find((x) => x.id === listId);
+    return l ? (l.lineItems || []).find((x) => x.id === lineId) || null : null;
+  };
+  // A cancelled PO is re-ordered for what didn't arrive; anything else is
+  // a repeat of the whole order.
+  const outstanding = (line) => source.status === "cancelled"
+    ? Math.max(0, (Number(line.qty) || 0) - (Number(line.receivedQty) || 0))
+    : Number(line.qty) || 0;
   // Snapshot line items, refreshing prices from the catalog at re-order
   // time. If a SKU has been removed from the catalog (rare), keep the
   // original price so the new draft stays usable.
+  // A line it claims is also capped at what that list line still needs —
+  // so re-ordering twice, or after a Generate already drafted the rest,
+  // proposes nothing more (stillToOrder, drafts counted).
+  const allPos = await readAll();
+  const capFor = (line, target) => stillToOrder(target, commitmentsByListLine(allPos, line.sourceListId));
   const lineItems = source.lineItems.map((line) => {
+    const target = line.sourceListId && line.sourceLineId ? lineNow(line.sourceListId, line.sourceLineId) : null;
+    const claims = Boolean(target && target.status === "need" && !target.poId);
+    return { line, target, claims, qty: claims ? Math.min(outstanding(line), capFor(line, target)) : outstanding(line) };
+  }).filter((x) => x.qty > 0).map(({ line, claims, qty }) => {
     const part = parts && parts[line.sku];
     const unitCents = part && Number.isFinite(Number(part.priceCents))
       ? Math.max(0, Math.floor(Number(part.priceCents)))
       : line.unitPriceCents;
     return {
       sku: line.sku,
-      qty: line.qty,
-      // No source list back-ref on a re-order — it's a fresh procurement
-      // event independent of any material list.
-      sourceListId: null,
-      sourceLineId: null,
+      qty,
+      // The same list line it was ordered for, when that line still needs
+      // ordering — so sending, receiving and cancelling the re-order move
+      // it, and the job counts it.
+      sourceListId: line.sourceListId || null,
+      sourceLineId: claims ? line.sourceLineId : null,
       // Carry the description forward (source line's stored snapshot wins;
       // else re-resolve from the catalog at re-order time, like the price).
       description: resolveLineDescription(line, parts),
       unitPriceCents: unitCents,
-      lineTotalCents: unitCents * line.qty,
+      lineTotalCents: unitCents * qty,
       notes: line.notes || ""
     };
   });
+  if (!lineItems.length) throw new PurchasingError(`Nothing to re-order: everything on ${source.id} arrived.`, { status: 409, code: "nothing_to_reorder" });
   const newPo = await create({
     supplierId: source.supplierId,
     supplierName: source.supplierName,
@@ -605,19 +771,15 @@ async function reorderFrom(sourcePoId, parts) {
     supplierContactName: source.supplierContactName,
     supplierPhone: source.supplierPhone,
     supplierAddress: source.supplierAddress,
-    sourceMaterialListIds: [],
+    sourceMaterialListIds: Array.isArray(source.sourceMaterialListIds) ? source.sourceMaterialListIds.slice() : [],
     lineItems,
     notes: source.notes ? `Re-order of ${source.id}. ${source.notes}` : `Re-order of ${source.id}.`,
     internalNotes: source.internalNotes || ""
+  }, {
+    // The back-reference is written WITH the new PO — one write, so a
+    // re-order can't exist without the record of what it re-orders.
+    extraHistory: [{ action: "reorder_of", note: source.id }]
   });
-  // Add a history entry on the NEW PO that points back at the source.
-  const all = await readAll();
-  const idx = all.findIndex((r) => r.id === newPo.id);
-  if (idx !== -1) {
-    appendHistory(all[idx], { action: "reorder_of", note: source.id });
-    await writeAll(all);
-    return all[idx];
-  }
   return newPo;
 }
 
@@ -630,6 +792,7 @@ async function markResent(id, { toEmail, toName, subject } = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const rec = records[idx];
+  await assertActionable(rec);
   if (rec.status !== "sent" && rec.status !== "partially_received") {
     throw new Error(`Can only re-send a sent or partially-received PO. This one is "${rec.status}".`);
   }
@@ -650,6 +813,7 @@ async function softDelete(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Purchase order not found");
+  assertNotHeld(poRefs(records[idx]));
   if (records[idx].deletedAt) throw new Error("Already in Trash");
   records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
   await writeAll(records);
@@ -660,6 +824,7 @@ async function restore(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) throw new Error("Purchase order not found");
+  assertNotHeld(poRefs(records[idx]));
   if (!records[idx].deletedAt) throw new Error("Not in Trash");
   records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
   await writeAll(records);
@@ -674,8 +839,10 @@ async function listDeleted() {
 async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   const records = await readAll();
   const cutoff = Date.now() - olderThanMs;
+  assertNotHeld({ purchaseOrders: [], materialLists: [] });   // a hold on everything stops the purge
   const kept = records.filter((r) => {
     if (!r.deletedAt) return true;
+    if (holdFor(poRefs(r))) return true;                         // never purge a held record
     const t = Date.parse(r.deletedAt);
     return !Number.isFinite(t) || t > cutoff;
   });
@@ -684,22 +851,33 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// Every write verb queues behind the shared purchasing lock, so none can
+// land between the two halves of a send / receive / cancel commit.
+const locked = (fn) => (...args) => withPurchasingLock(() => fn(...args));
+
 module.exports = {
   STATUSES,
+  FILE,
   list,
   get,
-  create,
-  update,
-  markSent,
-  markReceived,
-  markCancelled,
-  markResent,
-  reorderFrom,
-  remove,
+  create: locked(create),
+  update: locked(update),
+  markResent: locked(markResent),
+  reorderFrom: locked(reorderFrom),
+  remove: locked(remove),
   planDraftsFromMaterialList,
+  receivedByListLine,
+  commitmentsByListLine,
+  stillToOrder,
   deriveReceiveStatus,
-  softDelete,
-  restore,
+  softDelete: locked(softDelete),
+  restore: locked(restore),
   listDeleted,
-  purgeDeleted
+  purgeDeleted: locked(purgeDeleted),
+  // purchasing.js only — it holds the lock and commits the result.
+  poRefs,
+  missingSources,
+  assertSourcesPresent,
+  assertActionable,
+  _internal: { readRaw, serialize, hydrate, assertSendable, uncertainSendError, appendHistory, nowIso, transitionSent, transitionReceived, transitionCancelled }
 };
