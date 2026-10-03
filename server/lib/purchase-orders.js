@@ -154,12 +154,13 @@ function fromClient(line) {
 }
 
 // The lines of this PO whose material list, or line on it, no longer
-// exists (2026-10-03) and that the office hasn't yet reviewed. `lists` —
-// every material list, archived and trashed included.
-function missingSources(po, lists) {
+// exists (2026-10-03) and that the office hasn't yet reviewed — or, with
+// includeReviewed, every such line. `lists` — every material list,
+// archived and trashed included.
+function missingSources(po, lists, { includeReviewed = false } = {}) {
   const out = [];
   for (const l of (po && po.lineItems) || []) {
-    if (!l || !l.sourceListId || !l.sourceLineId || l.sourceMissingAcknowledged) continue;
+    if (!l || !l.sourceListId || !l.sourceLineId || (l.sourceMissingAcknowledged && !includeReviewed)) continue;
     const list = (lists || []).find((x) => x && x.id === l.sourceListId);
     if (!list) out.push({ sku: l.sku, listId: l.sourceListId, lineId: l.sourceLineId, what: `list ${l.sourceListId}` });
     else if (!(list.lineItems || []).some((x) => x && x.id === l.sourceLineId)) {
@@ -712,6 +713,14 @@ async function reorderFrom(sourcePoId, parts) {
   // "on order" twice. Read under the purchasing lock.
   const listsNow = await require("./material-lists").list({ includeArchived: true, includeDeleted: true });
   assertSourcesPresent(source, listsNow);   // a PO whose list is gone: locked until reviewed
+  // …and, once reviewed, still never re-ordered: the new order would be for
+  // a job that no longer exists. Receiving and cancelling it stay allowed —
+  // they record what happened; a re-order makes a new purchase.
+  const gone = missingSources(source, listsNow, { includeReviewed: true });
+  if (gone.length) {
+    throw new PurchasingError(`Can't re-order ${source.id}: it was for ${gone.map((m) => `${m.sku} — ${m.what}`).join("; ")}, which no longer exist${gone.length === 1 ? "s" : ""}, so a re-order would belong to no job. ` +
+      "Make a new purchase order from the job's current material list instead.", { status: 409, code: "source_missing" });
+  }
   const lineNow = (listId, lineId) => {
     const l = listsNow.find((x) => x.id === listId);
     return l ? (l.lineItems || []).find((x) => x.id === lineId) || null : null;

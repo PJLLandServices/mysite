@@ -38,7 +38,7 @@
 //      draft is a mistake to fix (review, can't be sent); a sent, partly
 //      received, received or cancelled PO is purchasing history (hold,
 //      needs a person, counted in the totals); once the office reviews it,
-//      a note.
+//      still reported and counted ("reviewed"), only no longer held.
 //
 // Run: node scripts/test-purchasing-matrix.mjs [--print]   (--print: the
 // matrix as a table)
@@ -401,7 +401,12 @@ for (const secondPrice of [PRICE, 600]) {
       if (status !== "draft") {
         const ack = clone(st); ack.purchaseOrders[0].lineItems[0].sourceMissingAcknowledged = { at: "2026-10-03T12:00:00Z", by: "patrick", note: "Old job, deleted by mistake; parts used" };
         const ra = auditPurchasingLines(ack);
-        ok(ra.findings.length === 0 && ra.notes.length === 1 && ra.notes[0].kind === "source_missing_acknowledged", `missing ${gone} × PO ${label}: once reviewed, a note only`);
+        const rf = ra.findings.find((x) => x.poId === "P");
+        ok(rf && rf.kind === "source_missing_reviewed" && rf.severity === "reviewed" && !rf.repairable && rf.reviewed.note === "Old job, deleted by mistake; parts used",
+          `missing ${gone} × PO ${label}: once reviewed, still reported — reviewed, never "agrees" (${S(rf && [rf.kind, rf.severity])})`);
+        ok(ra.totals.lines === 1 && ra.totals.reviewed === 1 && ra.totals.hold === 0 && ra.totals.needsAPerson === 0,
+          `missing ${gone} × PO ${label}: once reviewed, still counted, just not held (${S(ra.totals)})`);
+        ok(/RECORDS DISAGREE — REVIEWED, NOT HELD/.test(formatPurchasingAudit(ra)), `missing ${gone} × PO ${label}: the report says the records still disagree`);
       }
       // A draft with a missing source can't be sent.
       if (status === "draft") {

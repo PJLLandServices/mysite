@@ -8013,11 +8013,18 @@ cancellation and re-order after a quoted purchase.
   PO's state. Draft: `draft_source_missing` (review) — a mistake, and the send gate refuses it.
   Sent, partly received, received or cancelled: `source_missing` (hold, needs a person, in the
   totals) — purchasing history. That PO is held (boot check, and at runtime before any send,
-  receive, cancel, re-send or re-order: 423 `recovery_required`); no list is held. Releasing the
-  PO's hold is the office's review: it needs a note, stamps `sourceMissingAcknowledged` on those
-  PO lines and the PO history, and the checker then lists them as reviewed history. A browser
-  can't send that stamp. Releasing a hold on a list or on everything never clears a missing
-  source; that PO gets its own hold.
+  receive, cancel, re-send or re-order: 423 `recovery_required`); no list is held.
+- **The unlock rule.** Every other hold is released only once the records agree. A missing source
+  can never be made to agree by any repair (the line is gone), so its hold is released by the
+  office's review instead — and only when the release says so explicitly
+  (`acknowledgeSourceMissing: true`; a note alone gets 409 `acknowledgement_required`). The review
+  (who, when, note) is stamped on those PO lines and in the PO history; a browser can't send it.
+  **It does not make the records agree:** the checker keeps reporting and counting the line as
+  `source_missing_reviewed` (severity "reviewed", its own total), only no longer held. After the
+  review, and after any restart: receive and cancel work and touch no list (they record what
+  happened); re-send works (a copy of the same document); **re-order is refused** (409
+  `source_missing` — it would be a new purchase for no job). Releasing a hold on a list or on
+  everything never clears a missing source; that PO gets its own hold.
 - **No new orphans.** A material list a non-draft PO (or an interrupted send) points at can't be
   permanently deleted (`DELETE`, bulk purge, timed Trash purge — 409 `purchasing_history`), and its
   lines that such a PO points at can't be removed by a line-replacing save, even once back at
@@ -8026,11 +8033,11 @@ cancellation and re-order after a quoted purchase.
 - **Browser audit** also reads `GET /api/admin/trash/material-lists`, so a list in the Trash is not
   reported missing (three GETs, still read-only).
 
-`scripts/test-po-source-missing.mjs` (50 checks through the real routes; 32 fail on the previous
-commit) covers line removal and list deletion refused, Trash and purge, project cascade, the draft
+`scripts/test-po-source-missing.mjs` (73 checks through the real routes; 32 fail on the commit
+before the corrections, and 13 of the unlock-rule checks fail on fc15694) covers line removal and list deletion refused, Trash and purge, project cascade, the draft
 send refusal, the locked sent PO (receive, cancel, re-send, re-order; no email; nothing changed),
-the boot hold, the review on release, the forged review dropped, and release of a hold on
-everything. The matrix gained the open/completed, mixed-price and missing-source cases (115 of its
+the boot hold, the review on release (note plus explicit confirmation), each action after it
+and after a restart, the forged review dropped, and release of a hold on everything. The matrix gained the open/completed, mixed-price and missing-source cases (115 of its
 checks fail on the previous classifier).
 
 All seven suites run in `build:check`.

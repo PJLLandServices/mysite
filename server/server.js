@@ -20408,7 +20408,8 @@ async function handleApi(req, res, pathname) {
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
       const payload = await parseRequestBody(req).catch(() => ({}));
       const by = await actorLabel(req, session.uid || "admin");
-      const released = await purchasing.releaseRecoveryHold({ scope: payload.scope, id: payload.id || null, note: payload.note, by });
+      const released = await purchasing.releaseRecoveryHold({ scope: payload.scope, id: payload.id || null, note: payload.note, by,
+        acknowledgeSourceMissing: payload.acknowledgeSourceMissing === true });
       return sendJson(res, 200, { ok: true, released });
     } catch (err) {
       if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
@@ -20738,7 +20739,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
     } catch (err) {
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
-      if (err && err.code === "nothing_to_reorder") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
+      if (err && (err.code === "nothing_to_reorder" || err.code === "source_missing")) return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }

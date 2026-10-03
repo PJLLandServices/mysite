@@ -38,10 +38,16 @@
 // draft it is a mistake to fix before sending ("draft_source_missing").
 //
 // Severity:
-//   "hold"   — the records contradict each other: which one is right can't
-//              be proven. The boot check holds them (purchasing-store).
-//   "review" — the records agree on state, but the quantities or prices
-//              don't add up. A person should look; nothing is held.
+//   "hold"     — the records contradict each other: which one is right
+//                can't be proven. The boot check holds them
+//                (purchasing-store).
+//   "review"   — the records agree on state, but the quantities or prices
+//                don't add up. A person should look; nothing is held.
+//   "reviewed" — a missing source the office has reviewed (released its
+//                hold with a note). Still a disagreement, still reported
+//                and counted; no longer held. Nothing can repair it — the
+//                list line is gone — so the review is the only way out of
+//                the hold, and it never turns into "agrees".
 // Repairable by rule ONLY when the repair changes nothing but the list
 // line's status / poId / frozenPriceCents, every PO record already holds
 // exactly what arrived and at what price (none is touched), the list's
@@ -60,7 +66,7 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
   const listById = new Map();
   for (const l of materialLists) if (l && l.id) listById.set(l.id, l);
   const findings = [];
-  const notes = [];
+  const notes = [];   // kept for the result's shape; every case is now a finding
   const PERSON = "Needs a person — the records can't show which is right.";
 
   // Every PO line, by the list line it claims; and every claim whose list
@@ -91,12 +97,20 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
           line: null, quantities: { needed: null, received: claim.receivedQty, onOrder: poStatus === "sent" || poStatus === "partially_received" ? claim.outstandingQty : 0, remaining: null },
           claims: [{ poId: po.id, poStatus, qty: claim.qty, receivedQty: claim.receivedQty, outstandingQty: claim.outstandingQty, unitPriceCents: claim.unitPriceCents }]
         };
-        if (pl.sourceMissingAcknowledged) {
-          notes.push({ kind: "source_missing_acknowledged", poId: po.id, poStatus, listId: pl.sourceListId, lineId: pl.sourceLineId, sku: claim.sku,
-            by: pl.sourceMissingAcknowledged.by || null, at: pl.sourceMissingAcknowledged.at || null });
-        } else if (poStatus === "draft") {
+        if (poStatus === "draft") {
           findings.push({ ...base, kind: "draft_source_missing",
             repairText: `Draft ${po.id} is for ${what}, which no longer exists. Nothing was bought on it; it can't be sent until the line is removed from the draft or the draft is deleted.` });
+        } else if (pl.sourceMissingAcknowledged) {
+          // The office's review does NOT make the records agree — the list
+          // line is still gone and this purchase is still on no job. It is
+          // reported, and counted, as reviewed-but-unresolved; it is only
+          // no longer held.
+          const a = pl.sourceMissingAcknowledged;
+          findings.push({ ...base, kind: "source_missing_reviewed", severity: "reviewed",
+            reviewed: { by: a.by || null, at: a.at || null, note: a.note || "" },
+            repairText: `${po.id} (${poStatus}) — ordered ${claim.qty}, received ${claim.receivedQty}, at ${claim.unitPriceCents}¢ — is for ${what}, which no longer exists. ` +
+              `Reviewed by ${a.by || "the office"}${a.at ? ` on ${a.at}` : ""}: "${a.note || ""}". Still not on any job; the review does not make the records agree. ` +
+              "It can be received or cancelled to record what happened, but not re-ordered." });
         } else {
           findings.push({ ...base, kind: "source_missing",
             repairText: `${po.id} (${poStatus}) — ordered ${claim.qty}, received ${claim.receivedQty}, at ${claim.unitPriceCents}¢ — is for ${what}, which no longer exists, so this purchase can't be placed on any job. The PO is locked until the office reviews it. ${PERSON}` });
@@ -242,6 +256,7 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
 
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
   const held = findings.filter((f) => f.severity === "hold");
+  const reviewed = findings.filter((f) => f.severity === "reviewed");
   return {
     findings,
     notes,
@@ -251,9 +266,10 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
       purchaseOrders: uniq(findings.flatMap((f) => String(f.poId || "").split(", "))).length,
       lines: findings.length,
       hold: held.length,
-      review: findings.length - held.length,
+      review: findings.length - held.length - reviewed.length,
+      reviewed: reviewed.length,
       repairable: findings.filter((f) => f.repairable).length,
-      needsAPerson: findings.filter((f) => !f.repairable).length
+      needsAPerson: findings.filter((f) => !f.repairable && f.severity !== "reviewed").length
     }
   };
 }
@@ -266,9 +282,10 @@ function formatPurchasingAudit(result) {
   out.push(`Affected: ${t.projects} project(s), ${t.materialLists} material list(s), ${t.purchaseOrders} purchase order(s), ${t.lines} line(s)`);
   out.push(`  records disagree (would be held): ${t.hold}   quantity to review: ${t.review}`);
   out.push(`  repairable by rule: ${t.repairable}   needs a person: ${t.needsAPerson}`);
+  out.push(`  reviewed by the office, still unresolved (list gone, on no job): ${t.reviewed}`);
   for (const f of result.findings) {
     out.push("");
-    out.push(`[${f.kind}] ${f.severity === "hold" ? "RECORDS DISAGREE" : "REVIEW"} · ${f.repairable ? "repairable by rule" : "needs a person"}`);
+    out.push(`[${f.kind}] ${f.severity === "hold" ? "RECORDS DISAGREE" : f.severity === "reviewed" ? "RECORDS DISAGREE — REVIEWED, NOT HELD" : "REVIEW"} · ${f.repairable ? "repairable by rule" : f.severity === "reviewed" ? "no repair possible" : "needs a person"}`);
     out.push(`  project ${f.projectId || "(none)"} · list ${f.listId}${f.listName ? ` "${f.listName}"` : ""} · line ${f.lineId} (${f.sku})`);
     if (f.line) {
       out.push(`  list line now: ${f.line.status} ×${f.line.qty}${f.line.poId ? ` on ${f.line.poId}` : ""}${f.line.frozenPriceCents != null ? `, price locked ${f.line.frozenPriceCents}¢` : ""}`);
@@ -280,13 +297,6 @@ function formatPurchasingAudit(result) {
       out.push(`  ${c.poId} (${c.poStatus}): ordered ${c.qty}, received ${c.receivedQty}, outstanding ${c.outstandingQty}, at ${c.unitPriceCents}¢ each`);
     }
     out.push(`  ${f.repairable ? "repair" : "action"}: ${f.repairText}${f.repair ? `  ${JSON.stringify(f.repair)}` : ""}`);
-  }
-  if (result.notes.length) {
-    out.push("");
-    out.push(`For information (${result.notes.length}):`);
-    for (const n of result.notes) {
-      out.push(`  ${n.poId} (${n.poStatus}) is for list ${n.listId} line ${n.lineId} (${n.sku}), which no longer exists — reviewed and acknowledged by ${n.by || "the office"}${n.at ? ` on ${n.at}` : ""}`);
-    }
   }
   return out.join("\n");
 }

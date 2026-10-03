@@ -359,6 +359,7 @@ function checkConsistency() {
     at,
     disagreements: r.totals.hold,
     toReview: r.totals.review,
+    reviewedUnresolved: r.totals.reviewed,
     findings: r.findings.slice(0, 50).map((f) => ({ kind: f.kind, severity: f.severity, projectId: f.projectId, listId: f.listId, lineId: f.lineId, sku: f.sku, poId: f.poId, poStatus: f.poStatus }))
   };
   // Fail closed on contradictions only ("hold"): each list and every PO

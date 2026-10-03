@@ -74,7 +74,7 @@ ok(r.findings.length === Object.keys(expect).length, `exactly the disagreeing li
 ok(by["nope"] && by["nope"].severity === "hold" && !by["nope"].repairable && by["nope"].listMissing && by["nope"].poId === "PO-GONE",
   "a sent PO whose list is gone is a contradiction for a person — held, not a footnote (2026-10-03)");
 ok(r.notes.length === 0, "nothing is left as a mere note");
-ok(S(r.totals) === S({ projects: 1, materialLists: 3, purchaseOrders: 7, lines: 10, hold: 10, review: 0, repairable: 4, needsAPerson: 6 }), `totals (${S(r.totals)})`);
+ok(S(r.totals) === S({ projects: 1, materialLists: 3, purchaseOrders: 7, lines: 10, hold: 10, review: 0, reviewed: 0, repairable: 4, needsAPerson: 6 }), `totals (${S(r.totals)})`);
 const canc = by["canc-stuck"];
 ok(canc && S(canc.quantities) === S({ needed: 4, received: 1, onOrder: 0, remaining: 3 }) && canc.claims[0].unitPriceCents === 250,
   `a cancelled, part-delivered line shows what arrived, what remains and the price (${S(canc && canc.quantities)})`);

@@ -330,13 +330,20 @@ async function cancelPurchaseOrder(poId, { reason = "" } = {}) {
 // held PO or list disagreeing — that is repaired first, by a person.
 //
 // A PO held because its list or list line is gone (source_missing,
-// 2026-10-03) has nothing left to repair: releasing that hold IS the
-// review. Its note is stamped on each such PO line
-// (sourceMissingAcknowledged: who, when, what they checked), in the same
-// step, so the checker reports it as reviewed history from then on. A
-// hold on a list, or on everything, never clears a missing source: that
-// PO keeps (or is given) its own hold.
-async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" } = {}) {
+// 2026-10-03) is the one case with nothing left to repair — the line can't
+// be brought back by any rule. So that hold is released by the office's
+// REVIEW, and only when asked for in so many words
+// (acknowledgeSourceMissing: true): a plain release is refused
+// (acknowledgement_required). The review — who, when, the note — is
+// stamped on each such PO line (sourceMissingAcknowledged) and in the PO's
+// history. It does NOT make the records agree: the checker goes on
+// reporting and counting the line (source_missing_reviewed, "reviewed"),
+// just no longer holding it. After it, and after any restart, the PO can
+// be received or cancelled (recording what physically happened) and
+// re-sent (a copy of the same document); it can never be re-ordered
+// (purchase-orders.reorderFrom). A hold on a list, or on everything, never
+// clears a missing source: that PO keeps (or is given) its own hold.
+async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin", acknowledgeSourceMissing = false } = {}) {
   const { releaseHold, readHolds } = require("./purchasing-store");
   const { auditPurchasingLines } = require("./purchasing-audit");
   return withPurchasingLock(async () => {
@@ -356,6 +363,13 @@ async function releaseRecoveryHold({ scope, id = null, note = "", by = "admin" }
     if (others.length) addHolds(others.map((f) => ({ scope: "purchase_order", id: f.poId, source: "source_missing",
       reason: `${f.poId} (${f.poStatus}) is for ${f.sku} — ${f.listMissing ? `list ${f.listId}` : `line ${f.lineId} of list ${f.listId}`}, which no longer exists` })));
     if (mine.length && match && String(note || "").trim() && !stillDisagrees(match)) {
+      if (!acknowledgeSourceMissing) {
+        throw new PurchasingError(
+          `${id} is held because it was for ${mine.map((f) => `${f.sku} — ${f.listMissing ? `list ${f.listId}` : `line ${f.lineId} of list ${f.listId}`}`).join("; ")}, which no longer exist${mine.length === 1 ? "s" : ""}. ` +
+          "Releasing it records your review; it does not make the records agree, the purchase stays on no job, and it can never be re-ordered. " +
+          "It can then be received, cancelled or re-sent. Confirm that to release it.",
+          { status: 409, code: "acknowledgement_required" });
+      }
       const idx = posRaw.findIndex((p) => p && p.id === id);
       const rec = clone(posRaw[idx]);
       const ack = { at: PO.nowIso(), by, note: String(note).trim().slice(0, 500) };

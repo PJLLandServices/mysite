@@ -19,15 +19,23 @@
 //      guards) is purchasing history: receive, cancel, re-send and re-order
 //      are all refused, the PO is held for review, nothing changes, no
 //      email; the boot check holds the PO alone (there is no list to hold)
-//   F  the office reviews it: releasing the hold needs a note, stamps that
-//      review on the PO's lines, and the PO works again; the checker shows
-//      it as reviewed history, not a problem
+//   F  the office reviews it: releasing the hold needs a note AND an
+//      explicit confirmation that the records will still disagree; it
+//      stamps the review on the PO's lines. The checker goes on reporting
+//      and counting it (reviewed, unresolved — never "agrees"). After it:
+//      re-send works, re-order is refused, receive and cancel work and
+//      touch no list
+//   I  after a restart: a reviewed PO isn't re-held, is still reported,
+//      and the same rules apply; an unreviewed one is still locked
 //   G  a browser can't forge that review on a PO line
 //   H  releasing a hold on EVERYTHING doesn't clear a missing source: that
 //      PO gets, and keeps, its own hold
 //
 // Run: npm run test:po-source-missing
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { bootServer } from "./e2e/lib/journey.mjs";
 
 let passed = 0, failed = 0;
@@ -35,11 +43,11 @@ const ok = (c, label) => { if (c) passed += 1; else { failed += 1; console.error
 const S = (v) => JSON.stringify(v);
 const SKU = "61146";
 
-const srv = await bootServer({ port: 4973 });
+let srv = await bootServer({ port: 4973 });
 try {
   await srv.login();
   const call = (m, p, b) => srv.api(m, p, b);
-  const { auditPurchasingLines } = srv.lib("purchasing-audit.js");
+  const { auditPurchasingLines, formatPurchasingAudit } = srv.lib("purchasing-audit.js");
   const materialLists = srv.lib("material-lists.js");
   const purchaseOrders = srv.lib("purchase-orders.js");
   const projects = srv.lib("projects.js");
@@ -62,7 +70,7 @@ try {
   const section = async (name, fn) => {
     try { await fn(); } catch (err) { ok(false, `${name}: threw ${String(err && err.message || err).slice(0, 160)}`); }
   };
-  let LA, a1, a2, P3, P4, LD;
+  let LA, a1, a2, P3, P4, P5, LD;
 
   // ── A. 6 of 10 arrive on one order; the line is back at "need".
   await section("A", async () => {
@@ -161,21 +169,58 @@ try {
 
   });
 
-  // ── F. The office reviews it.
+  // ── F. The office reviews it — and what each action does after.
   await section("F", async () => {
-  const noNote = await call("POST", "/api/purchasing/recovery-holds/release", { scope: "purchase_order", id: P3.id });
+  const release = (id, extra = {}) => call("POST", "/api/purchasing/recovery-holds/release", { scope: "purchase_order", id, ...extra });
+  const noNote = await release(P3.id);
   ok(noNote.status === 400 && holds().some((h) => h.id === P3.id), `F: releasing without saying what was checked is refused (${noNote.status})`);
-  ok(!poNow(P3.id).lineItems[0].sourceMissingAcknowledged, "F: …and nothing is stamped");
-  const rel = await call("POST", "/api/purchasing/recovery-holds/release", { scope: "purchase_order", id: P3.id, note: "Side job list deleted in error; parts went to the side yard" });
-  ok(rel.status === 200 && !holds().some((h) => h.id === P3.id), `F: released with a note (${rel.status} ${S(rel.body.errors || "")})`);
+  const noAck = await release(P3.id, { note: "Side job list deleted in error; parts went to the side yard" });
+  ok(noAck.status === 409 && noAck.body.code === "acknowledgement_required" && /does not make the records agree/.test(noAck.body.errors[0]),
+    `F: a note alone is refused — releasing must confirm the records will still disagree (${noAck.status} ${noAck.body.code})`);
+  ok(holds().some((h) => h.id === P3.id) && !poNow(P3.id).lineItems[0].sourceMissingAcknowledged, "F: …the hold stays and nothing is stamped");
+  const rel = await release(P3.id, { note: "Side job list deleted in error; parts went to the side yard", acknowledgeSourceMissing: true });
+  ok(rel.status === 200 && !holds().some((h) => h.id === P3.id), `F: released with a note and the confirmation (${rel.status} ${S(rel.body.errors || "")})`);
   const ack = poNow(P3.id).lineItems[0].sourceMissingAcknowledged;
   ok(ack && /side yard/.test(ack.note) && ack.by && ack.at, `F: the review is stamped on the PO line (${S(ack)})`);
   ok((poNow(P3.id).history || []).some((h) => h.action === "source_missing_reviewed"), "F: and in the PO's history");
-  const af = audit();
-  ok(!af.findings.some((f) => f.poId === P3.id) && af.notes.some((n) => n.poId === P3.id && n.kind === "source_missing_acknowledged"), "F: the checker now shows it as reviewed history");
-  const recv = await call("POST", `/api/purchase-orders/${P3.id}/receive`, {});
-  ok(recv.status === 200 && poNow(P3.id).status === "received", `F: the order can be received again (${recv.status})`);
+  // The review never turns into "agrees".
+  const reviewed = () => audit().findings.find((f) => f.poId === P3.id);
+  let f = reviewed();
+  ok(f && f.kind === "source_missing_reviewed" && f.severity === "reviewed" && !f.repairable && f.listMissing,
+    `F: the checker still reports it — reviewed, not agreeing (${f && f.kind} / ${f && f.severity})`);
+  ok(audit().totals.reviewed >= 1 && audit().totals.lines >= 1, `F: …and still counts it (${S(audit().totals)})`);
+  ok(/RECORDS DISAGREE — REVIEWED, NOT HELD/.test(formatPurchasingAudit(audit())) && /does not make the records agree/.test(formatPurchasingAudit(audit())),
+    "F: the report says the records still disagree");
+  // What each action does now.
+  const e0 = emails();
+  const resend = await call("POST", `/api/purchase-orders/${P3.id}/resend`, {});
+  ok(resend.status === 200 && emails() === e0 + 1, `F: re-send works — one copy of the same document (${resend.status})`);
+  const drafts0 = srv.data("purchase-orders").filter((p) => p.status === "draft").length;
+  const reorder = await call("POST", `/api/purchase-orders/${P3.id}/reorder`, {});
+  ok(reorder.status === 409 && reorder.body.code === "source_missing" && srv.data("purchase-orders").filter((p) => p.status === "draft").length === drafts0,
+    `F: re-order is refused — it would be a new purchase for no job — and no draft is made (${reorder.status} ${reorder.body.code})`);
+  const lineId = poNow(P3.id).lineItems[0].id;
+  const part = await call("POST", `/api/purchase-orders/${P3.id}/receive`, { lineUpdates: { [lineId]: 2 } });
+  ok(part.status === 200 && poNow(P3.id).status === "partially_received" && poNow(P3.id).lineItems[0].receivedQty === 2,
+    `F: receiving works — 2 of 4 recorded on the PO (${part.status} ${poNow(P3.id).status})`);
+  ok((part.body.notMoved || []).some((n) => /not found|not on the list/.test(n.reason)) || !(part.body.moved || []).length,
+    `F: …and no list line is touched — there is none (${S(part.body.notMoved || part.body.moved)})`);
+  f = reviewed();
+  ok(f && f.kind === "source_missing_reviewed" && f.quantities.received === 2, `F: the checker reports the new receipt, still unresolved (${f && f.quantities.received})`);
   ok(poNow(P3.id).lineItems[0].sourceMissingAcknowledged, "F: the review survives the next save");
+
+  // A second order for a deleted list, to show cancel.
+  const LE = await materialLists.create({ name: "Shed", lineItems: [{ sku: SKU, qty: 3 }] });
+  P5 = await draftFor(LE.id, (await materialLists.get(LE.id)).lineItems[0].id, 3);
+  ok((await send(P5.id)).status === 200, "setup: an order for the shed list is sent");
+  srv.writeData("material-lists", srv.data("material-lists").filter((l) => l.id !== LE.id));
+  ok((await call("POST", `/api/purchase-orders/${P5.id}/cancel`, {})).status === 423, "F: before review, cancelling it is refused (locked)");
+  ok((await release(P5.id, { note: "Shed job dropped", acknowledgeSourceMissing: true })).status === 200, "F: the office reviews it");
+  const cancel = await call("POST", `/api/purchase-orders/${P5.id}/cancel`, { reason: "Job dropped" });
+  ok(cancel.status === 200 && poNow(P5.id).status === "cancelled", `F: cancelling works after review (${cancel.status})`);
+  const f5 = audit().findings.find((x) => x.poId === P5.id);
+  ok(f5 && f5.kind === "source_missing_reviewed" && f5.poStatus === "cancelled", `F: a cancelled orphan is still reported, reviewed (${f5 && f5.kind})`);
+  ok((await call("POST", `/api/purchase-orders/${P5.id}/reorder`, {})).status === 409, "F: and it can't be re-ordered either");
 
   });
 
@@ -200,6 +245,35 @@ try {
   ok(holds().some((h) => h.scope === "purchase_order" && h.id === P4.id && h.source === "source_missing"), `H: …and the order whose list is gone now has its own hold (${S(holds())})`);
   ok(!poNow(P4.id).lineItems[0].sourceMissingAcknowledged, "H: …and is not marked reviewed");
   ok((await call("POST", `/api/purchase-orders/${P4.id}/receive`, {})).status === 423, "H: it stays locked");
+  });
+
+  // ── I. After a restart: the boot check doesn't re-hold a reviewed PO,
+  // doesn't count it as agreeing, and the same rules apply.
+  await section("I", async () => {
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), "src-missing-restart-"));
+  fs.cpSync(srv.DATA, copy, { recursive: true });
+  await srv.stop();
+  srv = await bootServer({ port: 4973, seedData: copy });
+  fs.rmSync(copy, { recursive: true, force: true });
+  await srv.login();
+  ok(!holds().some((h) => h.id === P3.id || h.id === P5.id), `I: after the restart, the reviewed orders are not re-held (${S(holds().map((h) => h.id))})`);
+  ok(holds().some((h) => h.id === P4.id), "I: the unreviewed one still is");
+  const f3 = audit().findings.find((x) => x.poId === P3.id);
+  ok(f3 && f3.kind === "source_missing_reviewed", `I: the checker still reports the reviewed one as unresolved (${f3 && f3.kind})`);
+  const view = await call("GET", `/api/purchase-orders/${P3.id}`);
+  ok(view.status === 200 && !view.body.purchaseOrder.recoveryHold, "I: its page shows no lock");
+  const r1 = await call("POST", `/api/purchase-orders/${P3.id}/resend`, {});
+  ok(r1.status === 200, `I: re-send works (${r1.status})`);
+  const r2 = await call("POST", `/api/purchase-orders/${P3.id}/reorder`, {});
+  ok(r2.status === 409 && r2.body.code === "source_missing", `I: re-order is still refused (${r2.status} ${r2.body.code})`);
+  const r3 = await call("POST", `/api/purchase-orders/${P3.id}/receive`, {});
+  ok(r3.status === 200 && poNow(P3.id).status === "received" && poNow(P3.id).lineItems[0].receivedQty === 4, `I: receiving the rest works (${r3.status})`);
+  const r4 = await call("POST", `/api/purchase-orders/${P5.id}/cancel`, {});
+  ok(r4.status === 200 && poNow(P5.id).status === "cancelled", `I: repeating the cancel changes nothing (${r4.status})`);
+  ok((await call("POST", `/api/purchase-orders/${P4.id}/receive`, {})).status === 423, "I: the unreviewed order is still locked");
+  const end = audit();
+  ok(end.findings.filter((x) => x.kind === "source_missing_reviewed").length === 2 && end.totals.reviewed === 2,
+    `I: both reviewed orders are still counted as unresolved (${S(end.totals)})`);
   });
 } finally {
   await srv.stop();
