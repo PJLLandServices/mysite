@@ -16742,7 +16742,10 @@ async function handleApi(req, res, pathname) {
       const partsMap = (PARTS && PARTS.parts) || {};
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
+      // 409: the client edited an older version (stale_list) or asked to
+      // change a purchased line (line_items_locked). Nothing was written.
+      const conflict = err && (err.code === "stale_list" || err.code === "line_items_locked");
+      return sendJson(res, conflict ? 409 : 400, { ok: false, code: err && err.code ? err.code : undefined, errors: [err.message || "Couldn't update material list."] });
     }
   }
   if (listMatch && req.method === "DELETE") {
@@ -20498,15 +20501,13 @@ async function handleApi(req, res, pathname) {
         sentPriceByList.get(line.sourceListId).set(line.sourceLineId, Number(line.unitPriceCents) || 0);
       }
       for (const [listId, priceByLineId] of sentPriceByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (priceByLineId.has(l.id) && l.status === "need") {
-            return { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
+        // Through the PO door (lib/material-lists.flipLines): the only
+        // path that may set ordered/poId/frozenPriceCents, and it never
+        // trips the line protection the builder's own saves are held to.
+        await materialLists.flipLines(listId, (l) =>
+          priceByLineId.has(l.id) && l.status === "need"
+            ? { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) }
+            : l);
       }
 
       return sendJson(res, 200, { ok: true, purchaseOrder: sentPo });
@@ -20557,17 +20558,12 @@ async function handleApi(req, res, pathname) {
         flipsByList.get(ptr.listId).push(ptr.lineId);
       }
       for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
-            // Keep frozenPriceCents (carried by the spread): a received line
-            // should show the price actually paid, not drift to live catalog.
-            return { ...l, status: "have", poId: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
+        // Keep frozenPriceCents (carried by the spread): a received line
+        // should show the price actually paid, not drift to live catalog.
+        await materialLists.flipLines(listId, (l) =>
+          sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id
+            ? { ...l, status: "have", poId: null }
+            : l);
       }
       return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo, fullyReceivedLineIds: result.fullyReceivedLineIds });
     } catch (err) {
@@ -20603,17 +20599,12 @@ async function handleApi(req, res, pathname) {
         flipsByList.get(ptr.listId).push(ptr.lineId);
       }
       for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
-            // Back to a live planning line — release the price lock so it
-            // resolves from the current catalog again.
-            return { ...l, status: "need", poId: null, frozenPriceCents: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
+        // Back to a live planning line — release the price lock so it
+        // resolves from the current catalog again.
+        await materialLists.flipLines(listId, (l) =>
+          sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id
+            ? { ...l, status: "need", poId: null, frozenPriceCents: null }
+            : l);
       }
       return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
     } catch (err) {

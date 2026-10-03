@@ -283,33 +283,90 @@ async function create({
 //     still says draft — a status can be stale or set by hand, and the
 //     lines are the actual evidence.
 //
-// NB on frozenPriceCents: hydrateLine() forces it null on a "need"
-// line, so through the store that clause only ever fires alongside a
-// non-need status. It is kept because this function is also the answer
-// for callers holding a record that has NOT been through hydrate().
-function lineItemsLockedBy(list) {
-  const blocking = (list?.lineItems || []).filter(
-    (l) => l.status === "ordered" || l.status === "have" || l.poId || l.frozenPriceCents != null
-  );
-  const status = list?.status;
-  const pastDraft = status && status !== "draft" && status !== "archived";
-  if (!blocking.length && !pastDraft) return null;
-  const blockingSkus = [...new Set(blocking.map((l) => l.sku))];
-  return {
-    why: blocking.length
-      ? `${blocking.length} line(s) are ordered, received, on a purchase order or price-locked (${
-          blockingSkus.slice(0, 5).join(", ")})`
-      : `the list is "${status}", not a draft`,
-    blockingSkus
-  };
+// ---- Line protection (Patrick, 2026-09-27 and 2026-10-03) ------------
+//
+// What makes a line protected is PURCHASING PROVENANCE, never the word
+// "have" on its own: a line is protected when it is on a purchase order
+// (`ordered`), or still carries a `poId` or a frozen purchase price. A
+// line Patrick marked "have" by hand — stock already on the truck — is a
+// planning status and stays fully editable (qty, notes, removal, back to
+// need), and so does every "need" line.
+//
+// A protected line's purchasing-controlled fields are owned by the PO
+// flow (flipLines below): sku, qty, status, poId, frozenPriceCents. The
+// ordinary PATCH may echo them unchanged and may still edit the line's
+// notes; it may not alter them, drop the line, or invent purchasing state
+// on a line that has none. THE rule is this one function; update() asks
+// it for every lineItems write that does not come through the PO door.
+const PURCHASING_FIELDS = ["sku", "qty", "status", "poId", "frozenPriceCents"];
+function isPurchasingProtected(line) {
+  return !!line && (line.status === "ordered" || !!line.poId || line.frozenPriceCents != null);
+}
+function protectedLineViolations(current, patchLines) {
+  const violations = [];
+  const incoming = Array.isArray(patchLines) ? patchLines.map(hydrateLine) : [];
+  const byId = new Map(incoming.map((l) => [l.id, l]));
+  for (const stored of (current?.lineItems || []).map(hydrateLine)) {
+    if (!isPurchasingProtected(stored)) continue;
+    const sent = byId.get(stored.id);
+    if (!sent) { violations.push({ id: stored.id, sku: stored.sku, what: "removed" }); continue; }
+    const changed = PURCHASING_FIELDS.filter((k) => sent[k] !== stored[k]);
+    if (changed.length) violations.push({ id: stored.id, sku: stored.sku, what: `changed ${changed.join(", ")}` });
+    byId.delete(stored.id);
+  }
+  // Everything left is a new line or an unprotected stored line: it may
+  // not carry purchasing state — only the PO flow sets that.
+  for (const sent of byId.values()) {
+    if (isPurchasingProtected(sent)) violations.push({ id: sent.id, sku: sent.sku, what: "purchasing state can only be set by a purchase order" });
+  }
+  return violations;
 }
 
-async function update(id, patch = {}) {
+// The PO door. `fn(line)` returns the line as the PO flow wants it; only
+// the legal transitions are accepted, so even this caller cannot turn a
+// received line back into a planning line by accident:
+//   need    → ordered  (send:    poId set, price frozen)
+//   ordered → have     (receive: poId cleared, frozen price KEPT)
+//   ordered → need     (cancel:  poId cleared, price released)
+// Anything else, or any change to another field, is refused.
+async function flipLines(id, fn) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  const before = (current.lineItems || []).map(hydrateLine);
+  const after = before.map((l) => hydrateLine(fn({ ...l })));
+  for (let i = 0; i < before.length; i++) {
+    const a = before[i], b = after[i];
+    const same = (keys) => keys.every((k) => a[k] === b[k]);
+    if (!same(["id", "sku", "qty", "notes"])) throw Object.assign(new Error(`Purchasing may only change a line's status, PO and frozen price (${a.sku}).`), { code: "purchasing_transition_invalid" });
+    if (a.status === b.status) { if (!same(["poId", "frozenPriceCents"])) throw Object.assign(new Error(`A line's PO and frozen price only change with its status (${a.sku}).`), { code: "purchasing_transition_invalid" }); continue; }
+    const ok =
+      (a.status === "need" && b.status === "ordered" && !!b.poId && b.frozenPriceCents != null) ||
+      (a.status === "ordered" && b.status === "have" && b.poId === null && b.frozenPriceCents === a.frozenPriceCents) ||
+      (a.status === "ordered" && b.status === "need" && b.poId === null && b.frozenPriceCents === null);
+    if (!ok) throw Object.assign(new Error(`Not a purchasing transition: ${a.sku} ${a.status} → ${b.status}.`), { code: "purchasing_transition_invalid" });
+  }
+  if (after.length !== before.length) throw Object.assign(new Error("Purchasing cannot add or remove lines."), { code: "purchasing_transition_invalid" });
+  return update(id, { lineItems: after }, { purchasing: true });
+}
+
+async function update(id, patch = {}, { purchasing = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
+
+  // Stale-write protection: a client that says which version it edited
+  // is refused when the record has moved on (another tab, a PO flip).
+  // Older clients that send nothing are served as before.
+  if (typeof patch.baseUpdatedAt === "string" && patch.baseUpdatedAt && patch.baseUpdatedAt !== current.updatedAt) {
+    throw Object.assign(
+      new Error("This material list changed elsewhere. Your latest change wasn't saved. Reload to continue."),
+      { code: "stale_list", updatedAt: current.updatedAt }
+    );
+  }
 
   const allowedTop = ["name", "customerName", "customerEmail", "address", "notes", "parentType", "parentId"];
   for (const key of allowedTop) {
@@ -334,36 +391,28 @@ async function update(id, patch = {}) {
 
   let lineItemsChanged = false;
   if (Array.isArray(patch.lineItems)) {
-    // WHOLESALE REPLACEMENT IS DESTRUCTIVE, so it is refused once the
-    // list has purchasing history (Patrick, 2026-09-27).
-    //
-    // `next.lineItems = patch.lineItems.map(hydrateLine)` throws away
-    // every line's `status`, `poId` and `frozenPriceCents` — the record
-    // that something was ordered, that a PO points at it, and the price
-    // that locked when that PO was sent. Re-syncing the System Builder
-    // onto a purchased list would silently reopen settled lines and
-    // release frozen prices.
-    //
-    // That was previously prevented only by the BROWSER choosing to
-    // create a new list instead (sitebuilder.html). A convention in one
-    // caller is not a guarantee: any other caller, script or future
-    // route could reach this line. The rule belongs here.
-    //
-    // Two independent tests, because either alone can be wrong:
-    //   * the list's status is past draft, OR
-    //   * ANY existing line carries purchasing state, even if the
-    //     status still says draft — a status can be stale or set by
-    //     hand, and the lines are the actual evidence.
-    const locked = lineItemsLockedBy(current);
-    if (locked) {
-      throw Object.assign(
-        new Error(
-          `Can't replace the lines on ${current.id}: ${locked.why}. ` +
-          `Replacing them would drop their purchase-order links and frozen prices. ` +
-          `Copy this list or start a new one instead.`
-        ),
-        { code: "line_items_locked", blockingSkus: locked.blockingSkus }
-      );
+    // A lineItems write is the whole list, so it could silently drop a
+    // line's `status`, `poId` and `frozenPriceCents` — the record that
+    // something was ordered and the price that locked when the PO was
+    // sent (the System Builder re-syncing its BOM onto a purchased list
+    // was the original hole, 2026-09-27). The rule is line by line
+    // (protectedLineViolations): purchased lines must come back exactly
+    // as stored, everything else is the caller's to edit. Only the PO
+    // door (flipLines) may move a line's purchasing state. A refused
+    // write changes nothing.
+    if (!purchasing) {
+      const violations = protectedLineViolations(current, patch.lineItems);
+      if (violations.length) {
+        const blockingSkus = [...new Set(violations.map((v) => v.sku))];
+        throw Object.assign(
+          new Error(
+            `Can't save the lines on ${current.id}: ${violations.length} purchased line${violations.length === 1 ? "" : "s"} would change (` +
+            violations.slice(0, 5).map((v) => `${v.sku}: ${v.what}`).join("; ") +
+            `). Lines on a purchase order are changed by the purchase order, not here.`
+          ),
+          { code: "line_items_locked", blockingSkus, violations }
+        );
+      }
     }
     next.lineItems = patch.lineItems.map(hydrateLine);
     lineItemsChanged = true;
@@ -528,7 +577,10 @@ module.exports = {
   remove,
   computeTotals,
   resolveLineUnitPriceCents,
-  lineItemsLockedBy,
+  protectedLineViolations,
+  isPurchasingProtected,
+  flipLines,
+  hydrateLine,
   deriveStatus,
   softDelete,
   restore,
