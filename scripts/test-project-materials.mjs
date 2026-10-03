@@ -187,39 +187,34 @@ const ok = (name, cond, detail = "") => {
     const draftId = await mk([{ sku: "PVC100", qty: 10 }], "draft");
     ok("a clean draft can still have its lines replaced", (await replace(draftId)) === null);
 
-    // Past draft → refused.
-    const doneId = await mk([{ sku: "PVC100", qty: 10 }], "complete");
-    const e1 = await replace(doneId);
-    ok("replacing the lines of a non-draft list is REFUSED",
-      e1 && e1.code === "line_items_locked", String(e1 && e1.message).slice(0, 120));
+    // The rule is PURCHASING PROVENANCE, line by line (Patrick, 2026-10-03):
+    // a line on a PO, or carrying a poId / frozen purchase price, must come
+    // back exactly as stored. The list's status is not the evidence — a
+    // "complete" list of hand-marked "have" lines is planning, and stays
+    // editable (the audit found truck-stock lists frozen by the old rule).
+    const doneId = await mk([{ sku: "PVC100", qty: 10, status: "have" }], "complete");
+    ok("a list of hand-marked \"have\" lines (no PO, no frozen price) can still have its lines replaced",
+      (await replace(doneId)) === null);
 
-    // Status says draft but a line is on a PO → still refused. The
-    // status can be stale or hand-set; the lines are the evidence.
+    // Status says draft but a line is on a PO → refused. The status can be
+    // stale or hand-set; the lines are the evidence.
     const sneaky = await mk([{ sku: "PVC100", qty: 10, status: "ordered", poId: "PO-9" }], "draft");
     const e2 = await replace(sneaky);
-    ok("...and refused even when the status still says draft, if a line is on a PO",
+    ok("replacing the lines is REFUSED when a line is on a PO, whatever the status says",
       e2 && e2.code === "line_items_locked", String(e2 && e2.message).slice(0, 120));
 
-    // A price-locked line still marked "need".
-    //
-    // This shape cannot survive the store: hydrateLine() nulls a frozen
-    // price on a "need" line on the way IN, so `update()` can never see
-    // it. The rule is therefore asked of the named function directly —
-    // which is the answer for any caller holding a record that has not
-    // been through hydrate().
-    const lockedBy = ml.lineItemsLockedBy({
-      id: "ML-RAW", status: "draft",
-      lineItems: [{ sku: "PVC100", qty: 10, status: "need", frozenPriceCents: 1250 }]
-    });
-    ok("...or price-locked, on a record that never went through hydrate",
-      lockedBy && lockedBy.blockingSkus.includes("PVC100"), JSON.stringify(lockedBy));
-    ok("one named rule, asked by update and by any other caller",
-      typeof ml.lineItemsLockedBy === "function" &&
-      ml.lineItemsLockedBy({ status: "draft", lineItems: [{ sku: "A", qty: 1, status: "need" }] }) === null);
-
-    const received = await mk([{ sku: "PVC100", qty: 10, status: "have" }], "draft");
+    // A received line keeps its frozen purchase price — that provenance
+    // protects it even though its status is "have".
+    const received = await mk([{ sku: "PVC100", qty: 10, status: "have", frozenPriceCents: 1250 }], "draft");
     const e4 = await replace(received);
-    ok("...or already received", e4 && e4.code === "line_items_locked", String(e4 && e4.message).slice(0, 120));
+    ok("...and when a received line carries a frozen purchase price",
+      e4 && e4.code === "line_items_locked", String(e4 && e4.message).slice(0, 120));
+
+    // One named rule, asked by update() and by any other caller.
+    ok("one named rule: protectedLineViolations",
+      typeof ml.protectedLineViolations === "function" &&
+      ml.protectedLineViolations({ lineItems: [{ id: "a", sku: "A", qty: 1, status: "need" }] }, [{ sku: "B", qty: 2 }]).length === 0 &&
+      ml.protectedLineViolations({ lineItems: [{ id: "a", sku: "A", qty: 1, status: "ordered", poId: "PO-1", frozenPriceCents: 5 }] }, [{ sku: "B", qty: 2 }]).length === 1);
 
     ok("the refusal names the parts that blocked it",
       Array.isArray(e2.blockingSkus) && e2.blockingSkus.includes("PVC100"), JSON.stringify(e2.blockingSkus));
@@ -233,7 +228,7 @@ const ok = (name, cond, detail = "") => {
 
     // Other fields still editable on a locked list — the guard is about
     // lines, not a freeze on the whole record.
-    const renamed = await ml.update(doneId, { notes: "picked up Tuesday" });
+    const renamed = await ml.update(sneaky, { notes: "picked up Tuesday" });
     ok("a locked list can still take notes and other fields", renamed.notes === "picked up Tuesday");
   } finally {
     if (backup === null) { if (fs.existsSync(store)) fs.rmSync(store); }
