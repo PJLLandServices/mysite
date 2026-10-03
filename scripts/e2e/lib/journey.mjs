@@ -37,6 +37,21 @@ export const at = (ymd, hh, mm = 0) => {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(y, m - 1, d, hh, mm).toISOString();
 };
+// A weekday in the next spring's serviceable window (Mar 1 – Jun 30),
+// at least two days out. A spring opening can no longer be booked on a
+// date outside spring from any door (2026-10-02 — a customer was emailed
+// "Spring opening on October 10"), so a journey that needs a spring visit
+// books it on a spring day, not on "two days from now".
+export const springDay = () => {
+  const now = new Date();
+  const soon = new Date(now.getTime() + 2 * 86400000);
+  const year = soon.getMonth() <= 5 ? soon.getFullYear() : soon.getFullYear() + 1;
+  const d = soon.getFullYear() === year && soon.getMonth() >= 2 && soon.getMonth() <= 5
+    ? soon
+    : new Date(year, 3, 15);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return d.toLocaleDateString("en-CA");
+};
 // A weekday at least `days` out, so portal cut-offs never bite.
 export const dayOut = (days) => {
   const d = new Date(Date.now() + days * 86400000);

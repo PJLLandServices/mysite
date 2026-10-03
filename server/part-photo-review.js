@@ -500,7 +500,11 @@
     // shown beside the stored image for a look, never restored on its own.
     const held = r.held && r.held.hash
       ? `<figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.held.hash)}" aria-label="Larger copy held for review, open full size"><img src="${img(r.held.hash, 480)}" alt="Larger copy held for review" loading="lazy"></button><figcaption><p class="pr-quality is-unknown">Held: ${r.held.source.width}×${r.held.source.height} · match ${r.held.similarity} (under 0.98)</p></figcaption></figure>` : "";
-    return `<article class="pr-card${isCur ? " is-current" : ""}" data-idx="${idx}" data-group="${esc(r.id || r.groupId)}" tabindex="-1" aria-label="${esc(r.label)}">
+    // His eye, not the 0.98 line: the held copy takes the stored image's
+    // place by the same image-only swap as Apply (approval, source page,
+    // tier and history kept). One part at a time, behind a confirm.
+    const useHeld = held ? `<button type="button" class="pp-btn pp-btn-primary" data-act="quality-restore-held">Same photo — use the larger copy</button>` : "";
+    return `<article class="pr-card${isCur ? " is-current" : ""}" data-idx="${idx}" data-group="${esc(r.id || r.groupId)}"${held ? ` data-held="${esc(r.held.hash)}" data-held-dims="${r.held.source.width}×${r.held.source.height}" data-skus="${esc(r.skus.join(", "))}"` : ""} tabindex="-1" aria-label="${esc(r.label)}">
       <header class="pr-card-head"><div class="pr-part">
         <div class="pp-desc">${esc(r.label)}</div>
         <div class="pp-meta"><span class="pp-mono">${r.skus.map(esc).join(", ")}</span> · ${what} ${r.current.longest}px${r.current.domain ? ` · ${esc(r.current.domain)}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</div>
@@ -508,6 +512,7 @@
       </div></header>
       <div class="pr-cands${held ? "" : " is-single"}"><figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.current.hash)}" aria-label="Stored image, open full size"><img src="${img(r.current.hash, 480)}" alt="Stored ${what} for ${esc(r.label)}" loading="lazy"></button><figcaption><p class="pr-quality is-low">! ${r.current.longest}px stored — below the 800 px threshold</p></figcaption></figure>${held}</div>
       <footer class="pr-actions">
+        ${useHeld}
         <button type="button" class="pp-btn" data-act="quality-keep">Keep as is</button>
         <span class="pp-panel-status" data-status aria-live="polite"></span>
       </footer>
@@ -535,6 +540,11 @@
     }
     if (kind === "keep" && card) {
       await act(card, () => post(`/api/part-photo-quality/review/${encodeURIComponent(card.dataset.group)}`, { action: "keep" }), "Saving…");
+    }
+    if (kind === "restore-held" && card && card.dataset.held) {
+      const ok = await window.pjlDialog.confirm(`Use the larger copy (${card.dataset.heldDims}) for ${card.dataset.skus}? Only press this if the two images are the same photograph. Only the image changes: the product page it came from, your approval and its date, the tier and the fitting stay exactly as they are, and the current image goes to the history.`, { confirmLabel: "Same photo — use it", cancelLabel: "Cancel" });
+      if (!ok) return;
+      await act(card, () => post(`/api/part-photo-quality/review/${encodeURIComponent(card.dataset.group)}`, { action: "restore-held", hash: card.dataset.held }), "Restoring…");
     }
   }
   els.list.addEventListener("click", (e) => {
