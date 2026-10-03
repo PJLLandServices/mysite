@@ -1,0 +1,305 @@
+name: Field app — Tap to Pay release lane
+
+# Publishes the Tap to Pay line (claude/field-taptopay, #305) to Patrick's
+# working phone, or rolls that phone back, ONLY when a person presses "Run
+# workflow" and types the confirmation. It replaces the old emergency lane
+# (field-app-hotfix-taptopay.yml on claude/eas-update-pjl-field-wgmjtt),
+# which stays untouched until this one has published and been accepted.
+#
+# THE PHONE. A Tap to Pay app Patrick hand-built on his Mac from 0c638a8,
+# runtime 41661c6f…. It takes only updates published to exactly that runtime.
+# Main's own updates ("Field app — publish OTA update") go to main's runtime
+# and never reach it.
+#
+# NOTHING HERE RUNS BY ITSELF. The only trigger is workflow_dispatch: no push,
+# no pull request, no schedule, no tag, no other workflow. Merging this file
+# publishes nothing. Its default mode is check-only, which reads the lane and
+# reports; it holds no Expo token and cannot publish.
+#
+#   check-only  Run the guard against a lane commit and say whether it could
+#               go to the phone. Changes nothing anywhere.
+#   publish     Guard → stamp → guard again → publish to the phone's runtime,
+#               iOS only. Needs: run from main, lane_sha = the lane branch's
+#               current head, confirm = "publish <first 12 of lane_sha> to 41661c6f".
+#   rollback    Republish a known-good update group from config/ttp-lane.json.
+#               Needs: run from main, confirm = "rollback to <group id>".
+#
+# THE TREE THAT PASSES THE GUARD IS THE TREE THAT IS PUBLISHED. Nothing in this
+# workflow writes app.json or any other native input. The lane commits its
+# runtime pin (docs/TTP_RUNTIME_PIN.md); scripts/ttp-lane-guard.mjs proves the
+# native code under it is unchanged from the phone's build, without trusting
+# the pin. The one file written before publishing is src/buildInfo.json, the
+# JavaScript-only stamp the Today footer reads. The guard runs again after it
+# and must see the same fingerprint, the same runtime, and that file changed
+# alone.
+#
+# PERMISSIONS. Nothing at the top level. The release job reads the
+# repository; it never writes to it. The record job, which runs only after a
+# successful publish or rollback, is the one job with contents: write, used
+# only to push the annotated tag recording what was sent.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check-only (default, changes nothing) · publish · rollback'
+        type: choice
+        options: [check-only, publish, rollback]
+        default: check-only
+        required: true
+      lane_sha:
+        description: 'check-only / publish: the full 40-character lane commit. Empty for rollback.'
+        type: string
+        required: false
+      confirm:
+        description: 'publish: "publish <first 12 of lane_sha> to 41661c6f". rollback: "rollback to <group id>". Empty for check-only.'
+        type: string
+        required: false
+      rollback_group:
+        description: 'rollback only: a known-good update group id from config/ttp-lane.json'
+        type: string
+        required: false
+
+permissions: {}
+
+# One at a time, and never cancelled part-way: a publish cut off between
+# upload and record is the one state that is hard to read afterwards.
+concurrency:
+  group: field-ttp-lane
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      target: ${{ steps.record.outputs.target }}
+      tag: ${{ steps.record.outputs.tag }}
+      message: ${{ steps.record.outputs.message }}
+    steps:
+      # main's guard and expectations, never the lane's own copy.
+      - uses: actions/checkout@v4
+        with:
+          path: main
+          persist-credentials: false
+
+      # Every input goes through env, never pasted into the script: they are
+      # text someone typed.
+      - name: Check the inputs
+        id: request
+        env:
+          MODE: ${{ inputs.mode }}
+          LANE_SHA: ${{ inputs.lane_sha }}
+          CONFIRM: ${{ inputs.confirm }}
+          GROUP: ${{ inputs.rollback_group }}
+          REF: ${{ github.ref }}
+        run: node main/scripts/ttp-lane-inputs.mjs main/config/ttp-lane.json
+
+      - name: Check out the lane commit
+        if: inputs.mode != 'rollback'
+        uses: actions/checkout@v4
+        with:
+          path: lane
+          ref: ${{ inputs.lane_sha }}
+          # Full history: the guard reads the installed build's commit and the
+          # lane branch's head from it.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Is it the lane branch's head?
+        if: inputs.mode != 'rollback'
+        env:
+          MODE: ${{ inputs.mode }}
+          LANE_SHA: ${{ inputs.lane_sha }}
+        run: |
+          branch=$(node -pe "require('./main/config/ttp-lane.json').laneBranch")
+          head=$(git -C lane rev-parse "refs/remotes/origin/$branch")
+          echo "Lane branch $branch is at $head"
+          if [ "$head" = "$LANE_SHA" ]; then
+            echo "$LANE_SHA is the lane branch's head."
+          elif [ "$MODE" = "publish" ]; then
+            echo "::error::$LANE_SHA is not the head of $branch ($head). Only the lane branch's head is published. Nothing was published."
+            exit 1
+          else
+            echo "::warning::$LANE_SHA is not the head of $branch ($head). check-only reports on it anyway; publish would refuse it."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: inputs.mode != 'rollback'
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: lane/pjl-field/package-lock.json
+
+      # Exactly the lockfile: the dependency tree feeds the fingerprint.
+      - name: Install the lane's app
+        if: inputs.mode != 'rollback'
+        working-directory: lane/pjl-field
+        run: npm ci
+
+      # No token in this step or any before it.
+      - name: Guard — may this commit go to the phone?
+        if: inputs.mode != 'rollback'
+        env:
+          LANE_SHA: ${{ inputs.lane_sha }}
+        run: |
+          node main/scripts/ttp-lane-guard.mjs --lane lane --sha "$LANE_SHA" \
+            --config main/config/ttp-lane.json \
+            --json "$RUNNER_TEMP/guard.json" --summary "$GITHUB_STEP_SUMMARY"
+
+      # ---- publish ---------------------------------------------------------
+
+      - name: Check the Expo token is present
+        if: inputs.mode == 'publish' || inputs.mode == 'rollback'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is not set. Nothing was published."
+            exit 1
+          fi
+
+      # The commit the phone will report (Today footer, /api/admin/field-clients).
+      # GITHUB_SHA here would be main's commit, so the lane's is passed in.
+      # Committed LOCALLY, never pushed (no credentials are persisted).
+      - name: Stamp the lane commit into the app
+        if: inputs.mode == 'publish'
+        working-directory: lane
+        env:
+          LANE_SHA: ${{ inputs.lane_sha }}
+        run: |
+          branch=$(node -pe "require('../main/config/ttp-lane.json').laneBranch")
+          GITHUB_SHA="$LANE_SHA" GITHUB_REF_NAME="$branch" node scripts/stamp-field-build-info.mjs update
+          git -c user.name="PJL field update" -c user.email="field-update@pjllandservices.invalid" \
+            commit -q -m "Stamp ${LANE_SHA::7} (not pushed)" -- pjl-field/src/buildInfo.json
+
+      - name: Guard again, on the stamped tree that will be published
+        if: inputs.mode == 'publish'
+        env:
+          LANE_SHA: ${{ inputs.lane_sha }}
+        run: |
+          node main/scripts/ttp-lane-guard.mjs --lane lane --sha "$LANE_SHA" --after-stamp \
+            --config main/config/ttp-lane.json \
+            --json "$RUNNER_TEMP/guard-stamped.json" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to the phone's runtime (iOS only)
+        if: inputs.mode == 'publish'
+        working-directory: lane/pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          LANE_SHA: ${{ inputs.lane_sha }}
+          RUN_NO: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          cli=$(node -pe "require('../../main/config/ttp-lane.json').easCli")
+          branch=$(node -pe "require('../../main/config/ttp-lane.json').updateBranch")
+          npx "eas-cli@$cli" update \
+            --branch "$branch" --platform ios \
+            --message "Tap to Pay lane ${LANE_SHA::12} (run #$RUN_NO)" \
+            --non-interactive --json > "$RUNNER_TEMP/eas-result.json"
+          cat "$RUNNER_TEMP/eas-result.json"
+
+      # ---- rollback --------------------------------------------------------
+
+      - uses: actions/setup-node@v4
+        if: inputs.mode == 'rollback'
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: main/pjl-field/package-lock.json
+
+      # The CLI needs a project to name (app.json's projectId). Republishing
+      # builds nothing and computes no runtime: the group keeps its own.
+      - name: Install the app (for the project id only)
+        if: inputs.mode == 'rollback'
+        working-directory: main/pjl-field
+        run: npm ci
+
+      - name: Check the group is the phone's runtime, on EAS
+        if: inputs.mode == 'rollback'
+        working-directory: main/pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GROUP: ${{ inputs.rollback_group }}
+        run: |
+          set -o pipefail
+          cli=$(node -pe "require('../config/ttp-lane.json').easCli")
+          npx "eas-cli@$cli" update:view "$GROUP" --json --non-interactive > "$RUNNER_TEMP/eas-view.json"
+          node ../scripts/ttp-lane-result.mjs view ../config/ttp-lane.json "$RUNNER_TEMP/eas-view.json"
+
+      - name: Roll the phone back to the known-good group
+        if: inputs.mode == 'rollback'
+        working-directory: main/pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GROUP: ${{ inputs.rollback_group }}
+          RUN_NO: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          cli=$(node -pe "require('../config/ttp-lane.json').easCli")
+          npx "eas-cli@$cli" update:republish \
+            --group "$GROUP" --platform ios \
+            --message "Tap to Pay lane rollback to $GROUP (run #$RUN_NO)" \
+            --non-interactive --json > "$RUNNER_TEMP/eas-result.json"
+          cat "$RUNNER_TEMP/eas-result.json"
+
+      # ---- what was done ---------------------------------------------------
+
+      # Reads what EAS says it published: every update must be iOS and on the
+      # phone's runtime. If not, the run goes red with the ids, loudly — an
+      # update on the wrong runtime is the failure that looks like success.
+      - name: Check and record what EAS published
+        id: record
+        if: always() && steps.request.outcome == 'success'
+        env:
+          MODE: ${{ inputs.mode }}
+          LANE_SHA: ${{ inputs.lane_sha }}
+          GROUP: ${{ inputs.rollback_group }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: node main/scripts/ttp-lane-result.mjs record main/config/ttp-lane.json "$RUNNER_TEMP" "$RUNNER_TEMP/release-record.json"
+
+      - name: Keep the record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttp-lane-${{ inputs.mode }}-run-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/guard.json
+            ${{ runner.temp }}/guard-stamped.json
+            ${{ runner.temp }}/eas-view.json
+            ${{ runner.temp }}/eas-result.json
+            ${{ runner.temp }}/release-record.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # The only job that can write, and only a tag, and only after something was
+  # actually published or rolled back.
+  record:
+    needs: release
+    if: needs.release.result == 'success' && (inputs.mode == 'publish' || inputs.mode == 'rollback')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.target }}
+          fetch-depth: 1
+
+      - name: Tag what was sent to the phone
+        env:
+          TARGET: ${{ needs.release.outputs.target }}
+          TAG: ${{ needs.release.outputs.tag }}
+          MESSAGE: ${{ needs.release.outputs.message }}
+        run: |
+          case "$TAG" in field-ttp/*) ;; *) echo "::error::Unexpected tag name '$TAG'"; exit 1 ;; esac
+          printf '%s\n' "$MESSAGE" > "$RUNNER_TEMP/tag-message.txt"
+          git -c user.name="PJL release lane" -c user.email="release-lane@pjllandservices.invalid" \
+            tag -a "$TAG" "$TARGET" -F "$RUNNER_TEMP/tag-message.txt"
+          git push origin "refs/tags/$TAG"
+          echo "Recorded $TAG → $TARGET" >> "$GITHUB_STEP_SUMMARY"
