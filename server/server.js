@@ -14386,7 +14386,7 @@ async function handleApi(req, res, pathname) {
   //   GET  /api/part-photo-quality/plan            the cached plan: deterministic upgrades + review rows (staff)
   //   POST /api/part-photo-quality/plan            (re)build it — reads each photo's product page (admin)
   //   POST /api/part-photo-quality/upgrade {hashes} apply exactly the upgrades shown (admin)
-  //   POST /api/part-photo-quality/review/:groupId {action: keep} (admin)
+  //   POST /api/part-photo-quality/review/:groupId {action: keep} | {action: restore-held, hash} (admin)
   // A replacement of the picture only: part match, fitting, approval and
   // confidence are never touched (lib/part-photos.upgradePhotoQuality).
   if (req.method === "GET" && pathname === "/api/part-photo-quality/plan") {
@@ -14427,6 +14427,14 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const groupId = decodeURIComponent(qualityReviewMatch[1]);
+      // A held larger copy Patrick compared and confirmed is the same
+      // photograph: the same image-only swap as /upgrade, for this one row.
+      if (String(payload.action || "") === "restore-held") {
+        const out = await photoQuality.restoreHeld(groupId, { by, hash: String(payload.hash || "") });
+        rebuildCatalogFromOverrides();
+        await settings.recordAudit({ who: by, action: "part-photo.quality.restore-held", note: `Quality review: ${out.skus.join(", ")} restored to the held larger copy, confirmed by eye as the same photograph (${out.from.longest}px → ${out.to.width}×${out.to.height}, match ${out.similarity}; tier, approval and source page unchanged)`, after: out });
+        return sendJson(res, 200, { ok: true, groupId, ...out });
+      }
       const out = await photoQuality.resolveReview(groupId, { action: String(payload.action || ""), by });
       await settings.recordAudit({ who: by, action: "part-photo.quality.review", note: `Quality review: kept ${groupId} as is`, after: out });
       return sendJson(res, 200, { ok: true, groupId, ...out });

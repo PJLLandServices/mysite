@@ -44,6 +44,15 @@
 //                confident (part-photos.restoreCandidateImage).
 //   Only for the exact list the plan showed; a record that changed since
 //   the plan was built is skipped, never overwritten.
+//
+//   A HELD ROW PATRICK CONFIRMED BY EYE (Oct 2 2026 — restoreHeld)
+//   VB7RND, 000001 and ESPSM3 were held: the same Rain Bird file, stored
+//   on a padded square canvas, against its unpadded original. He compared
+//   each pair and confirmed the same photograph. For that ONE row, on his
+//   say, the held copy goes through the very same swap as Apply (swapImage)
+//   — so page provenance, approval, tier, links and history are kept, and
+//   the record notes it was confirmed by eye with the measured match. The
+//   0.98 line, the correlation and the plan are not changed by this door.
 
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -249,13 +258,22 @@ function createQualityUpgrade({ dataDir, store, getParts, fetchPage, fetchImage,
       return !isLive(g) && REVIEW_TIERS.has(g.tier) && visibleCandidates(g).some((c) => c.hash === r.current.hash);
     };
     const upgrades = plan.rows.filter((r) => r.decision === "upgrade" && !r.applied && stillThere(r));
-    const review = plan.rows.filter((r) => r.decision === "review" && stillThere(r) && !(state.reviewed || {})[r.id || r.groupId]);
+    const review = plan.rows.filter((r) => r.decision === "review" && !r.applied && stillThere(r) && !(state.reviewed || {})[r.id || r.groupId]);
     return {
       plan: { id: plan.id, by: plan.by, status: plan.status, at: plan.at, finishedAt: plan.finishedAt || null, total: plan.total, done: plan.done, building: !!building },
-      counts: { ...counts(plan), applicable: upgrades.length, applicableLive: upgrades.filter((r) => (r.kind || "live") === "live").length, applicableCandidates: upgrades.filter((r) => r.kind === "candidate").length, openReview: review.length, applied: plan.rows.filter((r) => r.applied).length },
+      counts: { ...counts(plan), applicable: upgrades.length, applicableLive: upgrades.filter((r) => (r.kind || "live") === "live").length, applicableCandidates: upgrades.filter((r) => r.kind === "candidate").length, openReview: review.length, applied: plan.rows.filter((r) => r.applied).length, confirmed: plan.rows.filter((r) => r.applied && r.applied.basis === "visual").length },
       upgrades, review
     };
   }
+
+  // THE swap, for both doors (Apply and restoreHeld): the row's stored image
+  // becomes `proposal`, and only the image changes (see the header).
+  // `confirmed` is set only when Patrick's eye, not the 0.98 line, decided.
+  function swapImage(r, proposal, by, confirmed = null) {
+    const args = { fromHash: r.current.hash, to: proposal, imageUrl: proposal.imageUrl, by, ...(confirmed ? { confirmed } : {}) };
+    return (r.kind || "live") === "live" ? store.upgradePhotoQuality(r.groupId, args) : store.restoreCandidateImage(r.groupId, args);
+  }
+  const appliedRecord = (r, proposal) => ({ id: r.id || r.groupId, kind: r.kind || "live", groupId: r.groupId, skus: r.skus, from: { hash: r.current.hash, longest: r.current.longest }, to: { hash: proposal.hash, width: proposal.source.width, height: proposal.source.height, grade: proposal.quality.grade } });
 
   // Apply the deterministic restorations — exactly the hashes the plan
   // shows, in its order, or nothing.
@@ -268,16 +286,36 @@ function createQualityUpgrade({ dataDir, store, getParts, fetchPage, fetchImage,
     }
     const applied = [], skipped = [];
     for (const r of s.upgrades) {
-      const args = { fromHash: r.current.hash, to: r.upgrade, imageUrl: r.upgrade.imageUrl, by };
-      const res = (r.kind || "live") === "live" ? await store.upgradePhotoQuality(r.groupId, args) : await store.restoreCandidateImage(r.groupId, args);
+      const res = await swapImage(r, r.upgrade, by);
       if (res.skipped) { skipped.push({ id: r.id || r.groupId, kind: r.kind || "live", groupId: r.groupId, reason: res.skipped }); continue; }
       const row = state.plan.rows.find((x) => (x.id || x.groupId) === (r.id || r.groupId));
       if (row) row.applied = { by, at: new Date(now()).toISOString() };
-      applied.push({ id: r.id || r.groupId, kind: r.kind || "live", groupId: r.groupId, skus: r.skus, from: { hash: r.current.hash, longest: r.current.longest }, to: { hash: r.upgrade.hash, width: r.upgrade.source.width, height: r.upgrade.source.height, grade: r.upgrade.quality.grade } });
+      applied.push(appliedRecord(r, r.upgrade));
     }
     await save();
     log({ action: "quality-upgrade.apply", by, applied: applied.length, skipped: skipped.length });
     return { applied, skipped };
+  }
+
+  // "Same photo — use the larger copy": ONE held row, on Patrick's say after
+  // he compared the two images. `hash` must be the held copy the card
+  // showed. A row he already kept, a row whose stored image has changed
+  // since the plan, and a row with no held copy are all refused — nothing
+  // is ever overwritten. Never called for a list; never automatic.
+  async function restoreHeld(id, { by = null, hash = null } = {}) {
+    const s = await summary();
+    const r = s.review.find((x) => (x.id || x.groupId) === id);
+    if (!r) throw new Error("That photo isn't in the quality review queue.");
+    if (!r.held || !r.held.hash) throw new Error("No larger copy is held for that photo — there is nothing to restore.");
+    if (String(hash || "") !== r.held.hash) throw new Error("The larger copy differs from the one shown — reload and confirm again.");
+    const confirmed = { basis: "visual", similarity: r.held.similarity };
+    const res = await swapImage(r, r.held, by, confirmed);
+    if (res.skipped) throw new Error(`Nothing was changed: ${res.skipped}.`);
+    const row = state.plan.rows.find((x) => (x.id || x.groupId) === id);
+    if (row) row.applied = { by, at: new Date(now()).toISOString(), basis: "visual" };
+    await save();
+    log({ action: "quality-upgrade.restore-held", id, by, similarity: r.held.similarity });
+    return { ...appliedRecord(r, r.held), ...confirmed };
   }
 
   // "Keep as is" for a review row; `id` is the row id (the group id for a
@@ -292,7 +330,7 @@ function createQualityUpgrade({ dataDir, store, getParts, fetchPage, fetchImage,
     return state.reviewed[id];
   }
 
-  return { load, candidates, buildPlan, summary, apply, resolveReview, similarity: (a, b) => similarity(a, b, sharp), SIMILARITY_MIN, RESTORE_SIMILARITY_MIN, _state: () => state };
+  return { load, candidates, buildPlan, summary, apply, restoreHeld, resolveReview, similarity: (a, b) => similarity(a, b, sharp), SIMILARITY_MIN, RESTORE_SIMILARITY_MIN, _state: () => state };
 }
 
 module.exports = { createQualityUpgrade, similarity, restorationDecision, SIMILARITY_MIN, RESTORE_SIMILARITY_MIN };
