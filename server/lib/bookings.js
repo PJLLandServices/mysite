@@ -434,6 +434,42 @@ async function listByProperty(propertyId) {
   return records.filter((b) => b.propertyId === propertyId);
 }
 
+// Does this record belong to this PROPERTY — by every link the records
+// actually carry, not just the id stamp.
+//
+// A booking is stamped with propertyId only when its lead was already
+// linked to the property at the moment it was mirrored. A lead linked
+// LATER (Patrick's "link to property" on the CRM card; a property record
+// created after the customer booked) leaves the record's propertyId null
+// while the property's leadIds names the lead. A lead the intake could
+// not match at all (a different email on the same house) still carries
+// the customer's address. The Season Plan board already finds all of
+// those visits (gatherBookedRows reads lead.propertyId); the eligibility
+// reader behind the Not-on-the-plan tray read only the id stamp, so a
+// customer who had "found a home" stayed in the tray (2026-10-04).
+//
+// Three rungs, one rule: the id stamp, the lead link, the address. The
+// address rung also catches a booking stamped onto a DUPLICATE record of
+// the same house (the intake's "suggested" branch creates one) — the
+// house is booked whichever record the stamp landed on.
+function belongsToProperty(record, property) {
+  if (!record || !property || !property.id) return false;
+  if (record.propertyId && record.propertyId === property.id) return true;
+  if (record.leadId && Array.isArray(property.leadIds) && property.leadIds.includes(record.leadId)) return true;
+  const norm = String(property.addressNormalized || "");
+  if (!norm || !record.address) return false;
+  const { normalizeAddress } = require("./properties");   // lazy: properties never needs bookings, but keep it that way
+  return normalizeAddress(record.address) === norm;
+}
+
+// Every record that belongsToProperty — the list a season-state reader
+// should hold, where listByProperty is only the id-stamped subset.
+async function listForProperty(property) {
+  if (!property) return [];
+  const records = await readAll();
+  return records.filter((b) => belongsToProperty(b, property));
+}
+
 // Mirror an existing lead.booking shape into a first-class Booking
 // record. Idempotent: if a Booking already references this leadId, it
 // gets updated rather than duplicated. Returns the saved record.
@@ -1203,6 +1239,8 @@ module.exports = {
   get,
   listByLead,
   listByProperty,
+  listForProperty,
+  belongsToProperty,
   upsertFromLead,
   currentRecordForLead,
   healFromLeads,

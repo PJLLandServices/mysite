@@ -16753,9 +16753,13 @@ async function handleApi(req, res, pathname) {
       const partsMap = (PARTS && PARTS.parts) || {};
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
+      // 409: the client edited an older version (stale_list), asked to
+      // change a purchased line (line_items_locked), or to drop a line a
+      // purchase order was placed for (purchasing_history). 423: a
+      // recovery hold. Nothing was written.
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
-      if (err && err.code === "purchasing_history") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
+      const conflict = err && (err.code === "stale_list" || err.code === "line_items_locked" || err.code === "purchasing_history");
+      return sendJson(res, conflict ? 409 : 400, { ok: false, code: err && err.code ? err.code : undefined, errors: [err.message || "Couldn't update material list."] });
     }
   }
   if (listMatch && req.method === "DELETE") {

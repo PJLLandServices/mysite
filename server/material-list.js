@@ -64,7 +64,8 @@
     saveNeed: document.getElementById("mlbSaveNeed"),
     saveHave: document.getElementById("mlbSaveHave"),
     saveTotal: document.getElementById("mlbSaveTotal"),
-    saveState: document.getElementById("mlbSaveState")
+    saveState: document.getElementById("mlbSaveState"),
+    saveReload: document.getElementById("mlbSaveReload")
   };
 
   // ---- State ---------------------------------------------------------
@@ -799,6 +800,9 @@
     } else if (stateName === "dirty") {
       els.saveState.textContent = "Unsaved changes";
     }
+    // After a stale-write refusal the server did not take the edit; the
+    // edit stays on screen and nothing reloads until the user says so.
+    if (els.saveReload) els.saveReload.hidden = !state.staleList;
   }
 
   // Refresh "saved · Ns ago" once a second so the timestamp doesn't go
@@ -842,7 +846,12 @@
         customerEmail: state.list.customerEmail,
         address: state.list.address,
         notes: state.list.notes,
-        lineItems: state.list.lineItems
+        lineItems: state.list.lineItems,
+        // The version this edit was made on. The server refuses the
+        // write (409 stale_list) if the list moved on meanwhile — another
+        // tab, or a purchase order flipping lines — instead of letting
+        // this tab overwrite it.
+        baseUpdatedAt: state.list.updatedAt
       };
       const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, {
         method: "PATCH",
@@ -851,10 +860,14 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        state.pendingError = (data.errors && data.errors[0]) || `Save failed (${r.status})`;
+        state.staleList = r.status === 409 && data.code === "stale_list";
+        state.pendingError = state.staleList
+          ? "This material list changed elsewhere. Your latest change wasn’t saved. Reload to continue."
+          : (data.errors && data.errors[0]) || `Save failed (${r.status})`;
         setSaveState("error");
         return;
       }
+      state.staleList = false;
       // Server is authoritative — replace local state with what came back
       // (server fills new line ids, re-derives status, updates timestamps).
       state.list = data.list;
@@ -1649,7 +1662,14 @@
     });
 
     // Save on page hide — ensures unsaved changes flush before nav-away.
+    if (els.saveReload) {
+      els.saveReload.addEventListener("click", () => {
+        state.reloading = true;
+        location.reload();
+      });
+    }
     window.addEventListener("beforeunload", (event) => {
+      if (state.reloading) return;
       if (!state.saveTimer && !state.pendingError) return;
       // Try a synchronous-ish save via fetch keepalive. Browsers don't
       // wait for it, but Render usually completes the round-trip in time.
@@ -1663,7 +1683,8 @@
             customerEmail: state.list.customerEmail,
             address: state.list.address,
             notes: state.list.notes,
-            lineItems: state.list.lineItems
+            lineItems: state.list.lineItems,
+            baseUpdatedAt: state.list.updatedAt
           }),
           keepalive: true
         });

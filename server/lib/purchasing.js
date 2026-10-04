@@ -119,6 +119,11 @@ function planListMoves(po, listsRaw, event, posRaw = []) {
       continue;
     }
     // Only the three purchasing fields; everything else on the line stays.
+    // And only a legal purchasing transition (material-lists
+    // purchasingTransitionError — the one rule, shared with #375's line
+    // protection): anything else refuses the whole operation.
+    const illegal = materialLists.purchasingTransitionError(w.rec.lineItems[li], { ...w.rec.lineItems[li], ...move });
+    if (illegal) throw new PurchasingError(illegal, { status: 409, code: "purchasing_transition_invalid" });
     w.rec.lineItems[li] = { ...w.rec.lineItems[li], ...move };
     w.moved += 1;
     moved.push({ listId: w.rec.id, lineId: line.id, sku: line.sku, from: line.status, to: move.status });

@@ -262,7 +262,16 @@ async function deriveBookingState(propertyId, season, year) {
       completed: true
     };
   }
-  const matches = await bookings.listByProperty(propertyId);
+  // Every record that belongs to the property — id stamp, lead link or
+  // address (bookings.belongsToProperty, the rule the Season Plan board
+  // reads by). The id-only read left a customer whose lead was linked
+  // after they booked looking unbooked here while the board drew their
+  // visit (2026-10-04, the Not-on-the-plan tray).
+  let property = null;
+  try { property = await properties.get(propertyId); } catch { property = null; }
+  const matches = property
+    ? await bookings.listForProperty(property)
+    : await bookings.listByProperty(propertyId);
   const isThisSeason = (b) => b && typeof b.serviceKey === "string"
     && b.serviceKey.startsWith(prefix)
     && isInSeasonWindow(b.scheduledFor, season, year);
@@ -292,6 +301,24 @@ async function deriveBookingState(propertyId, season, year) {
     };
   }
   return { hasBooking: false, bookingId: null, scheduledDate: null, bucket: null, completed: false };
+}
+
+// Is this season SETTLED for the property — a visit on the calendar, or
+// one that already happened? One answer, read by the outreach gauntlet
+// (assessEligibility), the assignment writer's preflight and assign(),
+// and the Season Plan's Not-on-the-plan tray. The tray used to read only
+// hasBooking, so a customer whose fall closing was already DONE was
+// offered a route day again (2026-10-04: "some have been completed").
+function seasonSettled(state) {
+  return Boolean(state && (state.hasBooking || state.completed));
+}
+
+// The two verdict reasons seasonSettled produces, and the one question
+// every reader asks of a verdict: is this a customer with nothing to do,
+// rather than a problem to report?
+const SETTLED_REASONS = Object.freeze(["already_booked", "already_done"]);
+function verdictIsSettled(verdict) {
+  return Boolean(verdict && verdict.ok === false && SETTLED_REASONS.includes(verdict.reason));
 }
 
 // Which seasonal service should a customer be offered right now?
@@ -555,8 +582,12 @@ async function assessEligibility(property, { season, year, bookingState } = {}) 
   const state = bookingState !== undefined
     ? bookingState
     : await deriveBookingState(property.id, season, year);
-  if (state?.hasBooking) {
-    return { ok: false, reason: "already_booked", bookingId: state.bookingId };
+  if (seasonSettled(state)) {
+    return {
+      ok: false,
+      reason: state.hasBooking ? "already_booked" : "already_done",
+      bookingId: state.bookingId
+    };
   }
 
   const portalToken = resolvePortalToken(property);
@@ -911,6 +942,9 @@ module.exports = {
   setOptOutForSeason,
   honorUnsubscribe,
   deriveBookingState,
+  seasonSettled,
+  verdictIsSettled,
+  SETTLED_REASONS,
   isSeasonWorkCompleted,
   getTemplates,
   saveTemplate,
