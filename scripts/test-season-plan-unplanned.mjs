@@ -146,6 +146,7 @@ try {
         seasonalOutreach: { "2026:fall": { optOutThisSeason: true } } },
       { id: "prop-declined", code: "P-DEC", customerName: "Said No", address: "4 A St", system: { zones: [1, 2, 3] } },
       { id: "prop-self", code: "P-SELF", customerName: "Booked Themselves", address: "5 A St" },
+      { id: "prop-done", code: "P-DONE", customerName: "Already Done", address: "7 A St" },
       { id: "prop-nocode", customerName: "No Code", address: "6 A St" }
     ];
     const bookingsList = [
@@ -155,6 +156,7 @@ try {
     const assess = async (property, { season, year }) => {
       if (property.seasonalOutreach?.[`${year}:${season}`]?.optOutThisSeason) return { ok: false, reason: "season_opt_out" };
       if (property.id === "prop-self") return { ok: false, reason: "already_booked", bookingId: "BK-SELF" };
+      if (property.id === "prop-done") return { ok: false, reason: "already_done", bookingId: "BK-DONE" };
       if (!property.customerName) return { ok: false, reason: "missing_name" };
       return { ok: true, customerName: property.customerName, portalToken: "t" };
     };
@@ -174,6 +176,10 @@ try {
     ok("a property already on the plan is not offered again", !placeable.includes("P-1") && !placeable.includes("P-2"), j(placeable));
     ok("a customer who booked themselves is settled, not listed",
       !placeable.includes("P-SELF") && !(r?.blocked || []).some((x) => x.code === "P-SELF"), j(r));
+    // 2026-10-04, "some have been completed": a visit that already
+    // happened is settled exactly like one on the calendar.
+    ok("a customer whose visit is already done is settled, not listed — and not a problem either",
+      !placeable.includes("P-DONE") && !(r?.blocked || []).some((x) => x.code === "P-DONE"), j(r));
 
     const blocked = r?.blocked || [];
     const by = (code) => blocked.find((x) => x.code === code);
@@ -204,6 +210,9 @@ try {
     ok("…judging eligibility with the outreach module's own gauntlet",
       /async function unplanned\([\s\S]{0,600}outreach\.assessEligibility/.test(src),
       "unplanned() invented its own eligibility");
+    ok("…and asking the gauntlet's own question for 'settled' (booked OR done)",
+      /async function unplanned\([\s\S]{0,2500}outreach\.verdictIsSettled\(verdict\)/.test(src),
+      "unplanned() compares the reason string itself");
   }
 
   // ---- 8. The wiring, and that it is LOUD -------------------------------
