@@ -210,6 +210,8 @@ try {
   ok("the PATCH route answers 409 for stale_list and line_items_locked", /err\.code === "stale_list" \|\| err\.code === "line_items_locked"/.test(SRC) && /conflict \? 409 : 400/.test(SRC));
   const CLIENT = fs.readFileSync(path.join(ROOT, "server", "material-list.js"), "utf8");
   ok("the builder sends baseUpdatedAt on its save and its unload flush", (CLIENT.match(/baseUpdatedAt: state\.list\.updatedAt/g) || []).length === 2);
+  ok("Add on a part already on the list as a purchased line (ordered, received or price-locked) starts a new Need line instead of bumping the purchased one",
+    /function isPurchased\(line\)[\s\S]{0,200}line\.status === "ordered" \|\| !!line\.poId \|\| line\.frozenPriceCents != null/.test(CLIENT) && /lines\.find\(\(l\) => l\.sku === sku && !isPurchased\(l\)\)/.test(CLIENT));
   ok("on 409 stale_list the builder keeps the edit on screen, shows the message and a Reload button — no automatic reload", /data\.code === "stale_list"/.test(CLIENT) && /changed elsewhere\. Your latest change wasn.t saved\. Reload to continue\./.test(CLIENT) && /saveReload\.hidden = !state\.staleList/.test(CLIENT) && !/if \(state\.staleList\)[^\n]*location\.reload/.test(CLIENT));
 
   // ---- 8. Combined with #367: a line with purchase history -----------
