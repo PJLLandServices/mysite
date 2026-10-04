@@ -17,9 +17,14 @@
 import * as ImagePicker from 'expo-image-picker';
 import { mediaTypeOf } from './media-type';
 
+// quality 0.40 (was 0.55), PJL-113: the upload is most of what a closing
+// sends, and the server keeps a 2400 px re-encode at quality 82 of
+// whatever arrives, so the extra detail at 0.55 was mostly discarded. This
+// is the no-native-change step; resizing on the phone (to 2400 px, before
+// upload) is the larger one and comes with the photo markup canvas.
 const OPTIONS = {
   mediaTypes: ['images'],
-  quality: 0.55,
+  quality: 0.4,
   base64: true,
   exif: false,
   allowsEditing: false,

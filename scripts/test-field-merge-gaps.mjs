@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createQueue } from "../pjl-field/src/offline/queue.mjs";
+import { classify, createRequest, createTransport } from "../pjl-field/src/offline/transport.mjs";
 
 const strip = (file) => fs.readFileSync(file, "utf8").replace(/^import [\s\S]*?;\r?\n/gm, "").replace(/\bexport /g, "");
 const FIELD = strip("pjl-field/src/offline/field.js");
@@ -77,7 +78,7 @@ function world({ role = "tech" } = {}) {
     }
     throw new Error("unexpected " + m + " " + p);
   };
-  const globals = () => ({ createQueue, readLocal, writeLocal, storeForOwner, HOST: "https://x.local",
+  const globals = () => ({ createQueue, classify, createRequest, createTransport, readLocal, writeLocal, storeForOwner, HOST: "https://x.local",
     AuthRequiredError: class AuthRequiredError extends Error { constructor() { super("Not signed in"); this.name = "AuthRequiredError"; } },
     // field.js imports this from api.js (the x-pjl-client header, #299); the
     // test runs field.js bare, as test-field-conflicts does.

@@ -8044,3 +8044,100 @@ on a test visit:
    order.
 2. Move a photo from one zone to another and confirm the work order shows it under the new zone.
 3. Delete the water-off photo.
+
+## 2026-10-04 — FIELD-SYNC-01: the field app syncs as it goes, so Finish no longer waits minutes (PJL-113; no PASS flow touched)
+
+**The defect.** Finish took 5–8 minutes on every closing. Three causes, all fixed here:
+- one server error held the whole visit's sync until Finish;
+- every change cost 3–4 round trips;
+- a server restart read as "signed out".
+
+**What changed on the phone.**
+- **Error classes.** `classify()` in `pjl-field/src/offline/transport.mjs` is the one rule:
+  - **transient** (no signal, a timeout, any 5xx including Render's HTML 502, 429, a version
+    clash) retries on its own with backoff of 2, 4, 8, 16 then 28 s, and never holds anything;
+  - **permanent** (a conflict to choose, a closed visit, a validation 4xx) holds that one entry
+    until a tap or Finish;
+  - **auth** is 401/403 only.
+- **Two lanes** (`queue.mjs` flush):
+  - **Changes, one at a time:** saves with If-Match and the three-way merge, plus photo deletes
+    and moves. A failed save holds only the later saves on that record.
+  - **Photos, two at a time:** a photo never waits for a save, and a save never waits for a photo.
+    An answer that arrives late never replaces a newer copy of the record.
+- **Fewer round trips.**
+  - The account is checked once per pass. The server's owner check below covers each request,
+    and the check is skipped for 5 minutes when the server enforces it.
+  - A save goes against the phone's last server copy. It re-reads once only on a 409, and is
+    merged and resent in the same pass.
+  - A photo goes straight up; the server dedupes by upload id.
+  - Adjacent saves to one record go as one request when nothing on the server moved.
+  - A pass with nothing to send makes no request at all.
+- **The watcher** (`offline/field.js` `watchFieldQueue`) follows the queue's own backoff
+  (`nextDelay`). A phone back in signal resumes within 30 s, with no tap.
+- **Finish** says what is left, counting down (`sync-notice.js` `finishProgressText`), for
+  example "Uploading 3 photos · 4.1 MB left · 1 change…".
+- **Picker quality** is 0.40 (was 0.55). Resizing on the phone needs the WebView canvas and comes
+  with photo markup (PJL-112).
+
+**What changed on the server.**
+- **Owner check.** A request carrying `x-pjl-field-owner` under any other session is refused with
+  403 `owner_mismatch`, at the auth gate. The session advertises `fieldOffline.ownerCheck`. A
+  phone talking to an older server keeps the old session read before every change.
+- **One If-Match rule:** `workOrders.versionMatches`, used by the PATCH route and by `update()`.
+  - A version the phone read still matches after writes that touched only photos, deleted-photo
+    tombstones or history. Those are `versionChain` steps, valid only while their head is the
+    record's version.
+  - A PATCH carrying `photos` gets no allowance.
+  - Without this rule, every photo upload made the next zone save a 409 and a re-read.
+
+**Measured** (`scripts/perf-field-sync.mjs`):
+- **Setup:** the real queue and transport against the real server; 300 ms round trip; one shared
+  1.5 MB/s uplink. The visit is 12 zones and 12 photos, with a 1.58 MB test photo at quality
+  0.55.
+- **Baseline:** main's queue and transport. **After:** this branch.
+
+| | Baseline | After |
+|---|---|---|
+| Requests, walking the visit and syncing as it goes | 113 | 26 (1 account check + 13 saves + 12 photos) |
+| Requests at Finish once caught up | 1 | 0 |
+| Requests to drain a no-signal visit | 101 | 14 |
+| Time to drain a no-signal visit, real time (`--real`, `PERF_ONLY=backlog`) | 177.8 s | 113.3 s — the uplink floor: 21 MB at 1.5 MB/s is 112 s |
+| One 500 on the first zone save | 25 pending and 0 photos on the server until Finish | all synced on the next ordinary pass |
+| Wait before resuming after a long signal drop | 15 s (fixed timer) | ≤ 29 s backoff, no tap |
+
+**Gaps, with reasons:**
+- **Request target.** The PRD's "≤ 20 requests" for the walking case cannot be met without
+  delaying sync: there are 25 separate changes, each sent as it is made. 26 is one per change plus
+  one account check. The backlog case is 14.
+- **Upload size.** Photo bytes are the remaining cost of a slow uplink. The quality step is a
+  proxy measurement only, because the iPhone's encoder differs. The real size reduction needs
+  resizing on the phone (PJL-112's canvas, then a device check).
+
+**Lifecycle walk (CLAUDE.md):**
+- **Nothing about what is recorded changes.** Sign-off gates, prices and the completion cascade
+  are untouched.
+- **Finish still requires everything uploaded** (D-C1: not now).
+- **Background upload while the phone is locked** is not attempted (D-C2: investigate later).
+- **Version check outside the phone:** the office's web pages use the same PATCH route. They gain
+  the same allowance: a photo added by the tech no longer makes the office's save a clash.
+
+**Coverage:**
+- `scripts/test-field-sync.mjs`: 13 checks; 8 fail on main's queue, and the transport checks
+  fail on main because the module does not exist there.
+- `scripts/test-field-sync-server.mjs`: 13 checks; 7 fail on the server before this change.
+- `scripts/perf-field-sync.mjs`: 11 assertions, in CI at a 40× time scale.
+- Existing suites:
+  - The merge suites are unchanged in substance and green.
+  - Mechanical updates only: three suites now pass the new module into the field.js sandbox, and
+    two source guards point at the moved code.
+  - `test-field-offline`'s fake server now answers a stale If-Match with 409, as the real server
+    does; it used to crash the test instead.
+  - `test-field-offline`'s "closed visit" fake now bumps the version when it closes the visit, as
+    the real server does.
+  - `test-field-conflicts` round 2 now expects the 409 to clear in the same pass. It used to
+    clear only on the next pass.
+
+**What still needs Patrick (real phone):**
+1. A 12-zone closing on normal signal, noting the header's pending count after each zone.
+2. Finish in 15 s or less.
+3. Airplane mode for one zone, then off: the backlog drains with no tap.

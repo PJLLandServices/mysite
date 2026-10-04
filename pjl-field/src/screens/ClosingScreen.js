@@ -28,6 +28,7 @@ import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
 import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts, removeZoneFromProperty } from '../offline/field';
 import { syncNoticeFor } from '../sync-notice';
+import { finishProgressText } from '../sync-notice';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -252,12 +253,14 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   // completed from the desk; the reverse would leave a completed visit
   // with no record of how it was accepted.
   const [finishing, setFinishing] = useState(false);
+  const [finishText, setFinishText] = useState(null);
   const finishSignOff = useCallback(async (result) => {
     setFinishing(true);
     try {
       const { queue, key } = field.current;
       queue.draft(key, 'signoff', result);
-      await flushBeforeFinish(queue, key);
+      await flushBeforeFinish(queue, key, p => setFinishText(finishProgressText(p)));
+      setFinishText('Finishing…');
       // The server's copy decides where this Finish picks up. A previous
       // tap may have completed the job and lost only its response
       // (fall-closing fix #4): then the job is done, and re-sending the
@@ -344,6 +347,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       }
     } finally {
       setFinishing(false);
+      setFinishText(null);
     }
   }, [workOrderId, wo, onFinished, findings, resolveConflicts]);
 
@@ -496,7 +500,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         ) : stage === 'closeout' ? (
           <CloseOutStage {...shared} blockers={blockers} onFinish={toSignOff} />
         ) : (
-          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} onStrokeChange={setSigning} />
+          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} busyLabel={finishText} onStrokeChange={setSigning} />
         )}
       </ScrollView>
     </View>

@@ -1709,7 +1709,7 @@ async function handleAuth(req, res, pathname) {
     } else if (session.role === "customer") {
       me = { id: session.uid, role: "customer" };
     }
-    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1, photoEdit: 1 } });
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1, photoEdit: 1, ownerCheck: 1 } });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -17948,7 +17948,7 @@ async function handleApi(req, res, pathname) {
               propertyCode,
               woCode: wo.id
             });
-            await workOrders.update(woId, { photos: [...existing, ...newMeta] });
+            await workOrders.update(woId, { photos: [...existing, ...newMeta] }, { photoOnly: true });
             photoMetas.push(...newMeta);
           } catch (photoErr) {
             console.warn("[tasks-done photos] upload failed:", photoErr?.message);
@@ -21903,7 +21903,9 @@ async function handleApi(req, res, pathname) {
         return Boolean(payload.signature && payload.status === "completed" && keys.every((k) => SIGN_AND_COMPLETE.has(k)));
       })();
       const versionCheck = ifMatch && !versionExempt ? ifMatch : null;
-      if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
+      // workOrders.versionMatches: the one If-Match rule (PJL-113) — a photo
+      // or history write since the client's read is not a clash.
+      if (!workOrders.versionMatches(existing, ifMatch, payload)) {
         const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
         const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
         // Merged "Sign, lock & generate invoice" tap (Phase 2 cascade
@@ -22554,7 +22556,7 @@ async function handleApi(req, res, pathname) {
         propertyCode,
         woCode: wo.id
       });
-      const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
+      const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] }, { photoOnly: true });
       // Audit trail per Brief A — one entry per upload batch (not per file)
       // so a 5-photo upload doesn't spam the history viewer. Photos are
       // not scope-protected so this entry stands even on locked WOs.
@@ -22604,13 +22606,13 @@ async function handleApi(req, res, pathname) {
           // Nothing to delete. A tombstone for an upload that never landed
           // is still written, so it cannot land afterwards.
           const updated = r.removedPhotos.length !== (wo.removedPhotos || []).length
-            ? await workOrders.update(id, { removedPhotos: r.removedPhotos }, { photoBookkeeping: true })
+            ? await workOrders.update(id, { removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true })
             : wo;
           return sendJson(res, 200, { ok: true, workOrder: updated, alreadyRemoved: true });
         }
         const n = Number(r.photo.n);
         await deleteWorkOrderPhotoFile(id, n);
-        const updated = await workOrders.update(id, { photos: r.photos, removedPhotos: r.removedPhotos }, { photoBookkeeping: true });
+        const updated = await workOrders.update(id, { photos: r.photos, removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true });
         // A finding copied to the property lists its photos by number; the
         // property must not keep pointing at a photo that no longer exists.
         if (wo.propertyId) {
@@ -22634,7 +22636,7 @@ async function handleApi(req, res, pathname) {
       if (m.alreadyRemoved) return sendJson(res, 200, { ok: true, workOrder: wo, alreadyRemoved: true });
       if (m.error) return sendJson(res, m.error === "photo_not_found" ? 404 : 422, { ok: false, error: m.error, errors: [m.message] });
       if (m.unchanged) return sendJson(res, 200, { ok: true, workOrder: wo, moved: { n: Number(m.photo.n), from: m.from, to: m.to }, unchanged: true });
-      const updated = await workOrders.update(id, { photos: m.photos });
+      const updated = await workOrders.update(id, { photos: m.photos }, { photoOnly: true });
       if (m.detached?.deferredId && wo.propertyId) {
         try {
           const entry = (await properties.listDeferred(wo.propertyId)).find((d) => d.id === m.detached.deferredId);
@@ -30126,6 +30128,16 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
         }
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      // A field phone names the account its queued work was recorded under
+      // (x-pjl-field-owner, pjl-field/src/offline/transport.mjs). A session
+      // that is another account must not take that work: it would land
+      // under the wrong tech. Checked here, on the request itself, so the
+      // phone no longer reads /api/session before every change (PJL-113).
+      const fieldOwner = req.headers["x-pjl-field-owner"];
+      if (fieldOwner && String(fieldOwner) !== String(session.uid)) {
+        return sendJson(res, 403, { ok: false, error: "owner_mismatch", errors: ["Sign in with the account that recorded this work."] });
       }
 
       // Admin action log. This gate is the ONE place every guarded request

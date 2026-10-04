@@ -1497,6 +1497,8 @@ async function appendHistory(id, entry) {
   if (entry?.after !== undefined) stored.after = entry.after;
   next.history.push(stored);
   next.updatedAt = now;
+  // History never clashes with a client's edit (versionMatches).
+  chainQuietWrite(records[idx], next);
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -1829,14 +1831,37 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch, { ifMatch = null, systemWrite = false, photoBookkeeping = false } = {}) {
+// THE rule for a work order's If-Match (PJL-113). A version the client
+// read still matches when every write since it only touched what a client
+// edit never carries: the photo list, deleted-photo tombstones, history.
+// The field phone uploads photos alongside its zone saves; without this,
+// each photo (and the history line it writes) made the next zone save a
+// 409 and a re-read. A PATCH that itself carries `photos` gets no such
+// allowance — it could overwrite a photo it never saw.
+//
+// `versionChain` is { head, bases }: the versions those quiet writes
+// stepped over, valid only while `head` is still the record's version, so
+// any other write (a save, a status change, a stamp) ends the allowance.
+function versionMatches(wo, ifMatch, patch = {}) {
+  if (!ifMatch || !wo?.updatedAt || ifMatch === wo.updatedAt) return true;
+  if (patch && (Object.prototype.hasOwnProperty.call(patch, "photos") || Object.prototype.hasOwnProperty.call(patch, "removedPhotos"))) return false;
+  const chain = wo.versionChain;
+  return !!chain && chain.head === wo.updatedAt && Array.isArray(chain.bases) && chain.bases.includes(ifMatch);
+}
+function chainQuietWrite(current, next) {
+  const prior = current.versionChain && current.versionChain.head === current.updatedAt && Array.isArray(current.versionChain.bases)
+    ? current.versionChain.bases : [];
+  next.versionChain = { head: next.updatedAt, bases: [...prior, current.updatedAt].filter(Boolean).slice(-50) };
+}
+
+async function update(id, patch, { ifMatch = null, systemWrite = false, photoBookkeeping = false, photoOnly = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
   const current = records[idx];
   // Optimistic concurrency, checked HERE — inside the store lock, against
   // the record as it is at the moment of the write (fall-closing #1).
-  if (ifMatch && current.updatedAt && ifMatch !== current.updatedAt) {
+  if (!versionMatches(current, ifMatch, patch)) {
     const err = new Error("version_conflict");
     err.code = "VERSION_CONFLICT";
     err.current = current;
@@ -2077,6 +2102,9 @@ async function update(id, patch, { ifMatch = null, systemWrite = false, photoBoo
     }
   }
   next.updatedAt = new Date().toISOString();
+  // A photo-only write (the photo routes pass photoOnly) leaves earlier
+  // versions valid for a client's other edits.
+  if (photoOnly && Object.keys(patch).every((k) => k === "photos" || k === "removedPhotos")) chainQuietWrite(current, next);
 
   // Status transition gets a free history entry — caller (dispatcher)
   // handles other mutation types via appendHistory() directly. Mirrors
@@ -2715,6 +2743,7 @@ async function listBuildWosForProject(projectId) {
 
 module.exports = {
   TEMPLATES,
+  versionMatches,
   ZONE_STATUSES,
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,

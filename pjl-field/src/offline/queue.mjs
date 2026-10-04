@@ -1,3 +1,5 @@
+import { classify } from './transport.mjs';
+
 // Native-independent durable outbox. Mutations commit synchronously before
 // notifying a screen. The network never owns the only copy of field evidence.
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -153,6 +155,18 @@ export function createQueue({ store, transport }) {
     error: state.errors[key] || null,
     syncing: !!draining,
   });
+  // What is still to send for these records, for Finish to show (PJL-113):
+  // photos and their size, other changes, and anything held.
+  const progress = (...keys) => {
+    const mine = state.pending.filter(p => keys.includes(p.key));
+    const photos = mine.filter(p => p.kind === 'photo');
+    return {
+      photos: photos.length,
+      bytes: photos.reduce((sum, p) => sum + (Number(p.preview?.bytes) || 0), 0),
+      changes: mine.length - photos.length,
+      held: mine.filter(p => p.held).map(p => p.held.message),
+    };
+  };
   const view = key => {
     if (!state.records[key]) return null;
     const value = copy(state.records[key]);
@@ -203,6 +217,8 @@ export function createQueue({ store, transport }) {
     const full = { ...payload, clientUploadId: id };
     store.putBlob(id, full); // Orphan on failed queue commit is safe; losing bytes is not.
     const { data, ...preview } = full;
+    // Its size, for Finish's "N photos · X MB left" (PJL-113).
+    preview.bytes = Math.round(String(data || '').length * 0.75);
     // `sent: false` until the first upload attempt. An entry that was never
     // sent cannot be on the server, so deleting it needs no server call.
     commit(s => { s.sequence++; s.pending.push({ id, key, kind: 'photo', preview, sent: false }); });
@@ -255,11 +271,24 @@ export function createQueue({ store, transport }) {
     });
     return view(key);
   };
+  // Is `a` the same or a newer server copy than `b`? Photo uploads and
+  // saves now run side by side, so their answers can arrive out of order;
+  // an older answer must never replace a newer one.
+  const newer = (a, b) => {
+    const ta = Date.parse(a?.updatedAt), tb = Date.parse(b?.updatedAt);
+    return !(Number.isFinite(ta) && Number.isFinite(tb)) || ta >= tb;
+  };
+  // A held entry's error is the record's error while it is held, so the
+  // notice keeps naming it after other changes go through.
+  const heldError = (s, key) => {
+    const held = s.pending.find(p => p.key === key && p.held);
+    return held ? held.held : null;
+  };
   // `sent`: what actually went to the server for each field (a merge of the
   // tech's edit and the office's changes), when anything was sent.
   const acknowledge = (entry, remote, sent = {}) => {
     commit(s => {
-      s.records[entry.key] = copy(remote);
+      if (newer(remote, s.records[entry.key])) s.records[entry.key] = copy(remote);
       s.pending = s.pending.filter(p => p.id !== entry.id);
       // Rebase the next edit's comparison onto the acknowledged normalized
       // record, but only where it was based on this exact submitted value —
@@ -276,87 +305,234 @@ export function createQueue({ store, transport }) {
           if (next && onlyMine && equal(next.before[field], submitted)) next.before[field] = copy(remote[field] ?? null);
         }
       }
-      delete s.errors[entry.key];
+      const still = heldError(s, entry.key);
+      if (still) s.errors[entry.key] = still;
+      else delete s.errors[entry.key];
     });
     if (entry.kind === 'photo') { try { store.deleteBlob(entry.id); } catch {} }
   };
+
+  // ---- Sending (PJL-113) ------------------------------------------------
+  //
+  // One pass sends everything it can, in two lanes:
+  //   - the CHANGE lane, one at a time: saves (with If-Match and the three-
+  //     way merge), photo deletes and moves. Saves to one record stay in
+  //     order; a failed save holds only the saves after it ON THAT RECORD.
+  //   - the PHOTO lane, two uploads at once. A photo never waits for a
+  //     save, and a save never waits for a photo.
+  // Requests: the account is checked once per pass (and the server refuses
+  // a write under another account on its own); a save is sent against the
+  // phone's last server copy and re-reads only when the server says the
+  // record moved (409); a photo goes straight up (the server dedupes by
+  // upload id). Before this, every change cost a session read, a full
+  // record read and often a second session read: 101 requests for a
+  // 12-zone, 12-photo closing.
+  //
+  // Errors (transport.mjs classify, the one rule):
+  //   transient → retried with backoff (2, 4, 8, 16, 28 s), never held;
+  //   permanent → that entry is held until a tap or Finish (retry: true);
+  //   auth      → sign in.
+  // A transient failure with no answer at all (no signal) ends the pass:
+  // every other request would only wait out its own timeout.
+  // The last step plus its jitter stays under 30 s: a phone that comes
+  // back into signal resumes within 30 s however long it was out.
+  const BACKOFF = [2000, 4000, 8000, 16000, 28000];
+  const OWNER_CHECK_MS = 5 * 60 * 1000;
+  let failures = 0, retryAt = 0, ownerCheckedAt = 0, rerun = null;
+  const backoff = () => {
+    failures += 1;
+    retryAt = Date.now() + BACKOFF[Math.min(failures, BACKOFF.length) - 1] + Math.floor(Math.random() * 1000);
+  };
+  const errorRecord = (err, entryId) => ({
+    message: err.message || 'Waiting for connection', code: err.code || 'network', kind: classify(err),
+    ...(err.paths ? { paths: err.paths, clashes: err.clashes, entryId: err.entryId } : entryId ? { entryId } : {}),
+  });
+  // A save, against `remote`. Returns { result, sent }.
+  const sendPatch = async (entry, remote) => {
+    const changes = {};
+    const conflicts = [];
+    for (const [field, value] of Object.entries(entry.patch)) {
+      if (includesSubmitted(remote[field], value)) continue; // Accepted, response lost.
+      if (equal(remote[field], entry.before[field])) { changes[field] = value; continue; }
+      // The office moved this field too: merge instead of refusing.
+      const merged = merge3(entry.before[field], value, remote[field], entry.prefer || null, [field], conflicts);
+      if (!equal(merged, remote[field])) changes[field] = merged;
+    }
+    if (conflicts.length) {
+      const paths = conflicts.map(c => c.path);
+      throw Object.assign(issue(
+        `The office also changed ${paths.slice(0, 2).join(' and ')}${paths.length > 2 ? ` (+${paths.length - 2} more)` : ''}. Choose which version to keep.`,
+        'conflict'), { paths, clashes: conflicts, entryId: entry.id });
+    }
+    if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
+      throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
+    }
+    return {
+      result: Object.keys(changes).length ? await transport.patch(entry.key, changes, remote.updatedAt) : remote,
+      sent: changes,
+    };
+  };
+  // Saves queued back to back on one record, made one after another on
+  // the phone, go as ONE request when nothing on the server has moved
+  // since: the same end state, one round trip. Only adjacent saves (no
+  // other change to that record between), none carrying a conflict
+  // answer, each made on top of the one before; anything else goes one by
+  // one through the ordinary merge.
+  const coalesce = (entry, remote) => {
+    if (entry.kind !== 'patch' || entry.prefer) return null;
+    const run = [entry];
+    for (const p of state.pending.slice(state.pending.indexOf(entry) + 1)) {
+      if (p.key !== entry.key) continue;
+      if (p.kind === 'photo') continue; // Photos are their own lane.
+      if (p.kind !== 'patch' || p.prefer || p.held) break;
+      // Made on top of the saves before it: where it touches a field they
+      // set, it started from their value.
+      const sofar = Object.assign({}, ...run.map(r => r.patch));
+      if (!Object.keys(p.patch).every(f => !(f in sofar) || equal(p.before[f], sofar[f]))) break;
+      run.push(p);
+    }
+    if (run.length < 2) return null;
+    const patch = {}, before = {};
+    for (const r of run) for (const [f, v] of Object.entries(r.patch)) { if (!(f in before)) before[f] = r.before[f] ?? null; patch[f] = v; }
+    // Nothing the office changed: every field is still what the first save
+    // was made against.
+    if (!Object.keys(before).every(f => equal(remote[f] ?? null, before[f]))) return null;
+    return { run, patch };
+  };
+
   const flush = ({ retry = false } = {}) => {
-    if (draining) return draining;
+    if (draining) {
+      // A tap or Finish asks for held entries too: run again right after.
+      if (retry) return (rerun ||= draining.then(() => { rerun = null; return flush({ retry: true }); }));
+      return draining;
+    }
+    if (!state.pending.length) return Promise.resolve();
     draining = (async () => {
-      const blocked = new Set(Object.entries(state.errors)
-        .filter(([, e]) => !retry && !['network', 'auth', 'version_conflict'].includes(e.code)).map(([key]) => key));
-      // version_conflict: the server's in-lock If-Match check refused a save
-      // that raced another (fall-closing #1 round 2). The next pass re-reads
-      // and merges, so it retries on its own like a network error.
+      let transientSeen = false, progressed = false, down = false;
+      const stopped = new Set();   // records whose saves stopped this pass
+      const tried = new Set();     // entries already attempted this pass
+      const inFlight = new Set();
+      if (retry) commit(s => { for (const p of s.pending) delete p.held; });
+      const fail = (entry, err) => {
+        const rec = errorRecord(err, entry.id);
+        if (rec.kind === 'transient') transientSeen = true;
+        if (rec.kind === 'auth') ownerCheckedAt = 0; // Check the account afresh next pass.
+        if (rec.kind === 'transient' && err.code === 'network') down = true;
+        commit(s => {
+          s.errors[entry.key] = rec;
+          const q = s.pending.find(p => p.id === entry.id);
+          if (q && rec.kind === 'permanent') q.held = rec;
+        });
+      };
       try {
-        if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
-        while (true) {
-          const entry = state.pending.find(p => !blocked.has(p.key));
-          if (!entry) break;
+        const cached = Date.now() - ownerCheckedAt < OWNER_CHECK_MS && transport.ownerEnforced?.();
+        if (!cached) {
+          if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
+          ownerCheckedAt = Date.now();
+        }
+      } catch (err) {
+        const rec = errorRecord(err);
+        commit(s => { for (const p of s.pending) s.errors[p.key] = rec; });
+        if (rec.kind === 'transient') backoff();
+        return;
+      }
+      const uploadPending = id => state.pending.some(p => p.kind === 'photo' && p.id === id);
+      const changeLane = async () => {
+        while (!down) {
+          const entry = state.pending.find(p => p.kind !== 'photo' && !tried.has(p.id) && !stopped.has(p.key)
+            // A delete or move waits for its photo's upload to settle.
+            && !((p.kind === 'photoDelete' || p.kind === 'photoMove') && p.photo.clientUploadId && uploadPending(p.photo.clientUploadId)));
+          if (!entry) return;
+          tried.add(entry.id);
+          if (entry.held) { if (entry.kind === 'patch') stopped.add(entry.key); continue; }
           try {
-            if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
-            const remote = await transport.read(entry.key);
-            if (!remote) throw issue('The server no longer has this record. Your local copy is retained.', 'missing');
-            let result, sent;
-            if (entry.kind === 'photo') {
-              if ((remote.photos || []).some(p => p.clientUploadId === entry.id)) result = remote;
-              else {
-                const bytes = store.getBlob(entry.id);
-                if (!bytes) throw issue('The locally recorded photo cannot be read. Keep the app installed.', 'storage');
-                // From here the photo may reach the server even if this
-                // attempt fails, so a delete must ask the server (deletePhoto).
-                if (entry.sent === false) commit(s => { const q = s.pending.find(p => p.id === entry.id); if (q) q.sent = true; });
-                result = await transport.photo(entry.key, bytes);
-              }
-            } else if (entry.kind === 'photoDelete' || entry.kind === 'photoMove') {
+            let remote = state.records[entry.key];
+            if (!remote) {
+              remote = await transport.read(entry.key);
+              if (!remote) throw issue('The server no longer has this record. Your local copy is retained.', 'missing');
+            }
+            if (entry.kind === 'photoDelete' || entry.kind === 'photoMove') {
               // The server answers a photo that is already gone with 200, so
-              // a retry after a lost response acknowledges. A move it refuses
-              // outright (the zone left the visit, or no such photo) cannot
-              // succeed on any retry: it is dropped, and the photo shows
-              // where the server has it, rather than holding the visit's sync.
+              // a retry after a lost response acknowledges. A move it
+              // refuses outright (the zone left the visit, or no such photo)
+              // cannot succeed on any retry: it is dropped, and the photo
+              // shows where the server has it, rather than holding the sync.
+              let result;
               try { result = await transport.photoEdit(entry.key, entry); }
               catch (err) {
                 if (entry.kind !== 'photoMove' || ![404, 422].includes(err.status)) throw err;
                 result = remote;
               }
-            } else {
-              const changes = {};
-              const conflicts = [];
-              for (const [field, value] of Object.entries(entry.patch)) {
-                if (includesSubmitted(remote[field], value)) continue; // Accepted, response lost.
-                if (equal(remote[field], entry.before[field])) { changes[field] = value; continue; }
-                // The office moved this field too: merge instead of refusing.
-                const merged = merge3(entry.before[field], value, remote[field], entry.prefer || null, [field], conflicts);
-                if (!equal(merged, remote[field])) changes[field] = merged;
-              }
-              if (conflicts.length) {
-                const paths = conflicts.map(c => c.path);
-                throw Object.assign(issue(
-                  `The office also changed ${paths.slice(0, 2).join(' and ')}${paths.length > 2 ? ` (+${paths.length - 2} more)` : ''}. Choose which version to keep.`,
-                  'conflict'), { paths, clashes: conflicts, entryId: entry.id });
-              }
-              if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
-                throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
-              }
-              sent = changes;
-              result = Object.keys(changes).length
-                ? await transport.patch(entry.key, changes, remote.updatedAt)
-                : remote;
+              acknowledge(entry, result);
+              progressed = true;
+              continue;
             }
-            acknowledge(entry, result, sent);
+            for (let attempt = 0; ; attempt++) {
+              try {
+                const group = coalesce(entry, remote);
+                if (group) {
+                  const result = await transport.patch(entry.key, group.patch, remote.updatedAt);
+                  for (const r of group.run) { acknowledge(r, result); tried.add(r.id); }
+                } else {
+                  const { result, sent } = await sendPatch(entry, remote);
+                  acknowledge(entry, result, sent);
+                }
+                progressed = true;
+                break;
+              } catch (err) {
+                // The record moved on the server since the phone's copy:
+                // read it once and merge against it, in this same pass.
+                if (err.code !== 'version_conflict' || attempt > 0) throw err;
+                remote = await transport.read(entry.key);
+                if (!remote) throw issue('The server no longer has this record. Your local copy is retained.', 'missing');
+              }
+            }
           } catch (err) {
-            blocked.add(entry.key);
-            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network',
-              ...(err.paths ? { paths: err.paths, clashes: err.clashes, entryId: err.entryId } : {}) }; });
+            if (entry.kind === 'patch') stopped.add(entry.key);
+            fail(entry, err);
           }
         }
-      } catch (err) {
-        commit(s => {
-          for (const p of s.pending) s.errors[p.key] = { message: err.message, code: err.code || 'network' };
-        });
+      };
+      const photoLane = async () => {
+        while (!down) {
+          const entry = state.pending.find(p => p.kind === 'photo' && !tried.has(p.id) && !inFlight.has(p.id));
+          if (!entry) return;
+          tried.add(entry.id);
+          if (entry.held) continue;
+          inFlight.add(entry.id);
+          try {
+            const bytes = store.getBlob(entry.id);
+            if (!bytes) throw issue('The locally recorded photo cannot be read. Keep the app installed.', 'storage');
+            // From here the photo may reach the server even if this attempt
+            // fails, so a delete must ask the server (deletePhoto).
+            if (entry.sent === false) commit(s => { const q = s.pending.find(p => p.id === entry.id); if (q) q.sent = true; });
+            const result = await transport.photo(entry.key, bytes);
+            acknowledge(entry, result);
+            progressed = true;
+          } catch (err) {
+            fail(entry, err);
+          } finally { inFlight.delete(entry.id); }
+        }
+      };
+      // Rounds: a delete or move unblocked by its photo's upload goes in
+      // the same pass rather than the next.
+      for (let round = 0; round < 5 && !down; round++) {
+        const before = tried.size;
+        await Promise.all([changeLane(), photoLane(), photoLane()]);
+        if (tried.size === before) break;
       }
+      if (transientSeen) backoff();
+      else if (progressed || !state.pending.length) { failures = 0; retryAt = 0; }
     })().finally(() => { draining = null; emit(); });
     return draining;
+  };
+  // When the next pass should run, in ms: after a transient failure, its
+  // backoff; with sendable work left, soon; with nothing to send (or only
+  // held entries, which wait for a tap or Finish), null.
+  const nextDelay = () => {
+    if (!state.pending.some(p => !p.held)) return null;
+    if (failures) return Math.max(0, retryAt - Date.now());
+    return 1000;
   };
   // The tech's answer to a true conflict: keep the phone's version of the
   // contested parts, or take the office's. Everything that did not
@@ -375,6 +551,7 @@ export function createQueue({ store, transport }) {
     commit(s => {
       for (const p of s.pending) {
         if (p.key !== key || p.kind !== 'patch') continue;
+        delete p.held; // Answered: it goes on the next pass.
         if (!shown) { p.prefer = prefer; continue; } // An error recorded by the previous release.
         if (p.id !== shown.entryId) continue;
         const answers = typeof p.prefer === 'string' || !p.prefer ? {} : { ...p.prefer };
@@ -391,7 +568,7 @@ export function createQueue({ store, transport }) {
     });
   };
   return {
-    view, patch, photo, deletePhoto, movePhoto, status, flush, resolveConflict,
+    view, patch, photo, deletePhoto, movePhoto, status, progress, flush, nextDelay, resolveConflict,
     seed(key, remote) {
       const currentTime = Date.parse(state.records[key]?.updatedAt);
       const incomingTime = Date.parse(remote.updatedAt);
