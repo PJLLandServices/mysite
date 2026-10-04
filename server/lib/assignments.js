@@ -14,10 +14,12 @@
 // from the send it claims to predict, and its whole value is that it
 // cannot.
 //
-// One verdict is assignment-specific: "already_booked" here is not a
+// One kind of verdict is assignment-specific: a SETTLED one
+// (outreach.verdictIsSettled — "already_booked", "already_done") is not a
 // problem to fix. A customer with a real seasonal booking made their own
-// appointment; the assignment writer's job for them is already done, so
-// the preflight reports them as settled rather than skipped-with-a-frown.
+// appointment, and one whose visit already happened is finished; the
+// assignment writer's job for them is done, so the preflight reports them
+// as settled rather than skipped-with-a-frown.
 //
 // Collaborators are injectable (deps) the way resequence.js takes travel
 // functions: tests hand in fixtures and never touch a data file; the
@@ -40,7 +42,7 @@ const BUCKETS = ["morning", "afternoon"];
 // the UI would render as raw snake_case.
 const PREFLIGHT_OUTCOMES = Object.freeze({
   ready: "Would be sent the assignment.",
-  settled: "Already has their own booking this season — nothing to send.",
+  settled: "Already has their own booking this season, or already had the visit — nothing to send.",
   no_such_property: "The plan references a property code that no longer exists.",
   inactive: "Property is archived or deleted.",
   not_eligible: "Not eligible for this season's service.",
@@ -103,8 +105,9 @@ async function preflight(season, year, deps = {}) {
 
         const verdict = await assess(property, { season, year });
         if (!verdict.ok) {
-          if (verdict.reason === "already_booked") {
-            // Their own booking stands; the writer has nothing to do.
+          if (outreach.verdictIsSettled(verdict)) {
+            // Their own booking stands, or the visit is done; the writer
+            // has nothing to do.
             row.outcome = "settled";
             row.bookingId = verdict.bookingId || null;
             summary.settled += 1;
@@ -428,9 +431,11 @@ async function unplanned(season, year, deps = {}) {
     if (!property.code) { blocked.push({ ...row, reason: "no_code" }); continue; }
     const verdict = await assess(property, { season, year });
     if (!verdict.ok) {
-      // A customer who already booked their own appointment is settled,
-      // not a problem — the writer has nothing to do for them.
-      if (verdict.reason === "already_booked") continue;
+      // A customer who already booked their own appointment, or whose
+      // visit already happened, is settled, not a problem — the writer
+      // has nothing to do for them. Same question the preflight asks
+      // (outreach.verdictIsSettled): two readers, one rule.
+      if (outreach.verdictIsSettled(verdict)) continue;
       blocked.push({ ...row, reason: verdict.reason });
       continue;
     }

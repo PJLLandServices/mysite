@@ -2,6 +2,29 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-04 (The Not-on-the-plan tray kept customers who had already found a home, or were
+already done):** Patrick, on the Season Plan's tray of 17: *"Fortunately some have found homes,
+and some have been completed. Can you take a look at why 'not on the plan' isn't being
+found?"* Two readers of one question. The BOARD (`gatherBookedRows`) finds a customer's visit
+through the lead their property is linked to and keeps a completed stop on its day as *done*.
+The TRAY (`assignments.unplanned` → `outreach.assessEligibility` → `deriveBookingState`) found
+a booking only by its `propertyId` stamp — null whenever the lead was linked to the property
+AFTER the booking was mirrored, or never linked at all — and read a completed visit as *not
+booked*. So a customer who booked themselves and was linked later, and a customer whose closing
+was already done, were both offered a route day again. **Fixed by naming the rule once, in
+each place it was missing:** `bookings.belongsToProperty(record, property)` — the id stamp, the
+lead link (`property.leadIds`), the address (`addressNormalized`) — and `listForProperty`, which
+`deriveBookingState` now reads (the id-only `listByProperty` stays for its other callers).
+`outreach.seasonSettled(state)` — booked OR completed — is what `assessEligibility` asks; it
+answers `already_booked` or the new `already_done`, and `outreach.verdictIsSettled(verdict)` is
+the one question the preflight and the tray ask of it (neither compares the string any more).
+Cascades, walked: the preflight and `assign()` now count a completed customer as *settled*
+(nothing created, nothing sent); outreach's bulk send skips them as `already_done` and the
+outreach screen shows **Done** on the row instead of *Not booked*; the customer portal already
+read `completed` and is unchanged. NOT touched: the board's own reader, `isInSeasonWindow`, the
+`fall_close_` service test (an October repair is still not a closing), the plan file. Coverage:
+`scripts/test-unplanned-settled.mjs` (38, real readers over a sandbox store; 21 of them fail on
+the old code) and two new assertions in `test-season-plan-unplanned.mjs`, both in `build:check`.
 **2026-10-02, same hour (The booking page asks before it books the wrong season):** Patrick,
 on the same customer: *"I believe the webpage should prompt the client: 'Oops — it looks like
 you may be looking for a season in the past. We are currently booking for (upcoming season).

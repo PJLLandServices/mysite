@@ -233,6 +233,11 @@
     if (row.bookingState?.hasBooking) {
       return `<span class="outreach-badge outreach-badge-booked">Booked ${escapeHtml(row.bookingState.bookingId || "")}</span>`;
     }
+    // The visit already happened: settled, like booked — the server's
+    // gauntlet skips them as already_done, so say so before the send.
+    if (row.bookingState?.completed) {
+      return `<span class="outreach-badge outreach-badge-booked">Done</span>`;
+    }
     if (row.optedOutSeason) {
       return `<span class="outreach-badge outreach-badge-warn">Skip this season</span>`;
     }
@@ -250,6 +255,7 @@
 
   function rowDisabledReason(row) {
     if (row.bookingState?.hasBooking) return `Booked — ${row.bookingState.bookingId}`;
+    if (row.bookingState?.completed) return "This season's visit is already done.";
     if (row.missingName) return "Add a customer name on the property page before sending.";
     if (row.optedOutSeason) return "Skipped for this season.";
     if (row.optedOutAll || (!row.commPrefs.seasonalRemindersSMS && !row.commPrefs.seasonalRemindersEmail)) {
@@ -529,6 +535,7 @@
     const reasons = {
       missing_name: 0,
       season_opt_out: 0,
+      already_done: 0,
       no_portal_token: 0,
       no_phone: 0,
       no_email: 0,
@@ -542,6 +549,7 @@
       if (!row) continue;
       if (row.missingName) { reasons.missing_name += 1; continue; }
       if (row.optedOutSeason) { reasons.season_opt_out += 1; continue; }
+      if (row.bookingState?.completed) { reasons.already_done += 1; continue; }
       if (!row.portalToken) { reasons.no_portal_token += 1; continue; }
       const smsOk = wantSms && row.phone && row.commPrefs.seasonalRemindersSMS;
       const emailOk = wantEmail && row.email && row.commPrefs.seasonalRemindersEmail;
@@ -560,6 +568,7 @@
     const labels = {
       missing_name: "missing name",
       season_opt_out: "marked skip-this-season",
+      already_done: "this season's visit already done",
       no_portal_token: "no portal token",
       no_phone: "no phone on file",
       no_email: "no email on file",
