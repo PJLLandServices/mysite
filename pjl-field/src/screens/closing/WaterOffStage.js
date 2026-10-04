@@ -7,14 +7,14 @@
 // is nothing to photograph.
 
 import { useState } from 'react';
-import { Alert, Image, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { uploadWoPhotos } from '../../api';
-import { woPhotoUri } from '../../api';
-import { colors, radius, space, type } from '../../theme';
+import { space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, ChoiceRow, Section } from './parts';
+import PhotoThumbs from './PhotoThumbs';
 
-export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, photoUri }) {
+export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, photoUri, deletePhoto }) {
   const [busy, setBusy] = useState(false);
   const photos = (wo?.photos || []).filter((p) => p.label === 'water_off');
 
@@ -50,20 +50,7 @@ export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, p
       </Section>
 
       <Section title="Photo" footer="Optional, but worth having whenever you closed it yourself.">
-        {photos.length ? (
-          <View style={styles.thumbs}>
-            {photos.map((p) => (
-              <Image
-                key={p.n}
-                source={{ uri: photoUri(p) || woPhotoUri(wo.id, p) }}
-                style={styles.thumb}
-                resizeMode="cover"
-              />
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.none}>No photo attached.</Text>
-        )}
+        <PhotoThumbs wo={wo} photos={photos} photoUri={photoUri} onDelete={deletePhoto} empty="No photo attached." />
       </Section>
 
       <View style={styles.actions}>
@@ -94,9 +81,6 @@ export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, p
 }
 
 const styles = StyleSheet.create({
-  thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, padding: space.md },
-  thumb: { width: 96, height: 96, borderRadius: radius.card, backgroundColor: colors.separator },
-  none: { ...type.caption, padding: space.lg },
   actions: { gap: space.sm },
   hint: { ...type.caption, textAlign: 'center' },
 });

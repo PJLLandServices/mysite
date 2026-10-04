@@ -80,6 +80,20 @@ function forOwner(id) {
         const prior = queues.get(id).view(key);
         return { ...data.workOrder, property: prior?.property || null, lead: prior?.lead || null };
       },
+      // A queued photo delete or move (PJL-110/111). By upload id when the
+      // phone took the photo — it may not know the server's number — else by
+      // number.
+      photoEdit: async (key, entry) => {
+        const session = await request('/api/session');
+        if (!session.authenticated || session.user?.id !== id) throw Object.assign(new AuthRequiredError(), { code: 'auth' });
+        if (session.fieldOffline?.photoEdit !== 1) throw Object.assign(new Error('The server needs the photo delete and move update. Your change is kept on this phone.'), { code: 'server_update' });
+        const which = entry.photo.clientUploadId ? `upload/${encodeURIComponent(entry.photo.clientUploadId)}` : String(entry.photo.n);
+        const data = await request(`/api/work-orders/${encodeURIComponent(key.slice(3))}/photos/${which}`, entry.kind === 'photoDelete'
+          ? { method: 'DELETE' }
+          : { method: 'PATCH', body: { zoneNumber: entry.zoneNumber } });
+        const prior = queues.get(id).view(key);
+        return { ...data.workOrder, property: prior?.property || null, lead: prior?.lead || null };
+      },
     };
     queues.set(id, createQueue({ store: storeForOwner(id), transport }));
   }

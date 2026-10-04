@@ -390,6 +390,10 @@ function blankWorkOrder() {
     // Issue photos reference back via issueId so the editor can group
     // them per issue at render time.
     photos: [],
+    // Deleted photos, as tombstones with no bytes: { n, clientUploadId,
+    // removedAt, by }. Keeps a photo number from being reused and a deleted
+    // upload from landing again (lib/wo-photo-edits.js, PJL-110).
+    removedPhotos: [],
     // Customer sign-off — the legally binding moment per spec §4.3.2.
     // imageData is the dataURL of the signature canvas; ip + userAgent
     // are captured server-side at sign time (never trust the client).
@@ -636,6 +640,7 @@ function hydrate(w) {
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
     photos: Array.isArray(w?.photos) ? w.photos : [],
+    removedPhotos: Array.isArray(w?.removedPhotos) ? w.removedPhotos : [],
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
     serviceChecklist: { ...(w?.serviceChecklist || {}) },
     signature: { ...base.signature, ...(w?.signature || {}) },
@@ -1824,7 +1829,7 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
+async function update(id, patch, { ifMatch = null, systemWrite = false, photoBookkeeping = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
@@ -1985,6 +1990,10 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
   // tech-mode photo-upload versions v17-v23. Fix lives here, not in
   // the upload UI.
   if (Array.isArray(patch.photos)) next.photos = patch.photos;
+  // Deleted-photo tombstones (PJL-110, lib/wo-photo-edits.js). Written only
+  // by the photo routes, under the photo lock — never from a PATCH body, so
+  // no client can un-delete a photo or free a photo number for reuse.
+  if (photoBookkeeping && Array.isArray(patch.removedPhotos)) next.removedPhotos = patch.removedPhotos;
   // On-site quote field — shallow-merged so partial updates don't clobber
   // siblings. The endpoints handle field-by-field validation; this layer
   // just persists what's allowed through.
