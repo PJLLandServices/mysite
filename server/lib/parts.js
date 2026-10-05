@@ -9,8 +9,19 @@
 //   {
 //     "added":   { "<sku>": { ...full part record, addedAt: <ISO> } },
 //     "edited":  { "<sku>": { ...field subset, editedAt: <ISO> } },
-//     "deleted": [ "<sku>", "<sku>", ... ]
+//     "deleted": [ "<sku>", "<sku>", ... ],
+//     "merged":  { "<alias sku>": { into, at, by, supplierId, origin, record } }
 //   }
+//
+// MERGED (Patrick, 2026-10-05). Two catalog records can turn out to be one
+// physical part entered twice — "405007" by hand and "405-007" by a
+// supplier import. The duplicate is RETIRED, never deleted: it leaves the
+// effective catalog, and a marker keeps where it went (`into`), whose
+// number it was (`supplierId` — it lives on as that supplier's part number
+// on the canonical part), and its whole record so the merge can be undone.
+// canonicalSku() is the one answer to "which part is this number today?";
+// every door that accepts a part number asks it. A retired number can never
+// be added, imported or restored as a part again while its marker stands.
 //
 // Merge precedence (read path):
 //   1. Start from baseline.parts
@@ -29,7 +40,7 @@ const path = require("node:path");
 
 const FILE = path.join(__dirname, "..", "data", "parts-overrides.json");
 
-const EMPTY_OVERRIDES = { added: {}, edited: {}, deleted: [] };
+const EMPTY_OVERRIDES = { added: {}, edited: {}, deleted: [], merged: {} };
 
 // Canonical unit list — seeded from observed values in parts.json. The
 // UI surfaces these as a dropdown but allows free-form override so a
@@ -74,7 +85,7 @@ async function readOverrides() {
     const raw = await fs.readFile(FILE, "utf8");
     return hydrate(JSON.parse(raw || "{}"));
   } catch {
-    return { ...EMPTY_OVERRIDES, added: {}, edited: {}, deleted: [] };
+    return { ...EMPTY_OVERRIDES, added: {}, edited: {}, deleted: [], merged: {} };
   }
 }
 
@@ -82,8 +93,41 @@ function hydrate(o) {
   return {
     added: (o && typeof o.added === "object" && o.added) ? o.added : {},
     edited: (o && typeof o.edited === "object" && o.edited) ? o.edited : {},
-    deleted: Array.isArray(o?.deleted) ? o.deleted.filter((x) => typeof x === "string") : []
+    deleted: Array.isArray(o?.deleted) ? o.deleted.filter((x) => typeof x === "string") : [],
+    merged: hydrateMerged(o && o.merged)
   };
+}
+
+// A marker is only believed when it names a target. Anything else in the
+// section is ignored rather than guessed at.
+function hydrateMerged(m) {
+  const out = {};
+  if (!m || typeof m !== "object") return out;
+  for (const [alias, rec] of Object.entries(m)) {
+    if (rec && typeof rec === "object" && typeof rec.into === "string" && rec.into && rec.into !== alias) out[alias] = rec;
+  }
+  return out;
+}
+
+// THE resolver. A retired number answers with the part it was merged
+// into; every other number answers with itself. One hop only — mergeInto
+// refuses to build a chain, so there is nothing to follow.
+function canonicalSku(sku, overrides) {
+  const key = String(sku == null ? "" : sku).trim();
+  const rec = overrides && overrides.merged && overrides.merged[key];
+  return rec && rec.into ? rec.into : key;
+}
+// { alias: canonical } for everything retired — what /api/parts publishes.
+function aliasMap(overrides) {
+  const out = {};
+  for (const [alias, rec] of Object.entries(hydrateMerged(overrides && overrides.merged))) out[alias] = rec.into;
+  return out;
+}
+function mergedRefusal(sku, rec) {
+  return Object.assign(
+    new Error(`"${sku}" was merged into ${rec.into} — it is that part's ${rec.supplierId ? "supplier part number" : "alias"} now and can't be added as a separate part.`),
+    { code: "sku_merged", sku, into: rec.into }
+  );
 }
 
 // Atomic write: stage to .tmp, fsync, rename. Prevents partial files on
@@ -93,7 +137,8 @@ async function writeOverrides(state) {
   const out = {
     added: state.added || {},
     edited: state.edited || {},
-    deleted: Array.isArray(state.deleted) ? state.deleted.slice().sort() : []
+    deleted: Array.isArray(state.deleted) ? state.deleted.slice().sort() : [],
+    merged: hydrateMerged(state.merged)
   };
   const json = JSON.stringify(out, null, 2) + "\n";
   const tmp = FILE + ".tmp";
@@ -137,6 +182,15 @@ function mergeOverrides(baselineParts, overrides) {
   // 4. Soft-deletes — drop from result.
   for (const sku of ov.deleted) {
     delete out[sku];
+  }
+  // 5. Retired duplicates — not parts any more. (A runtime-added one has
+  //    already left `added`; this also covers a baseline one.) The
+  //    canonical part carries the retired numbers as `aliases`, so the
+  //    picker's search can still find it by either number.
+  for (const [alias, rec] of Object.entries(ov.merged)) {
+    delete out[alias];
+    const target = out[rec.into];
+    if (target) target.aliases = [...(target.aliases || []), alias].sort();
   }
   return out;
 }
@@ -310,6 +364,7 @@ async function addOne(baselineParts, record, { allowedCategories } = {}) {
     if (state.deleted.includes(part.sku)) {
       throw new Error(`SKU "${part.sku}" is in the deleted list — restore it instead of adding.`);
     }
+    if (state.merged[part.sku]) throw mergedRefusal(part.sku, state.merged[part.sku]);
     state.added[part.sku] = part;
     await writeOverrides(state);
     return part;
@@ -344,6 +399,11 @@ async function addMany(baselineParts, records, { allowedCategories } = {}) {
       }
       if (state.deleted.includes(part.sku)) {
         throw new Error(`Row ${i + 1}: SKU "${part.sku}" is in the deleted list — restore it instead.`);
+      }
+      if (state.merged[part.sku]) {
+        const e = mergedRefusal(part.sku, state.merged[part.sku]);
+        e.message = `Row ${i + 1}: ${e.message}`;
+        throw e;
       }
       seenInBatch.add(part.sku);
       validated.push(part);
@@ -413,6 +473,10 @@ async function softDelete(baselineParts, sku) {
   return withLock(async () => {
     const state = await readOverrides();
     const cleanSku = validateSku(sku);
+    const aliasesOfThis = Object.keys(state.merged).filter((k) => state.merged[k].into === cleanSku);
+    if (aliasesOfThis.length) {
+      throw Object.assign(new Error(`${aliasesOfThis.join(", ")} ${aliasesOfThis.length === 1 ? "was" : "were"} merged into "${cleanSku}" — un-merge first, or the retired number would point at nothing.`), { code: "merge_target" });
+    }
     if (state.added[cleanSku]) {
       delete state.added[cleanSku];
       await writeOverrides(state);
@@ -436,6 +500,7 @@ async function restore(sku) {
   return withLock(async () => {
     const state = await readOverrides();
     const cleanSku = validateSku(sku);
+    if (state.merged[cleanSku]) throw mergedRefusal(cleanSku, state.merged[cleanSku]);
     const before = state.deleted.length;
     state.deleted = state.deleted.filter((s) => s !== cleanSku);
     if (state.deleted.length !== before) {
@@ -480,6 +545,9 @@ async function applyImport(baselineParts, staged, selections, { allowedCategorie
       if (state.added[part.sku]) {
         throw new Error(`Can't add "${part.sku}" — already exists as a runtime addition.`);
       }
+      // A retired duplicate is never recreated by an import; the route
+      // turns that row into a supplier-offer update on the canonical part.
+      if (state.merged[part.sku]) continue;
       // If the SKU is in `deleted`, restore it as part of the add.
       state.deleted = state.deleted.filter((s) => s !== part.sku);
       state.added[part.sku] = part;
@@ -552,9 +620,14 @@ async function applyImport(baselineParts, staged, selections, { allowedCategorie
 // the file go into "deleted" (off by default — see route layer).
 //
 // Returns: { added:{sku:rec}, edited:{sku:patch}, deleted:[sku], unchanged:n }
-function computeImportDiff(currentMerged, incomingRows, { includeDeletions = false } = {}) {
+function computeImportDiff(currentMerged, incomingRows, { includeDeletions = false, merged = null } = {}) {
   const added = {};
   const edited = {};
+  // Rows whose number is a retired duplicate: { alias: { into, supplierId,
+  // priceCents } }. Never "added" — the row is that supplier's offer on the
+  // canonical part (priceCents null = the row carried no usable price).
+  const aliased = {};
+  const mergedMap = hydrateMerged(merged);
   let unchanged = 0;
   const seenSkus = new Set();
 
@@ -563,6 +636,18 @@ function computeImportDiff(currentMerged, incomingRows, { includeDeletions = fal
     const sku = String(raw.sku == null ? "" : raw.sku).trim();
     if (!sku) continue;
     seenSkus.add(sku);
+    if (mergedMap[sku]) {
+      let cents = null;
+      try {
+        if (raw.priceCents != null) cents = coerceCents(raw.priceCents);
+        else if (raw.price != null) cents = coerceDollarsToCents(raw.price);
+      } catch { cents = null; }
+      aliased[sku] = { into: mergedMap[sku].into, supplierId: mergedMap[sku].supplierId || null, priceCents: cents };
+      // The canonical part is "seen" too, so an opt-in deletions pass
+      // can't propose deleting it just because the file used the alias.
+      seenSkus.add(mergedMap[sku].into);
+      continue;
+    }
     const current = currentMerged[sku];
     if (!current) {
       // New SKU — full record. We don't validate here (preview should
@@ -631,7 +716,63 @@ function computeImportDiff(currentMerged, incomingRows, { includeDeletions = fal
     }
   }
 
-  return { added, edited, deleted, unchanged };
+  return { added, edited, deleted, unchanged, aliased };
+}
+
+// ---- Merge a duplicate into its canonical part ------------------------
+
+// Retire `aliasSku` behind a marker pointing at `intoSku`. Reversible
+// (unmerge). Writes ONLY the override file: supplier offers, supplier
+// assignment and the photo are the caller's steps, because they live in
+// other stores. Refused — nothing written — when either part is missing,
+// when the target is itself retired, or when something was already merged
+// into the alias (no chains, so canonicalSku stays one hop).
+async function mergeInto(baselineParts, aliasSku, intoSku, { by = null, supplierId = null, now = () => new Date().toISOString() } = {}) {
+  return withLock(async () => {
+    const state = await readOverrides();
+    const alias = validateSku(aliasSku), into = validateSku(intoSku);
+    if (alias === into) throw new Error("A part can't be merged into itself.");
+    if (state.merged[alias]) throw Object.assign(new Error(`"${alias}" is already merged into ${state.merged[alias].into}.`), { code: "already_merged" });
+    if (state.merged[into]) throw Object.assign(new Error(`"${into}" was itself merged into ${state.merged[into].into} — merge into that part instead.`), { code: "merge_chain" });
+    const pointingAtAlias = Object.keys(state.merged).filter((k) => state.merged[k].into === alias);
+    if (pointingAtAlias.length) throw Object.assign(new Error(`${pointingAtAlias.join(", ")} ${pointingAtAlias.length === 1 ? "was" : "were"} merged into "${alias}" — it can't be retired while it is a merge target.`), { code: "merge_chain" });
+    const effective = mergeOverrides(baselineParts || {}, state);
+    if (!effective[alias]) throw new Error(`SKU "${alias}" not found.`);
+    if (!effective[into]) throw new Error(`SKU "${into}" not found.`);
+    const origin = state.added[alias] ? "added" : "baseline";
+    const marker = {
+      into, at: now(), by: by || null, supplierId: supplierId || null, origin,
+      // The retired record exactly as the catalog held it, so unmerge can
+      // put it back: the runtime add, or the baseline part's edits.
+      record: origin === "added" ? { ...state.added[alias] } : null,
+      edited: origin === "baseline" && state.edited[alias] ? { ...state.edited[alias] } : null
+    };
+    if (origin === "added") delete state.added[alias];
+    else delete state.edited[alias];
+    state.merged[alias] = marker;
+    await writeOverrides(state);
+    return { alias, ...marker };
+  });
+}
+
+// Undo a merge: the retired record comes back as a catalog part exactly as
+// it was. The canonical part keeps whatever supplier offers it gained.
+async function unmerge(aliasSku) {
+  return withLock(async () => {
+    const state = await readOverrides();
+    const alias = validateSku(aliasSku);
+    const marker = state.merged[alias];
+    if (!marker) throw Object.assign(new Error(`"${alias}" is not a merged part.`), { code: "not_merged" });
+    if (marker.origin === "added") {
+      if (!marker.record) throw new Error(`The retired record for "${alias}" is missing — it can't be restored.`);
+      state.added[alias] = { ...marker.record };
+    } else if (marker.edited) {
+      state.edited[alias] = { ...marker.edited };
+    }
+    delete state.merged[alias];
+    await writeOverrides(state);
+    return { alias, into: marker.into, origin: marker.origin };
+  });
 }
 
 module.exports = {
@@ -655,5 +796,9 @@ module.exports = {
   softDelete,
   restore,
   applyImport,
-  computeImportDiff
+  computeImportDiff,
+  canonicalSku,
+  aliasMap,
+  mergeInto,
+  unmerge
 };

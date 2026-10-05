@@ -38,6 +38,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const partAlias = require("./part-alias");
 const crypto = require("node:crypto");
 const { resolveLineDescription } = require("./format");
 const { withPurchasingLock, atomicWrite, PurchasingError, assertNotHeld, holdFor, addHolds } = require("./purchasing-store");
@@ -642,7 +643,9 @@ function orderedBySku(purchaseOrders) {
   const out = new Map();
   for (const po of purchaseOrders || []) {
     for (const line of (po && po.lineItems) || []) {
-      const sku = String((line && line.sku) || "").trim();
+      // A retired part number counts as the part it was merged into, as it
+      // does for received and used (lib/part-alias).
+      const sku = partAlias.canonical(String((line && line.sku) || "").trim());
       if (!sku) continue;
       const c = lineCommitment(po, line);
       if (!c.ordered) continue;
@@ -690,11 +693,13 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, commi
     if (line.status !== "need") continue;
     const toOrder = committed ? stillToOrder(line, committed) : Math.max(1, Math.floor(Number(line.qty) || 1));
     if (toOrder <= 0) continue;
-    const part = parts && parts[line.sku];
+    // A retired part number plans as the part it was merged into.
+    const sku = partAlias.canonical(line.sku);
+    const part = parts && parts[sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!forced && !supplierIds.length) {
-      missingSupplier.add(line.sku);
-      missingSupplierLines.push({ sku: line.sku, qty: line.qty, lineId: line.id });
+      missingSupplier.add(sku);
+      missingSupplierLines.push({ sku, qty: line.qty, lineId: line.id });
       continue;
     }
     const primary = forced || supplierIds[0];
@@ -709,12 +714,12 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, commi
     if (forced) {
       const theirs = part && part.supplierPrices ? part.supplierPrices[forced] : null;
       if (theirs && Number.isFinite(Number(theirs.priceCents))) sourceCents = theirs.priceCents;
-      else unpricedForSupplier.push(line.sku);
+      else unpricedForSupplier.push(sku);
     }
     const unitCents = Number.isFinite(Number(sourceCents)) ? Math.max(0, Math.floor(Number(sourceCents))) : 0;
     const qty = toOrder;
     draft.lineItems.push({
-      sku: line.sku,
+      sku,
       qty,
       sourceListId: list.id,
       sourceLineId: line.id,
@@ -722,7 +727,7 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, commi
       // description, so this resolves to the catalog description). Storing
       // it means every later render reads the same frozen text instead of
       // re-deriving from a catalog that may differ across surfaces.
-      description: resolveLineDescription(line, parts),
+      description: resolveLineDescription({ ...line, sku }, parts),
       unitPriceCents: unitCents,
       lineTotalCents: unitCents * qty,
       notes: line.notes || ""
