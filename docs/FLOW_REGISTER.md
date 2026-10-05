@@ -8585,3 +8585,12 @@ blast and catch-up had decided against the `now` they were given.
 - One clock per decision.
 - Reproduced on main first (3 fail), then 48/48.
 - The neighbouring cadence, blast, plan-confirmation and reschedule suites all pass.
+
+**Same day, same cause, two more suites:** `test-merged-booking-readers` (4 checks) and
+`test-visit-identity` (1 check) booked their fall visit on a fixed **2026-10-06 10:00**. The
+customer portal refuses reschedule and cancel inside 24 hours, reading the real clock, as it
+should. So from the morning of 2026-10-05 those checks got `inside_cutoff`.
+
+- **Fix:** their portal sections now place the visit three days out, the way the iCal section of
+  the same suite already did. The cutoff rule is untouched, and so is every other assertion.
+- **Verified:** full `build:check` and all 8 E2E journeys pass under Node 20.

@@ -152,10 +152,15 @@ try {
   {
     const LEAD = "lead-visit-identity";
     const TOKEN = "tok-visit-identity-0123456789abcdef";
+    // The fall visit a few days out: the customer's 24-hour cutoff reads
+    // the real clock, as it should, so the fixed FALL date stopped being
+    // cancellable once the calendar reached it (2026-10-05).
+    const VISIT = (() => { const d = new Date(Date.now() + 3 * 86400000); d.setHours(10, 0, 0, 0); return d.toISOString(); })();
+    const VISIT_END = new Date(new Date(VISIT).getTime() + 45 * 60000).toISOString();
     srv.writeData("leads", [{
       id: LEAD, createdAt: "2026-03-01T12:00:00Z", status: "won", portal: { token: TOKEN },
       contact: { name: "Jane Returning", email: "visit-identity@example.invalid", address: "1 A St, Newmarket, ON" },
-      booking: { start: FALL, end: at("2026-10-06", 10, 45), durationMinutes: 45, serviceKey: "fall_close_4z",
+      booking: { start: VISIT, end: VISIT_END, durationMinutes: 45, serviceKey: "fall_close_4z",
         serviceLabel: "Fall winterization", coords: { lat: 44.05, lng: -79.46 },
         workOrder: { id: "WO-FALL26", status: "scheduled", createdAt: at("2026-08-30", 12) } }
     }]);
@@ -163,10 +168,10 @@ try {
       customerEmail: "visit-identity@example.invalid", address: "1 A St, Newmarket, ON", scheduledFor: when, durationMinutes: 45,
       serviceKey: "fall_close_4z", serviceLabel: "Fall winterization", status: "confirmed", workOrderIds: woIds, history: [], rescheduleCount: 0 });
     // April's never-closed record FIRST, the fall visit second.
-    srv.writeData("bookings", [rec("BK-2026-0101", APRIL, ["WO-APRIL26"]), rec("BK-2026-0102", FALL, ["WO-FALL26"])]);
+    srv.writeData("bookings", [rec("BK-2026-0101", APRIL, ["WO-APRIL26"]), rec("BK-2026-0102", VISIT, ["WO-FALL26"])]);
     srv.writeData("work-orders", [
       { id: "WO-APRIL26", leadId: LEAD, type: "spring_opening", status: "in_progress", scheduledFor: APRIL, createdAt: at("2026-04-01", 12), updatedAt: at("2026-04-20", 11), zones: [] },
-      { id: "WO-FALL26", leadId: LEAD, type: "fall_closing", status: "scheduled", scheduledFor: FALL, createdAt: at("2026-09-01", 12), updatedAt: at("2026-09-01", 12), zones: [] }
+      { id: "WO-FALL26", leadId: LEAD, type: "fall_closing", status: "scheduled", scheduledFor: VISIT, createdAt: at("2026-09-01", 12), updatedAt: at("2026-09-01", 12), zones: [] }
     ]);
     const acts = await srv.api("GET", `/api/portal/${TOKEN}/booking-actions`);
     ok(acts.body.bookingId === "BK-2026-0102", `8. portal booking-actions is about the fall visit (${acts.body.bookingId})`);
