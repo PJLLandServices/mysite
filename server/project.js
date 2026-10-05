@@ -1266,6 +1266,15 @@
       await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete project.", { title: "Delete Project Failed", icon: "warning" });
       return;
     }
+    // A list a purchase order was placed for is never deleted — the server
+    // detached and kept it instead. Say so before leaving the page.
+    if (Array.isArray(data.keptLists) && data.keptLists.length) {
+      await pjlDialog.alert(
+        `The project was deleted. ${data.keptLists.length} material list${data.keptLists.length === 1 ? " was" : "s were"} kept, detached, ` +
+        `because purchase orders were placed for ${data.keptLists.length === 1 ? "it" : "them"}: ${data.keptLists.map((k) => k.id).join(", ")}.`,
+        { title: "Material lists kept", icon: "info" }
+      );
+    }
     location.href = "/admin/projects";
   }
 
