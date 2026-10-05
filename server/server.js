@@ -183,6 +183,9 @@ const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
+// Send / receive / cancel: the PO and its list lines in one commit.
+const purchasing = require("./lib/purchasing");
+const purchasingStore = require("./lib/purchasing-store");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
@@ -682,6 +685,12 @@ const MIME_TYPES = {
   ".webm": "video/webm",
   ".mov": "video/quicktime"
 };
+
+// A purchase order or material list under a recovery hold (purchasing-
+// store.js): 423 Locked, with the office's message and the hold itself.
+function sendRecoveryRequired(res, err) {
+  return sendJson(res, 423, { ok: false, code: "recovery_required", errors: [err.message], recoveryHold: err.hold || null });
+}
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -16714,7 +16723,8 @@ async function handleApi(req, res, pathname) {
     const parentId = url.searchParams.get("parentId");
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const withTotals = url.searchParams.get("withTotals") === "1";
-    const all = await materialLists.list({ status, parentType, parentId, includeArchived });
+    const all = (await materialLists.list({ status, parentType, parentId, includeArchived }))
+      .map((rec) => ({ ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }));
     // Newest-first index — same convention as invoices/quotes.
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
     if (!withTotals) return sendJson(res, 200, { ok: true, lists: all });
@@ -16729,6 +16739,7 @@ async function handleApi(req, res, pathname) {
       const created = await materialLists.create(payload);
       return sendJson(res, 201, { ok: true, list: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create material list."] });
     }
   }
@@ -16739,7 +16750,7 @@ async function handleApi(req, res, pathname) {
     const rec = await materialLists.get(id);
     if (!rec) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
     const partsMap = (PARTS && PARTS.parts) || {};
-    return sendJson(res, 200, { ok: true, list: rec, totals: materialLists.computeTotals(rec, partsMap) });
+    return sendJson(res, 200, { ok: true, list: { ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }, totals: materialLists.computeTotals(rec, partsMap) });
   }
   if (listMatch && req.method === "PATCH") {
     try {
@@ -16750,17 +16761,26 @@ async function handleApi(req, res, pathname) {
       const partsMap = (PARTS && PARTS.parts) || {};
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
-      // 409: the client edited an older version (stale_list) or asked to
-      // change a purchased line (line_items_locked). Nothing was written.
-      const conflict = err && (err.code === "stale_list" || err.code === "line_items_locked");
+      // 409: the client edited an older version (stale_list), asked to
+      // change a purchased line (line_items_locked), or to drop a line a
+      // purchase order was placed for (purchasing_history). 423: a
+      // recovery hold. Nothing was written.
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      const conflict = err && (err.code === "stale_list" || err.code === "line_items_locked" || err.code === "purchasing_history");
       return sendJson(res, conflict ? 409 : 400, { ok: false, code: err && err.code ? err.code : undefined, errors: [err.message || "Couldn't update material list."] });
     }
   }
   if (listMatch && req.method === "DELETE") {
-    const id = decodeURIComponent(listMatch[1]);
-    const removed = await materialLists.remove(id);
-    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const id = decodeURIComponent(listMatch[1]);
+      const removed = await materialLists.remove(id);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.code === "purchasing_history") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
+      throw err;
+    }
   }
 
   // POST /api/material-lists/:id/plan-purchase-orders — DRY RUN. Returns
@@ -16779,7 +16799,8 @@ async function handleApi(req, res, pathname) {
       // all at the dearer branch; the dialog lets Patrick choose.
       const planBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -16805,6 +16826,7 @@ async function handleApi(req, res, pathname) {
         supplierOptions
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
     }
   }
@@ -16825,9 +16847,13 @@ async function handleApi(req, res, pathname) {
       // from the preview: the dialog and the write are separate requests.
       const genBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
-      if (forceSupplierId && !plan.drafts.length) {
-        return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
+      // Plan and create under the purchasing lock: a double-click's second
+      // request waits, then sees the first's draft and proposes nothing.
+      return await purchasingStore.withPurchasingLock(async () => {
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
+      if (!plan.drafts.length && !plan.missingSupplier.length) {
+        return sendJson(res, 422, { ok: false, code: "nothing_to_order", errors: ["Nothing to order — every need line is already received, on order or on a draft purchase order."] });
       }
       if (!forceSupplierId && !plan.ok) {
         return sendJson(res, 422, {
@@ -16856,7 +16882,9 @@ async function handleApi(req, res, pathname) {
         created.push(po);
       }
       return sendJson(res, 201, { ok: true, purchaseOrders: created });
+      });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate purchase orders."] });
     }
   }
@@ -16894,6 +16922,7 @@ async function handleApi(req, res, pathname) {
       const created = await projects.create(payload);
       return sendJson(res, 201, { ok: true, project: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
     }
   }
@@ -17249,12 +17278,21 @@ async function handleApi(req, res, pathname) {
     const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
     const workOrderIds = Array.isArray(proj.workOrderIds) ? proj.workOrderIds : [];
 
+    const keptLists = [];
     if (cascade) {
       // Test project — the customer wants a clean wipe, not an orphan
       // trail. Delete every attached material list and work order, then
-      // the project itself.
+      // the project itself. A list a purchase order was placed for is
+      // never deleted (2026-10-03) — that order would belong to nothing —
+      // so it is detached and kept, and the reply says which.
       for (const rec of attached) {
-        await materialLists.remove(rec.id);
+        try {
+          await materialLists.remove(rec.id);
+        } catch (err) {
+          if (!err || err.code !== "purchasing_history") throw err;
+          await materialLists.update(rec.id, { parentType: null, parentId: null });
+          keptLists.push({ id: rec.id, reason: err.message });
+        }
       }
       for (const woId of workOrderIds) {
         await workOrders.remove(woId).catch(() => {});
@@ -17276,7 +17314,7 @@ async function handleApi(req, res, pathname) {
     await fs.rm(path.join(PROJECT_JOURNAL_PHOTOS_DIR, id), { recursive: true, force: true }).catch(() => {});
 
     const removed = await projects.remove(id);
-    return sendJson(res, 200, { ok: true, removed, cascade });
+    return sendJson(res, 200, { ok: true, removed, cascade, keptLists });
   }
 
   // POST /api/projects/:id/attach-work-order { workOrderId }
@@ -20362,7 +20400,33 @@ async function handleApi(req, res, pathname) {
     const materialListId = url.searchParams.get("materialListId");
     let all = await purchaseOrders.list({ status, supplierId, materialListId });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    return sendJson(res, 200, { ok: true, purchaseOrders: all });
+    all = all.map((po) => ({ ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) }));
+    // Interrupted purchasing saves recovery could not apply — a person
+    // has to look (purchasing-store.js). Empty when all is well.
+    return sendJson(res, 200, { ok: true, purchaseOrders: all, purchasingRecovery: purchasingStore.recoveryStatus() });
+  }
+
+  // Recovery holds (purchasing-store.js) — what is locked and why, and the
+  // office's release once it has checked the records. Office only. A
+  // release is refused while the PO and list still disagree.
+  if (req.method === "GET" && pathname === "/api/purchasing/recovery-holds") {
+    const holdsSession = await requireAdmin(req);
+    if (!holdsSession) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+    return sendJson(res, 200, { ok: true, ...purchasingStore.recoveryStatus() });
+  }
+  if (req.method === "POST" && pathname === "/api/purchasing/recovery-holds/release") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const by = await actorLabel(req, session.uid || "admin");
+      const released = await purchasing.releaseRecoveryHold({ scope: payload.scope, id: payload.id || null, note: payload.note, by,
+        acknowledgeSourceMissing: payload.acknowledgeSourceMissing === true });
+      return sendJson(res, 200, { ok: true, released });
+    } catch (err) {
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't release the hold."] });
+    }
   }
 
   if (req.method === "POST" && pathname === "/api/purchase-orders") {
@@ -20383,6 +20447,7 @@ async function handleApi(req, res, pathname) {
       const created = await purchaseOrders.create(payload);
       return sendJson(res, 201, { ok: true, purchaseOrder: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create purchase order."] });
     }
   }
@@ -20391,7 +20456,7 @@ async function handleApi(req, res, pathname) {
   if (poMatch && req.method === "GET") {
     const po = await purchaseOrders.get(decodeURIComponent(poMatch[1]));
     if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-    return sendJson(res, 200, { ok: true, purchaseOrder: po });
+    return sendJson(res, 200, { ok: true, purchaseOrder: { ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) } });
   }
   if (poMatch && req.method === "PATCH") {
     try {
@@ -20401,6 +20466,7 @@ async function handleApi(req, res, pathname) {
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update purchase order."] });
     }
   }
@@ -20411,8 +20477,13 @@ async function handleApi(req, res, pathname) {
     if (po.status !== "draft") {
       return sendJson(res, 409, { ok: false, errors: [`Can only delete draft POs. This one is "${po.status}". Use cancel instead.`] });
     }
-    const removed = await purchaseOrders.remove(id);
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const removed = await purchaseOrders.remove(id);
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      throw err;
+    }
   }
 
   // POST /api/purchase-orders/:id/send — render PDF + CSV, snapshot
@@ -20439,8 +20510,12 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this PO."] });
       }
 
-      // Render PDF + CSV. notify-supplier composes the subject from the
-      // PO if no override is given.
+      // Validate → render + email → commit the PO and its list lines, all
+      // in one purchasing.sendPurchaseOrder call holding the purchasing
+      // lock (2026-10-02). Nothing is emailed unless the send has already
+      // validated; nothing is saved unless both the PO and every list line
+      // it moves save together. A second click waits, then finds the PO
+      // sent (409) — the supplier is not emailed twice.
       const { generatePoPdf } = require("./lib/po-pdf");
       const { generatePoCsv } = require("./lib/po-csv");
       const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
@@ -20448,80 +20523,80 @@ async function handleApi(req, res, pathname) {
       // feeds every render surface so descriptions can't diverge between
       // the PDF/CSV and the email the way they used to (disk vs memory).
       const poPartsMap = (PARTS && PARTS.parts) || {};
-      const pdfBuffer = await generatePoPdf(po, poPartsMap);
-      const csvBuffer = generatePoCsv(po, poPartsMap);
       const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
 
-      // Write both files to the per-PO snapshot directory. Paths persist
-      // on the PO record as repo-relative strings so the resend handler
-      // can find them again. mkdir -p is idempotent.
-      const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
-      await fs.mkdir(poFilesDir, { recursive: true });
-      const pdfFsPath = path.join(poFilesDir, `${po.id}.pdf`);
-      const csvFsPath = path.join(poFilesDir, `${po.id}.csv`);
-      await fs.writeFile(pdfFsPath, pdfBuffer);
-      await fs.writeFile(csvFsPath, csvBuffer);
-      // Store paths repo-relative — survives moving the install dir.
-      const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
-      const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
-
-      // describeLine is injected so notify-supplier.js stays decoupled from
-      // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
-      // stored line description first, then the catalog (no size prefix).
-      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
-      const describeLine = (line) => resolveLineDescription(line, poPartsMap);
-      // The paste block in the email carries THEIR part number, same as the
-      // PDF and CSV — it is pasted straight into the supplier's system.
-      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
-
-      await sendPurchaseOrderEmail({
-        po,
-        toEmail,
-        toName: payload.toName || po.supplierContactName || po.supplierName,
-        subject,
-        bodyText: payload.bodyText || "",
-        pdfBuffer,
-        csvBuffer,
-        describeLine,
-        skuForLine
+      const sendSession = await readSession(req);
+      const by = await actorLabel(req, (sendSession && sendSession.uid) || "admin");
+      const result = await purchasing.sendPurchaseOrder(id, { toEmail, toName: payload.toName, subject, by }, async (draft) => {
+        const pdfBuffer = await generatePoPdf(draft, poPartsMap);
+        const csvBuffer = generatePoCsv(draft, poPartsMap);
+        // Write both files to the per-PO snapshot directory. Paths persist
+        // on the PO record as repo-relative strings so the resend handler
+        // can find them again. mkdir -p is idempotent.
+        const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
+        await fs.mkdir(poFilesDir, { recursive: true });
+        const pdfFsPath = path.join(poFilesDir, `${draft.id}.pdf`);
+        const csvFsPath = path.join(poFilesDir, `${draft.id}.csv`);
+        await fs.writeFile(pdfFsPath, pdfBuffer);
+        await fs.writeFile(csvFsPath, csvBuffer);
+        // describeLine is injected so notify-supplier.js stays decoupled
+        // from parts.json. Same resolver + same catalog as the PDF/CSV.
+        const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
+        const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+        // The paste block in the email carries THEIR part number, same as
+        // the PDF and CSV — it is pasted straight into the supplier's system.
+        const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, draft.supplierId);
+        await sendPurchaseOrderEmail({
+          po: draft,
+          toEmail,
+          toName: payload.toName || draft.supplierContactName || draft.supplierName,
+          subject,
+          bodyText: payload.bodyText || "",
+          pdfBuffer,
+          csvBuffer,
+          describeLine,
+          skuForLine
+        });
+        // Store paths repo-relative — survives moving the install dir.
+        return {
+          pdfPath: path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/"),
+          csvPath: path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/")
+        };
       });
-
-      // Flip the PO state — persist the document paths so the resend
-      // path can find the snapshotted files.
-      const sentPo = await purchaseOrders.markSent(id, {
-        toEmail,
-        toName: payload.toName,
-        subject,
-        pdfPath,
-        csvPath
-      });
-
-      // Flip every source material-list line to "ordered" with this PO id,
-      // AND lock its price: stamp the line with the PO line's snapshotted
-      // unitPriceCents so the list stops resolving live from parts.json and
-      // can never disagree with what was actually ordered. Map each source
-      // line id to its PO-line price, grouped by source list so we patch
-      // each list once.
-      const sentPriceByList = new Map();   // listId -> Map(sourceLineId -> unitPriceCents)
-      for (const line of sentPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!sentPriceByList.has(line.sourceListId)) sentPriceByList.set(line.sourceListId, new Map());
-        sentPriceByList.get(line.sourceListId).set(line.sourceLineId, Number(line.unitPriceCents) || 0);
-      }
-      for (const [listId, priceByLineId] of sentPriceByList.entries()) {
-        // Through the PO door (lib/material-lists.flipLines): the only
-        // path that may set ordered/poId/frozenPriceCents, and it never
-        // trips the line protection the builder's own saves are held to.
-        await materialLists.flipLines(listId, (l) =>
-          priceByLineId.has(l.id) && l.status === "need"
-            ? { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) }
-            : l);
-      }
-
-      return sendJson(res, 200, { ok: true, purchaseOrder: sentPo });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       console.warn("[po] send failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/send-outcome — after an interrupted send
+  // (delivery_uncertain), the office records whether the supplier email
+  // actually arrived: { outcome: "sent" | "not_sent" }. Nothing is emailed.
+  // "sent" saves the PO as sent and its list lines as ordered, in one commit.
+  const poSendOutcomeMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/send-outcome$/);
+  if (poSendOutcomeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poSendOutcomeMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const outcomeSession = await readSession(req);
+      const by = await actorLabel(req, (outcomeSession && outcomeSession.uid) || "admin");
+      // The documents rendered for the interrupted send, if they were written.
+      const docs = {};
+      for (const [key, ext] of [["pdfPath", "pdf"], ["csvPath", "csv"]]) {
+        const fsPath = path.join(DATA_DIR, "purchase-orders", "files", `${id}.${ext}`);
+        if (fsSync.existsSync(fsPath)) docs[key] = path.relative(SERVER_DIR, fsPath).split(path.sep).join("/");
+      }
+      const result = await purchasing.resolveUncertainPoSend(id, { outcome: payload.outcome, by, docs });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't record the send outcome."] });
     }
   }
 
@@ -20543,38 +20618,17 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poReceiveMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markReceived(id, {
+      // The receipt and the list lines it completes, in one commit
+      // (purchasing.js). Quantities are absolute, so a repeat of the same
+      // request records nothing new.
+      const result = await purchasing.receivePurchaseOrder(id, {
         lineUpdates: payload && payload.lineUpdates,
         note: payload && payload.note || ""
       });
-      const receivedPo = result.po;
-
-      // Flip ONLY the lines that became fully received on this event.
-      // Build lineId -> source pointers from the receivedPo.
-      const sourcePointersById = new Map();
-      for (const line of receivedPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.fullyReceivedLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        // Keep frozenPriceCents (carried by the spread): a received line
-        // should show the price actually paid, not drift to live catalog.
-        await materialLists.flipLines(listId, (l) =>
-          sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id
-            ? { ...l, status: "have", poId: null }
-            : l);
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo, fullyReceivedLineIds: result.fullyReceivedLineIds });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, fullyReceivedLineIds: result.fullyReceivedLineIds, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record receipt."] });
     }
   }
@@ -20588,34 +20642,13 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poCancelMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
-      const cancelledPo = result.po;
-
-      // Build per-line source pointers, then flip ONLY the outstanding ones.
-      const sourcePointersById = new Map();
-      for (const line of cancelledPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.outstandingLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        // Back to a live planning line — release the price lock so it
-        // resolves from the current catalog again.
-        await materialLists.flipLines(listId, (l) =>
-          sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id
-            ? { ...l, status: "need", poId: null, frozenPriceCents: null }
-            : l);
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
+      // The cancellation and the list lines it frees, in one commit
+      // (purchasing.js). What already arrived stays received.
+      const result = await purchasing.cancelPurchaseOrder(id, { reason: payload.reason || "" });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
     }
   }
@@ -20638,6 +20671,8 @@ async function handleApi(req, res, pathname) {
       if (po.status !== "sent" && po.status !== "partially_received") {
         return sendJson(res, 409, { ok: false, errors: [`Can't re-send a "${po.status}" PO.`] });
       }
+      // Held, or for a list line that's gone: refused before any email.
+      await purchaseOrders.assertActionable(po);
       const payload = await parseRequestBody(req).catch(() => ({}));
       const toEmail = String(payload.toEmail || po.emailedToEmail || po.supplierEmail || "").trim().toLowerCase();
       if (!toEmail) {
@@ -20698,6 +20733,7 @@ async function handleApi(req, res, pathname) {
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       console.warn("[po] resend failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't re-send purchase order."] });
     }
@@ -20714,6 +20750,8 @@ async function handleApi(req, res, pathname) {
       const newPo = await purchaseOrders.reorderFrom(id, partsMap);
       return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && (err.code === "nothing_to_reorder" || err.code === "source_missing")) return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }
@@ -20745,6 +20783,7 @@ async function handleApi(req, res, pathname) {
       res.end(pdf);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
     }
   }
@@ -20774,6 +20813,7 @@ async function handleApi(req, res, pathname) {
       res.end(csv);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render CSV."] });
     }
   }
@@ -20808,7 +20848,8 @@ async function handleApi(req, res, pathname) {
           ? active.map((x) => x.id)
           : active.filter((x) => shopParam.split(",").map((t) => t.trim()).includes(x.id)).map((x) => x.id);
       }
-      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds } : {});
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds, committed } : { committed });
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
       // Surface an existing draft per supplier so the modal can say
       // "refreshes RFQ-…" instead of implying a duplicate gets created.
@@ -20819,6 +20860,8 @@ async function handleApi(req, res, pathname) {
         supplierName: supplierById.get(g.supplierId)?.name || "(unknown supplier)",
         supplierEmail: supplierById.get(g.supplierId)?.email || "",
         lineCount: g.lines.length,
+        // What each supplier will be asked for — the still-to-buy quantity.
+        lines: g.lines.map((l) => ({ sku: l.sku, quantity: l.quantity, unit: l.unit })),
         existingDraftId: draftBySupplier.get(g.supplierId) || null
       }));
       return sendJson(res, 200, {
@@ -20831,6 +20874,7 @@ async function handleApi(req, res, pathname) {
         missingSupplierLines: plan.missingSupplierLines
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan quote requests."] });
     }
   }
@@ -20874,7 +20918,8 @@ async function handleApi(req, res, pathname) {
           errors: ["Shopping a list needs at least two suppliers to compare — only one is available."]
         });
       }
-      const opts = shopSupplierIds ? { shopSupplierIds } : {};
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const opts = shopSupplierIds ? { shopSupplierIds, committed } : { committed };
       const plan = quoteRequests.planFromMaterialList(list, partsMap, opts);
       if (!plan.ok) {
         return sendJson(res, 422, {
@@ -20889,6 +20934,7 @@ async function handleApi(req, res, pathname) {
       const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById, opts);
       return sendJson(res, 201, { ok: true, mode: plan.mode, created: result.created, refreshed: result.refreshed });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
     }
   }
@@ -20945,6 +20991,7 @@ async function handleApi(req, res, pathname) {
       if (applied.length) rebuildCatalogFromOverrides();
       return sendJson(res, 200, { ok: true, applied, unchanged, skipped, rows: winners.length });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply the cheapest quotes."] });
     }
   }
@@ -30396,6 +30443,11 @@ function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Finish (or undo) a purchase-order commit a crash interrupted, before the
+// first request can read the two files disagreeing.
+try { purchasingStore.recover(); } catch (err) { console.error("[purchasing] recovery at boot failed:", err); }
+try { purchasingStore.checkConsistency(); } catch (err) { console.error("[purchasing] consistency check at boot failed:", err); }
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);

@@ -7976,6 +7976,199 @@ still on the record; (4) confirm a technician signed in on the phone
 cannot reach the correction; (5) on a T&M job, confirm the labour line
 bills the corrected hours.
 
+## 2026-10-02 — PO-LIST-01: a purchase order and its material-list lines save together or not at all
+
+**The defect (live since 2026-09-27, 688550c).** Send, receive and cancel saved the PO, then
+replaced the source list's whole line array through `materialLists.update()`. Once a list had been
+bought from, the 2026-09-27 guard (`lineItemsLockedBy`) correctly refused that replacement — after
+the PO had already saved. So: receive-in-full and cancel answered 400 with the PO saved and its list
+lines still "ordered" on it; a second PO from the same list answered 500 after the supplier had been
+emailed, its lines never marked; two clicks on Send emailed the supplier twice. A re-order also
+dropped its material-list link, so whatever arrived on it counted toward no job.
+
+**The rule now.** `server/lib/purchasing.js` is the one path for send / receive / cancel. Under one
+lock shared by every purchase-order and material-list write (`purchasing-store.withPurchasingLock`),
+it validates the PO transition, works out every affected list line from the PO's resulting state
+(`lineMove` — the one rule), emails (send only, still holding the lock), then commits both files in
+one journalled commit (`commitFiles`: journal → temp-file-and-rename each file → drop journal). A
+failed write puts back whatever was written; a crash part-way is finished by `recover()` at boot and
+before every locked operation; a journal overtaken by later writes is set aside, never applied.
+Only a line's `status`, `poId` and `frozenPriceCents` change, only on the line the PO line points at
+(`sourceListId` + `sourceLineId`), and past "sent" only while it points back at this PO. Receipt
+quantities are absolute, so a repeat request changes nothing and writes nothing. The wholesale-
+replacement guard is unchanged. A re-order keeps `sourceMaterialListIds` and each line's source
+pointers, and is written with its `reorder_of` history in one write; a PO saved without a link
+(made before this fix, or by hand) is left as it is — nothing is inferred.
+
+**Deliberately left alone.** The supplier email still goes out before the commit: if the commit then
+fails, nothing is saved and a retry emails again (the lock stops a double-click doing it). Sending a
+PO whose list line is already ordered on another PO, or already received, sends it and leaves that
+line alone, as before; the response lists such lines as `notMoved`. Lines left split by the defect
+are NOT repaired: `node scripts/audit-po-list-lines.mjs` (read-only; `--browser` prints a snippet that
+reads the live site's own GET endpoints) lists each one with the repair the rule would make, for
+Patrick's approval.
+
+**Tests.** `scripts/test-po-list-consistency.mjs` (106 checks; 27 fail on the old code) walks first
+send, a second PO from a bought-from list, partial and full receipt, cancel before and after a partial
+receipt, re-order, repeated send / receive / cancel, two simultaneous sends, a write failing on either
+file, a crash between the two, and unrelated purchased lines and POs byte-for-byte unchanged.
+`scripts/test-po-reorder-link.mjs` (41; 16 fail on the old code) and `scripts/test-purchasing-audit.mjs`
+(29) cover the re-order link and the audit.
+
+**Real crashes (2026-10-02, Patrick: "throwing an exception is not the same as the server dying").**
+`scripts/test-po-crash-recovery.mjs` (128 checks; 83 fail on the old code) runs each request in a real
+server process and SIGKILLs it at an exact point (`scripts/lib/crash-at.cjs`, test-only preload):
+after the first data file changed, mid-way through the second, after both but before the journal is
+removed, and just before / just after the supplier email. A fresh process then boots on what was left.
+Recovery completes the save deterministically (an intact journal is always rolled forward); the PO
+and list agree; unrelated records are byte-for-byte unchanged; a retry counts nothing twice; booting
+again, or replaying the journal, changes nothing. A truncated or corrupt journal is set aside
+unapplied (`purchasing-journal.corrupt-<time>.json`), the data files are left exactly as they were,
+and the problem is reported (server log, `purchasing-recovery-log.json`, GET /api/purchase-orders
+`purchasingRecovery`); a missing journal leaves a split the boot-time read-only check reports
+(`list_ahead_of_po`). On the old code a kill mid-write left material-lists.json unreadable, and a
+retry after a crash emailed the supplier twice.
+
+**Supplier email: no automatic duplicate — not "at most once" (Patrick, 2026-10-02).** Exactly-once
+delivery can't be guaranteed — the server can die after the mail server accepts a message and before
+anything is saved. So, as for change requests (2026-09-27), a send is claimed on disk (`sendInFlight`)
+before the email goes and cleared in the same commit that saves the outcome. If the process dies in
+between, the next send is refused as `delivery_uncertain` (409) and the PO page shows "Delivery
+uncertain" with two buttons: "It went — mark as sent" (saves sent + list lines ordered, no email) or
+"It didn't go — allow sending again" (`POST /api/purchase-orders/:id/send-outcome`). Every attempt
+stays in `sendAttempts`. What is guaranteed: the system never sends a second email on its own. What
+is NOT: if the office chooses "It didn't go" and sends again while the first email had in fact
+arrived, the supplier gets two — the button asks the office to confirm that, in those words, first.
+
+**Fail closed when recovery can't prove the state.** A journal that can't be read or no longer
+matches the files, an unreadable data file, or — at boot — a PO and list line that disagree, puts a
+**recovery hold** on the records involved (`purchasing-holds.json`): the PO and list the journal
+header names, the PO and list of each disagreeing line, or — when nothing says which — every PO and
+material list. The rest of the website starts normally. A held record can be read, but send,
+receive, cancel, re-order, edit, delete, restore, re-send, settle a send, and creating a PO from a
+held list are all refused (423 `recovery_required`) with a message saying why and what the office
+must do; the PO and material-list pages show it. No code chooses which record is right. The office
+releases a hold (`POST /api/purchasing/recovery-holds/release`, admin, with a note) only once the
+records no longer disagree; the release is logged. Note for deploying: any lines the old defect left
+split (see the read-only audit) will be held at the first boot, until they are repaired with
+approval.
+
+**One definition of "agree" (Patrick, 2026-10-02).** `server/lib/purchasing-audit.js`
+`auditPurchasingLines` is the only classifier: the boot check holds on its findings, and the live audit's
+browser snippet embeds its source. `scripts/test-purchasing-matrix.mjs` runs the snippet for every case
+and requires byte-identical output. The model: the PO line is the record of what was ordered, what
+arrived and at what price, and nothing on the list side ever rewrites it. For a list line:
+received = everything that arrived on every non-draft PO claiming it (cancelled ones too). At most ONE
+non-cancelled PO may claim a line. "ordered" must point at that PO while its line is outstanding;
+"have" means it arrived (or no PO ever claimed it: stock on hand); "need" means nothing active and
+something still to order. Severity "hold" means the records contradict each other (held at boot).
+"review" means the quantities don't add up: short, or what arrived was ordered again. It is not held,
+because a draft's quantity can be edited on purpose. "Repairable by rule" only when the repair changes
+nothing but the list line's status / poId / locked price, the PO record already holds what arrived and
+its price, any locked price equals that PO price, and the quantities add up. A cancelled PO that
+delivered part of a line is always "needs a person".
+
+**Live behaviour aligned with it.**
+- **Send** refuses a line already ordered on another PO, already received, or claimed twice on one
+  PO (409 `lines_not_orderable`), before anything is written or emailed.
+- **Re-order** of a cancelled PO asks only for what didn't arrive. It claims a list line only if that
+  line still needs ordering; a repeat purchase keeps the list and project link but claims no line.
+- **Generating POs from a list** orders each need line's quantity less what has already arrived
+  (`receivedByListLine`). Before this, cancelling after a partial delivery put the whole line back to
+  "need" and the next generation re-ordered the parts that had arrived.
+- **One "still to order" calculation** (`purchase-orders.stillToOrder`). For a line: its quantity
+  minus everything that arrived (cancelled POs included), minus what is still outstanding on a sent
+  PO, minus (when creating a PO) what is on a draft. It is used by: PO plan and generate (assigned
+  or one supplier), re-order (capped at it), quote-request plan and generate (drafts not counted),
+  and the send gate. Generate runs under the purchasing lock, so a double-click's second request
+  finds the first's draft and proposes nothing. The send gate refuses any order that, after part of
+  a line was delivered, would take the line past its quantity (`lines_not_orderable`).
+- **Why "need" after a part-delivered cancel agrees, while "ordered" on the cancelled PO does not.**
+  "need" is what the live cancel produces, and it means "still to order = quantity − arrived". Every
+  path above proposes exactly that, which `scripts/test-po-remainder-paths.mjs` proves (10 needed,
+  6 arrived → 4 everywhere, never 10 again). "ordered" on the cancelled PO contradicts the PO, and
+  what the office intends for the rest can't be read from the records, so it is "needs a person".
+- **Quote requests (RFQs).** An RFQ asks for what is still to buy when it is raised. Its quantity is
+  a question for the supplier and never becomes a PO quantity: comparing quotes ranks unit prices,
+  applying the cheapest writes unit prices to the catalog, and a PO is only ever generated from the
+  list with the quantity recalculated at that moment. An RFQ raised for 10, answered after 6
+  arrived, therefore leads to an order for 4. The plan preview now lists what each supplier will be
+  asked for.
+
+The matrix (8 PO states × 6 list states, plus 16 extra cases) and the old classifier's 47 misses are
+in the PR.
+
+`scripts/test-po-remainder-paths.mjs` (63 checks through the real routes; 21 fail on the previous
+commit) covers: PO plan and generate, assigned and one supplier, reopened and repeated;
+double-clicks on Generate and Re-order; RFQ plan and generate, assigned and shopped; an early RFQ
+for 10 answered after the delivery; quote comparison; applying the cheapest; the PO made from the
+quote; the 4 arriving (10 in all, "have"); a hand-made order for 10 refused at send; and
+cancellation and re-order after a quoted purchase.
+
+**2026-10-03 — three checker corrections (Codex line-by-line review).**
+- **Open vs completed orders.** A list line may have any number of COMPLETED orders behind it (6
+  on one, the other 4 on a later one); that is history, not a contradiction. Only two OPEN orders
+  (sent / partly received, still outstanding) for one line are (`multiple_open_orders`, replacing
+  `multiple_active_claims`). The live receive rule now matches: a fully received order moves its
+  line to "have" only when everything that arrived on every order covers the line; otherwise to
+  "need", unlinked, so the rest is ordered (6 of 10 in → "need", 4 still to order). The send gate
+  blocks only another OPEN order; a completed one counts against the quantity instead.
+- **Mixed prices.** The list holds one locked price per line. A repair that locks a price is offered
+  only when every receipt behind the line (and, for "ordered", the open order) came at that one
+  price; otherwise "needs a person". A "have" line whose receipts span prices is reported as
+  `mixed_receipt_prices` (review, not held): the PO records keep the true cost of each receipt.
+- **Missing sources.** A PO line whose list, or list line, no longer exists is classified by the
+  PO's state. Draft: `draft_source_missing` (review) — a mistake, and the send gate refuses it.
+  Sent, partly received, received or cancelled: `source_missing` (hold, needs a person, in the
+  totals) — purchasing history. That PO is held (boot check, and at runtime before any send,
+  receive, cancel, re-send or re-order: 423 `recovery_required`); no list is held.
+- **The unlock rule.** Every other hold is released only once the records agree. A missing source
+  can never be made to agree by any repair (the line is gone), so its hold is released by the
+  office's review instead — and only when the release says so explicitly
+  (`acknowledgeSourceMissing: true`; a note alone gets 409 `acknowledgement_required`). The review
+  (who, when, note) is stamped on those PO lines and in the PO history; a browser can't send it.
+  **It does not make the records agree:** the checker keeps reporting and counting the line as
+  `source_missing_reviewed` (severity "reviewed", its own total), only no longer held. After the
+  review, and after any restart: receive and cancel work and touch no list (they record what
+  happened); re-send works (a copy of the same document); **re-order is refused** (409
+  `source_missing` — it would be a new purchase for no job). Releasing a hold on a list or on
+  everything never clears a missing source; that PO gets its own hold.
+- **No new orphans.** A material list a non-draft PO (or an interrupted send) points at can't be
+  permanently deleted (`DELETE`, bulk purge, timed Trash purge — 409 `purchasing_history`), and its
+  lines that such a PO points at can't be removed by a line-replacing save, even once back at
+  "need". It can still go to the Trash and come back. A project deleted "with everything" detaches
+  and keeps such a list and names it in the reply (`keptLists`); the project page says so.
+- **Browser audit** also reads `GET /api/admin/trash/material-lists`, so a list in the Trash is not
+  reported missing (three GETs, still read-only).
+
+`scripts/test-po-source-missing.mjs` (73 checks through the real routes; 32 fail on the commit
+before the corrections, and 13 of the unlock-rule checks fail on fc15694) covers line removal and list deletion refused, Trash and purge, project cascade, the draft
+send refusal, the locked sent PO (receive, cancel, re-send, re-order; no email; nothing changed),
+the boot hold, the review on release (note plus explicit confirmation), each action after it
+and after a restart, the forged review dropped, and release of a hold on everything. The matrix gained the open/completed, mixed-price and missing-source cases (115 of its
+checks fail on the previous classifier).
+
+**2026-10-04 — combined with #375 (material-list line protection, merged first as db7c8c0).**
+One owner per concern:
+- **The PO lifecycle path is #367's** (`purchasing.js`: send / receive / cancel commit the PO and its
+  list lines together, journalled, crash-recovered, no automatic duplicate email). #375's
+  `flipLines` (a second, non-atomic PO door in `material-lists.js`) is removed; its transition rule
+  is kept as the one shared check, `material-lists.purchasingTransitionError`, and `planListMoves`
+  refuses any line move that breaks it (409 `purchasing_transition_invalid`): only need → ordered,
+  ordered → have (price kept), ordered → need (price released).
+- **List editing is #375's**: line-by-line protection (`protectedLineViolations` — a line on an
+  order, or carrying a PO or a frozen price, comes back unchanged; hand-marked Have and Need lines
+  stay editable), and the stale-save refusal (`baseUpdatedAt` → 409 `stale_list`, the edit stays
+  on screen with a Reload button). A purchasing commit moves the list's `updatedAt`, so a builder
+  save made before it is refused as stale.
+- **Combined:** a line with receipts behind it but back at "need" (6 of 10 arrived) doesn't look
+  purchased to #375's rule, so #367's guard keeps it: it can't be dropped or given another SKU;
+  its quantity stays editable and still-to-order follows it.
+`scripts/test-material-list-line-protection.mjs` now drives the real PO door (purchase orders sent,
+received and cancelled through `purchasing.js`) and adds the combined checks (68 checks).
+
+All seven suites run in `build:check`.
+
 ## 2026-10-04 — FIELD-PHOTO-EDIT-01: delete or move a work-order photo from the phone (PJL-110, PJL-111; no PASS flow touched)
 
 **What it is.** On the closing screens, tapping a photo thumbnail now offers **Move to zone…** (zone

@@ -18,9 +18,12 @@
 //     notes may change. A hand-marked "have" line is planning: editable,
 //     removable, toggleable. Nobody but purchasing may introduce
 //     purchasing state on a line.
-//   * flipLines(id, fn) — the PO door, the only path that sets
-//     ordered/poId/frozen, and only need→ordered, ordered→have (price
+//   * the PO door is purchasing.js (#367): send / receive / cancel commit
+//     the PO and its list lines together, and every line move is held to
+//     purchasingTransitionError — only need→ordered, ordered→have (price
 //     kept), ordered→need (price released).
+//   * a line with receipts behind it (#367) can't be dropped or re-SKU'd,
+//     even once it's back at "need"; its quantity stays editable.
 //   * baseUpdatedAt — a stale client is refused (stale_list), nothing is
 //     written; a client that sends none is served as before.
 //
@@ -36,6 +39,8 @@ const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LIB_DIR = process.env.PJL_TEST_LIB_DIR || path.join(ROOT, "server", "lib");
 const DATA = path.join(ROOT, "server", "data");
+// The PO door writes these too; each is put back exactly as it was.
+const FILES = ["material-lists.json", "purchase-orders.json", "purchasing-holds.json", "purchasing-journal.json", "purchasing-recovery-log.json"];
 
 let passed = 0, failed = 0;
 function ok(name, cond, detail = "") {
@@ -49,10 +54,11 @@ const shape = (l) => l.lineItems.map((x) => `${x.sku}×${x.qty}:${x.status}${x.p
 const builderPatch = (list, edit) => { const copy = JSON.parse(JSON.stringify(list)); edit(copy); return { name: copy.name, notes: copy.notes, lineItems: copy.lineItems, baseUpdatedAt: list.updatedAt }; };
 
 fs.mkdirSync(DATA, { recursive: true });
-const store = path.join(DATA, "material-lists.json");
-const backup = fs.existsSync(store) ? fs.readFileSync(store) : null;
+const backups = new Map(FILES.map((f) => [f, fs.existsSync(path.join(DATA, f)) ? fs.readFileSync(path.join(DATA, f)) : null]));
 try {
   const ml = require(path.join(LIB_DIR, "material-lists.js"));
+  const pos = require(path.join(LIB_DIR, "purchase-orders.js"));
+  const purchasing = require(path.join(LIB_DIR, "purchasing.js"));
   const get = (id) => ml.get(id);
 
   // ---- 1. The seven steps ------------------------------------------------
@@ -105,13 +111,22 @@ try {
   }
 
   // ---- 3. Purchased lines are protected ------------------------------
+  // Combined with #367: the PO door is the real one — purchasing.js send /
+  // receive / cancel on real purchase orders (no email: deliver = null),
+  // which commits the PO and its list lines together.
   console.log("3. receive A through a PO: purchasing-controlled fields are protected");
+  const attempt = async (fn) => { try { return { v: await fn() }; } catch (err) { return { err }; } };
   let po = await ml.create({ name: "PO list", lineItems: [{ id: "li_a", sku: "1401010", qty: 4 }, { id: "li_b", sku: "1406010", qty: 2 }, { id: "li_c", sku: "405010", qty: 1 }] });
-  r = await tryFlip(ml, po.id, (l) => l.id !== "li_c" ? { ...l, status: "ordered", poId: "PO-1", frozenPriceCents: 203 } : l);
-  ok("PO door: send flips need → ordered with PO and frozen price", !r.err && shape(r.list) === "1401010×4:ordered@PO-1$203,1406010×2:ordered@PO-1$203,405010×1:need", (r.err && r.err.message) || shape(r.list || po)); po = r.list || po;
-  r = await tryFlip(ml, po.id, (l) => l.id === "li_c" ? { ...l, status: "ordered", poId: "PO-2", frozenPriceCents: 397 } : l);
-  ok("PO door: a SECOND PO against the same list flips its line too", !r.err && r.list.lineItems[2].poId === "PO-2", r.err && r.err.message); po = r.list || po;
-  const refused = async (label, edit) => { const rr = await tryUpdate(ml, po.id, builderPatch(po, edit)); const after = await get(po.id); ok(label + " → refused, nothing written", rr.err && rr.err.code === "line_items_locked" && shape(after) === shape(po), (rr.err && rr.err.message.slice(0, 100)) || "accepted: " + shape(after)); return rr.err; };
+  const draftFor = (listId, lines) => pos.create({ supplierName: "SiteOne", supplierEmail: "orders@siteone.test", sourceMaterialListIds: [listId],
+    lineItems: lines.map(([lineId, sku, qty, price]) => ({ sku, qty, unitPriceCents: price, sourceListId: listId, sourceLineId: lineId })) });
+  const send = (id) => purchasing.sendPurchaseOrder(id, { toEmail: "orders@siteone.test" }, null);
+  const PO1 = await draftFor(po.id, [["li_a", "1401010", 4, 203], ["li_b", "1406010", 2, 203]]);
+  const PO2 = await draftFor(po.id, [["li_c", "405010", 1, 397]]);
+  let rr = await attempt(() => send(PO1.id)); po = await get(po.id);
+  ok("PO door: send flips need → ordered with PO and frozen price", !rr.err && shape(po) === `1401010×4:ordered@${PO1.id}$203,1406010×2:ordered@${PO1.id}$203,405010×1:need`, (rr.err && rr.err.message) || shape(po));
+  rr = await attempt(() => send(PO2.id)); po = await get(po.id);
+  ok("PO door: a SECOND PO against the same list flips its line too", !rr.err && po.lineItems[2].poId === PO2.id, rr.err && rr.err.message);
+  const refused = async (label, edit) => { const r2 = await tryUpdate(ml, po.id, builderPatch(po, edit)); const after = await get(po.id); ok(label + " → refused, nothing written", r2.err && r2.err.code === "line_items_locked" && shape(after) === shape(po), (r2.err && r2.err.message.slice(0, 100)) || "accepted: " + shape(after)); return r2.err; };
   await refused("PATCH changes an ordered line's qty", (c) => { c.lineItems[0].qty = 9; });
   await refused("PATCH changes an ordered line's sku", (c) => { c.lineItems[0].sku = "408010"; });
   await refused("PATCH flips an ordered line to need", (c) => { c.lineItems[0].status = "need"; c.lineItems[0].poId = null; c.lineItems[0].frozenPriceCents = null; });
@@ -124,9 +139,9 @@ try {
   r = await tryUpdate(ml, po.id, builderPatch(po, (c) => { c.lineItems[0].notes = "left at the gate"; c.lineItems.push({ id: "tmp_d", sku: "408010", qty: 3, status: "need", poId: null, notes: "" }); }));
   po = await get(po.id);
   ok("PATCH: a note on an ordered line AND a new need line beside it → saved, the ordered line intact", !r.err && po.lineItems[0].notes === "left at the gate" && po.lineItems[0].status === "ordered" && po.lineItems[0].frozenPriceCents === 203 && po.lineItems.length === 4, (r.err && r.err.message) || shape(po));
-  // receive PO-1
-  r = await tryFlip(ml, po.id, (l) => l.poId === "PO-1" ? { ...l, status: "have", poId: null } : l);
-  ok("PO door: receive flips ordered → have, frozen price KEPT, PO cleared", !r.err && r.list.lineItems[0].status === "have" && r.list.lineItems[0].poId === null && r.list.lineItems[0].frozenPriceCents === 203, r.err && r.err.message); po = r.list || po;
+  rr = await attempt(() => purchasing.receivePurchaseOrder(PO1.id)); po = await get(po.id);
+  ok("PO door: receive flips ordered → have, frozen price KEPT, PO cleared", !rr.err && po.lineItems[0].status === "have" && po.lineItems[0].poId === null && po.lineItems[0].frozenPriceCents === 203, rr.err && rr.err.message);
+  ok("…and the note made while it was on order survives the receipt", po.lineItems[0].notes === "left at the gate");
   await refused("PATCH changes a RECEIVED line's frozen price", (c) => { c.lineItems[0].frozenPriceCents = 100; });
   await refused("PATCH changes a RECEIVED line's qty", (c) => { c.lineItems[0].qty = 1; });
   await refused("PATCH removes a RECEIVED line", (c) => { c.lineItems = c.lineItems.filter((l) => l.id !== "li_a"); });
@@ -134,9 +149,8 @@ try {
   r = await tryUpdate(ml, po.id, builderPatch(po, (c) => { c.lineItems[0].notes = "counted"; }));
   po = await get(po.id);
   ok("PATCH: a note on a received line → saved", !r.err && po.lineItems[0].notes === "counted", r.err && r.err.message);
-  // cancel PO-2
-  r = await tryFlip(ml, po.id, (l) => l.poId === "PO-2" ? { ...l, status: "need", poId: null, frozenPriceCents: null } : l);
-  ok("PO door: cancel flips ordered → need and releases the price", !r.err && r.list.lineItems[2].status === "need" && r.list.lineItems[2].frozenPriceCents === null, r.err && r.err.message); po = r.list || po;
+  rr = await attempt(() => purchasing.cancelPurchaseOrder(PO2.id)); po = await get(po.id);
+  ok("PO door: cancel flips ordered → need and releases the price", !rr.err && po.lineItems[2].status === "need" && po.lineItems[2].frozenPriceCents === null, rr.err && rr.err.message);
   r = await tryUpdate(ml, po.id, builderPatch(po, (c) => { c.lineItems[2].qty = 6; }));
   ok("...and that line is editable again", !r.err && r.list.lineItems[2].qty === 6, r.err && r.err.message); po = r.list || po;
 
@@ -147,14 +161,24 @@ try {
   await refused("PATCH puts a PO id on an existing need line", (c) => { c.lineItems[2].poId = "PO-7"; c.lineItems[2].status = "ordered"; c.lineItems[2].frozenPriceCents = 1; });
 
   // ---- 5. The PO door only takes purchasing transitions --------------
+  // One rule (purchasingTransitionError); purchasing.js checks every move
+  // it commits against it.
   console.log("5. the PO door is narrow");
-  const badFlip = async (label, fn) => { const rr = await tryFlip(ml, po.id, fn); const after = await get(po.id); ok(label + " → refused by the door, nothing written", rr.err && rr.err.code === "purchasing_transition_invalid" && shape(after) === shape(po), (rr.err && rr.err.message) || "accepted: " + shape(after)); };
-  await badFlip("need → have through the door", (l) => l.id === "li_c" ? { ...l, status: "have" } : l);
-  await badFlip("need → ordered without a PO id", (l) => l.id === "li_c" ? { ...l, status: "ordered", frozenPriceCents: 5 } : l);
-  await badFlip("received → need through the door (would release a paid price)", (l) => l.id === "li_a" ? { ...l, status: "need", frozenPriceCents: null } : l);
-  await badFlip("changing a qty through the door", (l) => l.id === "li_c" ? { ...l, qty: 99 } : l);
-  await badFlip("changing a frozen price without a status change", (l) => l.id === "li_a" ? { ...l, frozenPriceCents: 1 } : l);
-  await badFlip("receiving with a different frozen price", (l) => l.id === "li_b" ? { ...l, status: "have", poId: null, frozenPriceCents: 999 } : l);
+  const T = ml.purchasingTransitionError;
+  const L0 = { id: "x", sku: "405010", qty: 2, status: "need", poId: null, frozenPriceCents: null, notes: "" };
+  const LO = { ...L0, status: "ordered", poId: "PO-1", frozenPriceCents: 300 };
+  const LH = { ...L0, status: "have", poId: null, frozenPriceCents: 300 };
+  ok("legal: need → ordered (PO + price)", T(L0, LO) === null);
+  ok("legal: ordered → have (price kept, PO cleared)", T(LO, LH) === null);
+  ok("legal: ordered → need (price released)", T(LO, L0) === null);
+  ok("refused: need → have through the door", !!T(L0, { ...L0, status: "have" }));
+  ok("refused: need → ordered without a PO id", !!T(L0, { ...L0, status: "ordered", frozenPriceCents: 5 }));
+  ok("refused: received → need (would release a paid price)", !!T(LH, L0));
+  ok("refused: changing a qty through the door", !!T(L0, { ...L0, qty: 99 }));
+  ok("refused: changing a frozen price without a status change", !!T(LH, { ...LH, frozenPriceCents: 1 }));
+  ok("refused: receiving with a different frozen price", !!T(LO, { ...LH, frozenPriceCents: 999 }));
+  const PSRC = fs.readFileSync(path.join(LIB_DIR, "purchasing.js"), "utf8");
+  ok("purchasing.js checks every list move it commits against that rule", /materialLists\.purchasingTransitionError\(/.test(PSRC) && /code: "purchasing_transition_invalid"/.test(PSRC));
 
   // ---- 6. Stale-write protection ------------------------------------
   console.log("6. baseUpdatedAt");
@@ -167,26 +191,61 @@ try {
   r = await tryUpdate(ml, fresh.id, { notes: "older client, no base" });
   ok("a client that sends no base is served as before", !r.err && r.list.notes === "older client, no base", r.err && r.err.message);
   {
-    // A PO flip moves the version: the builder's next whole-list save on the old version is refused as stale, so it cannot overwrite the flip.
+    // A PO send moves the version: the builder's next whole-list save on the old version is refused as stale, so it cannot overwrite the send.
     const before = await get(po.id);
-    const flipped = await ml.flipLines(po.id, (l) => l.id === "li_c" ? { ...l, status: "ordered", poId: "PO-3", frozenPriceCents: 397 } : l);
-    const rr = await tryUpdate(ml, po.id, builderPatch(before, (c) => c.lineItems.push({ id: "tmp_z", sku: "1429010", qty: 1, status: "need", poId: null, notes: "" })));
+    await new Promise((res) => setTimeout(res, 5));   // updatedAt is millisecond-stamped
+    const PO3 = await draftFor(po.id, [["li_c", "405010", 6, 397]]);
+    await send(PO3.id);
+    const flipped = await get(po.id);
+    const r3 = await tryUpdate(ml, po.id, builderPatch(before, (c) => c.lineItems.push({ id: "tmp_z", sku: "1429010", qty: 1, status: "need", poId: null, notes: "" })));
     const after = await get(po.id);
-    ok("a builder save made on the version before a PO flip is refused as stale (409), the flip stands", rr.err && rr.err.code === "stale_list" && shape(after) === shape(flipped), (rr.err && rr.err.message) || shape(after));
+    ok("a builder save made on the version before a PO send is refused as stale (409), the send stands", r3.err && r3.err.code === "stale_list" && shape(after) === shape(flipped) && after.lineItems[2].poId === PO3.id, (r3.err && r3.err.message) || shape(after));
   }
 
   // ---- 7. server.js wiring (static) ----------------------------------
   console.log("7. server wiring");
   const SRC = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
-  ok("the three PO flips (send, receive, cancel) go through flipLines", (SRC.match(/materialLists\.flipLines\(/g) || []).length === 3);
+  ok("send, receive and cancel go through the one PO door (purchasing.js)", /purchasing\.sendPurchaseOrder\(/.test(SRC) && /purchasing\.receivePurchaseOrder\(/.test(SRC) && /purchasing\.cancelPurchaseOrder\(/.test(SRC));
   ok("no server-side caller replaces lineItems through update() any more", !/materialLists\.update\([^)]*lineItems/.test(SRC));
   ok("the PATCH route answers 409 for stale_list and line_items_locked", /err\.code === "stale_list" \|\| err\.code === "line_items_locked"/.test(SRC) && /conflict \? 409 : 400/.test(SRC));
   const CLIENT = fs.readFileSync(path.join(ROOT, "server", "material-list.js"), "utf8");
   ok("the builder sends baseUpdatedAt on its save and its unload flush", (CLIENT.match(/baseUpdatedAt: state\.list\.updatedAt/g) || []).length === 2);
+  ok("Add on a part already on the list as a purchased line (ordered, received or price-locked) starts a new Need line instead of bumping the purchased one",
+    /function isPurchased\(line\)[\s\S]{0,200}line\.status === "ordered" \|\| !!line\.poId \|\| line\.frozenPriceCents != null/.test(CLIENT) && /lines\.find\(\(l\) => l\.sku === sku && !isPurchased\(l\)\)/.test(CLIENT));
   ok("on 409 stale_list the builder keeps the edit on screen, shows the message and a Reload button — no automatic reload", /data\.code === "stale_list"/.test(CLIENT) && /changed elsewhere\. Your latest change wasn.t saved\. Reload to continue\./.test(CLIENT) && /saveReload\.hidden = !state\.staleList/.test(CLIENT) && !/if \(state\.staleList\)[^\n]*location\.reload/.test(CLIENT));
+
+  // ---- 8. Combined with #367: a line with purchase history -----------
+  // 6 of 10 arrive on one order; the line is "need" again (4 still to
+  // order) and no longer looks purchased to the line rule above — but it
+  // has receipts behind it, so it can't be dropped or turned into another
+  // part. Its quantity, notes and a hand "have" stay editable.
+  console.log("8. a line with receipts behind it (#367 + #375)");
+  let h = await ml.create({ name: "History list", lineItems: [{ id: "li_h", sku: "1401010", qty: 10 }, { id: "li_m", sku: "405010", qty: 1, status: "have" }] });
+  const PO4 = await draftFor(h.id, [["li_h", "1401010", 6, 250]]);
+  await send(PO4.id);
+  await purchasing.receivePurchaseOrder(PO4.id);
+  h = await get(h.id);
+  const H = () => h.lineItems.find((l) => l.id === "li_h");
+  ok("6 of 10 in on a completed order → the line is need, on no order (4 still to order)", H().status === "need" && H().poId === null && H().frozenPriceCents === null, shape(h));
+  ok("…stillToOrder says 4", pos.stillToOrder(H(), pos.commitmentsByListLine(await pos.list({}), h.id)) === 4);
+  const hist = async (label, edit, expectCode) => { const r4 = await tryUpdate(ml, h.id, builderPatch(h, edit)); const after = await get(h.id);
+    if (expectCode) ok(label + ` → refused (${expectCode}), nothing written`, r4.err && r4.err.code === expectCode && shape(after) === shape(h), (r4.err && (r4.err.code + " " + r4.err.message.slice(0, 80))) || "accepted: " + shape(after));
+    else ok(label + " → saved", !r4.err, r4.err && r4.err.message);
+    h = await get(h.id); };
+  await hist("drop the line with receipts behind it", (c) => { c.lineItems = c.lineItems.filter((l) => l.id !== "li_h"); }, "purchasing_history");
+  await hist("turn it into another part (sku)", (c) => { c.lineItems.find((l) => l.id === "li_h").sku = "408010"; }, "purchasing_history");
+  await hist("change its quantity to 12", (c) => { c.lineItems.find((l) => l.id === "li_h").qty = 12; });
+  ok("…still to order follows: 12 − 6 = 6", pos.stillToOrder(H(), pos.commitmentsByListLine(await pos.list({}), h.id)) === 6);
+  await hist("a note on it", (c) => { c.lineItems.find((l) => l.id === "li_h").notes = "6 on the truck"; });
+  await hist("edit the manual Have line beside it (qty 3) and add another part", (c) => { c.lineItems.find((l) => l.id === "li_m").qty = 3; c.lineItems.push({ id: "tmp_n", sku: "408010", qty: 2, status: "need", poId: null, notes: "" }); });
+  ok("…both saved", h.lineItems.find((l) => l.id === "li_m").qty === 3 && h.lineItems.some((l) => l.sku === "408010"), shape(h));
+  await hist("remove the manual Have line", (c) => { c.lineItems = c.lineItems.filter((l) => l.id !== "li_m"); });
+  ok("the receipt is still on the PO record, at its price", (await pos.get(PO4.id)).lineItems[0].receivedQty === 6 && (await pos.get(PO4.id)).lineItems[0].unitPriceCents === 250);
 } finally {
-  if (backup === null) { if (fs.existsSync(store)) fs.rmSync(store); }
-  else fs.writeFileSync(store, backup);
+  for (const [f, b] of backups) {
+    const p = path.join(DATA, f);
+    if (b === null) { if (fs.existsSync(p)) fs.rmSync(p); } else fs.writeFileSync(p, b);
+  }
 }
 
 console.log(`\nmaterial-list line protection: ${passed} passed, ${failed} failed`);
