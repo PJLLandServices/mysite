@@ -42,6 +42,9 @@ const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+// [mem] log lines — so an out-of-memory restart can be traced to a climb
+// or to a request. Measures only; see lib/memory-log.js.
+const memoryLog = require("./lib/memory-log").createMemoryLog();
 const woPhotoEdits = require("./lib/wo-photo-edits");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
@@ -30278,6 +30281,8 @@ function seasonAndYearFor(date) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // "close" fires however the response ends (finished, aborted, errored).
+  res.on("close", memoryLog.requestStarted(req.method, url.pathname));
   // Normalize the pathname before route matching. If the URL came in with
   // consecutive slashes ("//book.html") — which can happen when a proxy
   // redirect chain mangles a relative path, or when a manual paste
@@ -30769,6 +30774,7 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+  memoryLog.start();
 
   // The geography filter's key, checked ONCE at boot where nobody can
   // miss it. Without it every address is placed by town name only
