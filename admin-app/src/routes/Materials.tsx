@@ -94,7 +94,7 @@ export function MaterialsTab() {
           <Stat label="Material lists" value={String(data?.summary.listCount ?? 0)} />
           {/* The server's words: one list's units, or "Per list — N lists" (never a sum). */}
           <Stat label="Required" value={data?.summary.required.display ?? "None"} hint={data?.summary.required.hint} />
-          <Stat label="Ordered" value={String(data?.summary.orderedUnits ?? 0)} hint="units on purchase orders, no drafts" />
+          <Stat label="Ordered" value={String(data?.summary.orderedUnits ?? 0)} hint="units on POs, no drafts" />
           <Stat label="Received" value={String(data?.summary.receivedUnits ?? 0)} hint="units, all POs" />
           <Stat label="Used on site" value={String(data?.summary.usedUnits ?? 0)} hint="units, all days" />
           <Stat label="Project balance" value={String(data?.summary.balanceUnits ?? 0)} hint="received − used" />

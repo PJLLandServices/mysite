@@ -412,7 +412,7 @@ export function ProjectOverviewTab() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <Fig label="Material lists" value={mat.listCount} hint="what's required, per list" testId="ov-mat-lists" />
               <Fig label="Required" value={mat.required.display} hint={mat.required.hint} testId="ov-mat-required" />
-              <Fig label="Ordered" value={mat.orderedUnits} hint="units on purchase orders, no drafts" testId="ov-mat-ordered" />
+              <Fig label="Ordered" value={mat.orderedUnits} hint="units on POs, no drafts" testId="ov-mat-ordered" />
               <Fig label="Received" value={mat.receivedUnits} hint="units, all POs" testId="ov-mat-received" />
               <Fig label="Used on site" value={mat.usedUnits} hint="units, all days" testId="ov-mat-used" />
               <Fig label="Project balance" value={mat.balanceUnits} hint="received − used" testId="ov-mat-balance" />
