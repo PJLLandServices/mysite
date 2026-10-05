@@ -8564,3 +8564,24 @@ and Patrick approves it before any implementation.
 - **No Charge** (FLOW-31 #8) is pinned unchanged by D6.
 
 Run `npm run test:invoice-delivery`. Each suite joins `build:check` in the PR that makes it pass.
+## 2026-10-05 — CADENCE-04: the send-time re-check used the wall clock, not the sweep's (FLOW-35 touched; no PASS flow)
+
+`sendStepForBooking` re-reads the booking just before sending and asks again whether the step is
+still wanted (`stepStillWanted`). The point is that a customer who confirmed mid-sweep doesn't get
+"please confirm". That re-check took **no `now`**, so it used the real clock, while the sweep,
+blast and catch-up had decided against the `now` they were given.
+
+- **In production:** the two clocks are the same instant, so nothing customer-visible changed.
+- **In `scripts/test-assignment-cadence.mjs`:** the fixtures are bookings on **2026-10-05**. On
+  that real afternoon the wall clock passed them, and every reminder read "appointment passed"
+  (3 checks).
+- **Effect on CI:** every CI run went red from mid-afternoon on 2026-10-05, on every branch, and
+  would have stayed red from the 6th on.
+
+**Fix:**
+- `sendStepForBooking` takes `now` (defaulting to the real time, as before).
+- Its four callers (`blast`, `sendConfirmationForBooking`, `sweepDue`, `catchUpOwed`) pass the
+  `now` they already have.
+- One clock per decision.
+- Reproduced on main first (3 fail), then 48/48.
+- The neighbouring cadence, blast, plan-confirmation and reschedule suites all pass.
