@@ -8168,3 +8168,72 @@ One owner per concern:
 received and cancelled through `purchasing.js`) and adds the combined checks (68 checks).
 
 All seven suites run in `build:check`.
+
+## 2026-10-04 — FIELD-PHOTO-EDIT-01: delete or move a work-order photo from the phone (PJL-110, PJL-111; no PASS flow touched)
+
+**What it is.** On the closing screens, tapping a photo thumbnail now offers **Move to zone…** (zone
+photos) and **Delete photo** (zone and water-off photos). Both are recorded on the phone first and
+synced through the offline queue, like every other field action. Patrick's decisions (2026-10-04):
+delete is **for good** (D-A1), allowed **at any time** from the phone, before or after Finish (D-A2),
+and a finding's photo moved to another zone **comes off the finding, and the app says so** (D-A3).
+
+**Hop chain.** Thumbnail → action sheet → `queue.deletePhoto` / `queue.movePhoto`
+(`pjl-field/src/offline/queue.mjs`) → `transport.photoEdit` (`offline/field.js`) →
+`DELETE` / `PATCH /api/work-orders/:id/photos/:n` or `…/photos/upload/:clientUploadId`, under the
+per-work-order photo lock → `server/lib/wo-photo-edits.js` → `wo.photos`, `wo.removedPhotos`,
+the property's deferred `photoIds`, history.
+
+**The one rule.** `wo-photo-edits.js` decides which photo is meant (`findPhoto`), what a delete
+leaves (`removePhoto`) and what a move does (`movePhoto`). The phone's queue applies the same
+re-filing (`refiled`) so the screen and the server agree.
+
+**Delete is for good, and stays true afterwards.** The file goes, the report's cached copy
+(`<n>@1400.jpeg`) goes, and the photo leaves `wo.photos`. A tombstone with no bytes is kept in
+`wo.removedPhotos`, and it does two things:
+- **A photo number is never reused** (`nextBaseN`). Before this, deleting the highest-numbered
+  photo handed its number to the next upload. An old signed email link then showed a different
+  photo, and the report's cached copy of the deleted photo stood in for the new one.
+- **A late upload cannot bring a photo back** (`field-photo-uploads.newPhotos`). This matters when
+  the phone deletes a photo whose upload is still on its way.
+
+Both routes are idempotent: a photo that is already gone answers 200 `alreadyRemoved`, so a retried
+queue entry acknowledges instead of stalling.
+
+**Offline cases** (`scripts/test-photo-delete-offline.mjs`, real queue + real server rules):
+- A photo that never left the phone is dropped with its bytes and never uploads.
+- A photo that may have reached the server gets a queued server delete. That covers an uploaded
+  photo, an attempted upload, an upload in flight, and an entry left by the previous app version.
+- A move re-files a queued upload's own bytes, plus a server move when needed.
+- A move the server refuses outright (the zone left the visit) is dropped rather than holding the
+  visit's sync.
+- A session advertises `fieldOffline.photoEdit: 1`. A phone on a server without it keeps the change
+  and says the server needs the update.
+
+**Lifecycle walk (CLAUDE.md):**
+- **Customer:** the next report render, the status-update email strip, the portal and signed photo
+  links no longer show a deleted photo. A moved photo shows under its new zone.
+- **Patrick / the office:** work-order history keeps `photo_delete` (photo number, zone, category,
+  who) and `photo_move` (from → to, who, and any finding it came off).
+- **Linked records:** the property's deferred findings drop a deleted photo, and drop a moved photo
+  that came off its finding. Later copies (`wo-findings`) read `wo.photos`, so they never list it.
+- **Capacity, invoice, season plan:** untouched; a photo is not billable.
+- **Deliberately left alone:**
+  - A report **already frozen and sent** (`wo.reportSnapshots`) keeps the photo. It is the legal
+    record of what the customer received.
+  - An email already sent keeps its link, which now answers "Photo not found".
+  - Build-mode task-log and scope-change photo references are not cleaned. The field app's delete
+    and move are on closing visits only.
+
+**Coverage.**
+- `scripts/test-photo-delete-move.mjs`: 33 checks, booted server, temp data. 23 fail on the old
+  code, including number reuse.
+- `scripts/test-photo-delete-offline.mjs`: 13 checks; all 13 fail on the old queue. Mutation
+  checks: dropping the in-flight delete fails 3; dropping the `sent` stamp fails 2.
+- The existing offline and photo suites stay green, and the iOS bundle exports.
+
+**What still needs Patrick:** after the server deploys and the update reaches the phone,
+on a test visit:
+1. Delete a zone photo while offline, then reconnect, and confirm it is gone from the web work
+   order.
+2. Move a photo from one zone to another and confirm the work order shows it under the new zone.
+3. Delete the water-off photo.

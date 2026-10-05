@@ -95,6 +95,32 @@ function merge3(base, mine, theirs, prefer, path, conflicts) {
   return mine;
 }
 
+// One photo, as a delete or a move names it (PJL-110/111): by the phone's
+// upload id when it has one, else by the server's number. A photo still
+// waiting to upload has no number yet (its `n` is the upload id).
+const photoRef = photo => ({
+  clientUploadId: photo?.clientUploadId || null,
+  n: photo?.pending || !Number.isFinite(Number(photo?.n)) ? null : Number(photo.n),
+});
+const isPhoto = (x, ref) => (!!ref.clientUploadId && x?.clientUploadId === ref.clientUploadId)
+  || (ref.n != null && !x?.pending && Number(x?.n) === ref.n);
+// The same re-filing the server does (server/lib/wo-photo-edits.js
+// movePhoto): the zone's own label follows the zone, and a photo leaves a
+// finding that is not in its new zone.
+const findingZone = (record, issueId) => {
+  for (const z of record?.zones || []) if ((z.issues || []).some(i => i.id === issueId)) return Number(z.number);
+  return null;
+};
+function refiled(record, photo, zoneNumber) {
+  const next = { ...photo, zoneNumber };
+  if (/^zone_\d+$/.test(String(photo.label || ''))) {
+    if (zoneNumber == null) delete next.label;
+    else next.label = `zone_${zoneNumber}`;
+  }
+  if (photo.issueId && findingZone(record, photo.issueId) !== zoneNumber) delete next.issueId;
+  return next;
+}
+
 export function createQueue({ store, transport }) {
   let state = store.read() || { version: 1, sequence: 0, records: {}, pending: [], drafts: {}, errors: {} };
   if (state.version !== 1) throw new Error('This phone has an unsupported offline database. Keep the app installed and contact support.');
@@ -138,6 +164,9 @@ export function createQueue({ store, transport }) {
       if (p.kind === 'photo' && !(value.photos || []).some(x => x.clientUploadId === p.id)) {
         value.photos = [...(value.photos || []), { ...p.preview, n: p.id, clientUploadId: p.id, pending: true }];
       }
+      // A queued delete or move shows at once, before it reaches the server.
+      if (p.kind === 'photoDelete') value.photos = (value.photos || []).filter(x => !isPhoto(x, p.photo));
+      if (p.kind === 'photoMove') value.photos = (value.photos || []).map(x => (isPhoto(x, p.photo) ? refiled(value, x, p.zoneNumber) : x));
     }
     return value;
   };
@@ -174,7 +203,56 @@ export function createQueue({ store, transport }) {
     const full = { ...payload, clientUploadId: id };
     store.putBlob(id, full); // Orphan on failed queue commit is safe; losing bytes is not.
     const { data, ...preview } = full;
-    commit(s => { s.sequence++; s.pending.push({ id, key, kind: 'photo', preview }); });
+    // `sent: false` until the first upload attempt. An entry that was never
+    // sent cannot be on the server, so deleting it needs no server call.
+    commit(s => { s.sequence++; s.pending.push({ id, key, kind: 'photo', preview, sent: false }); });
+    return view(key);
+  };
+  // The upload still queued for this photo, if any.
+  const queuedUpload = (key, ref) => (ref.clientUploadId
+    ? state.pending.find(p => p.kind === 'photo' && p.key === key && p.id === ref.clientUploadId) || null
+    : null);
+  // Delete one photo, for good (PJL-110). A photo that never left the phone
+  // is dropped with its bytes and never uploads. One that may have reached
+  // the server (uploaded, or an upload attempted or still in flight) gets a
+  // queued server delete by upload id: the server removes it if it is there
+  // and leaves a tombstone if not, so a late upload of it cannot land.
+  // Entries made before `sent` existed count as possibly sent.
+  const deletePhoto = (key, photo) => {
+    requireRecord(key);
+    const ref = photoRef(photo);
+    if (!ref.clientUploadId && ref.n == null) throw new Error('This photo cannot be found on the phone.');
+    const upload = queuedUpload(key, ref);
+    commit(s => {
+      s.pending = s.pending.filter(p => !(p.key === key && ((upload && p.id === upload.id) || (p.kind === 'photoMove' && isPhoto(p.photo, ref)))));
+      if (!upload || upload.sent !== false) s.pending.push({ id: `photo-delete-${++s.sequence}`, key, kind: 'photoDelete', photo: ref });
+    });
+    if (upload) { try { store.deleteBlob(upload.id); } catch {} }
+    return view(key);
+  };
+  // Re-file one photo under another zone of this visit, or the whole visit
+  // (zoneNumber null) — same photo, no retake (PJL-111). A photo still
+  // waiting to upload is re-filed in its queued upload, bytes included, so
+  // it arrives in the right zone; one that may be on the server also gets a
+  // queued server move.
+  const movePhoto = (key, photo, zoneNumber) => {
+    const record = requireRecord(key);
+    const to = zoneNumber == null ? null : Number(zoneNumber);
+    if (to !== null && !(record.zones || []).some(z => (z?.kind || 'zone') === 'zone' && Number(z?.number) === to)) {
+      throw new Error(`Zone ${zoneNumber} is not on this visit.`);
+    }
+    const ref = photoRef(photo);
+    if (!ref.clientUploadId && ref.n == null) throw new Error('This photo cannot be found on the phone.');
+    const upload = queuedUpload(key, ref);
+    if (upload) {
+      const bytes = store.getBlob(upload.id);
+      if (bytes) store.putBlob(upload.id, refiled(record, bytes, to)); // Bytes first: a moved preview over unmoved bytes would upload to the old zone.
+    }
+    commit(s => {
+      const q = upload && s.pending.find(p => p.id === upload.id);
+      if (q) q.preview = refiled(record, q.preview, to);
+      if (!upload || upload.sent !== false) s.pending.push({ id: `photo-move-${++s.sequence}`, key, kind: 'photoMove', photo: ref, zoneNumber: to });
+    });
     return view(key);
   };
   // `sent`: what actually went to the server for each field (a merge of the
@@ -225,7 +303,21 @@ export function createQueue({ store, transport }) {
               else {
                 const bytes = store.getBlob(entry.id);
                 if (!bytes) throw issue('The locally recorded photo cannot be read. Keep the app installed.', 'storage');
+                // From here the photo may reach the server even if this
+                // attempt fails, so a delete must ask the server (deletePhoto).
+                if (entry.sent === false) commit(s => { const q = s.pending.find(p => p.id === entry.id); if (q) q.sent = true; });
                 result = await transport.photo(entry.key, bytes);
+              }
+            } else if (entry.kind === 'photoDelete' || entry.kind === 'photoMove') {
+              // The server answers a photo that is already gone with 200, so
+              // a retry after a lost response acknowledges. A move it refuses
+              // outright (the zone left the visit, or no such photo) cannot
+              // succeed on any retry: it is dropped, and the photo shows
+              // where the server has it, rather than holding the visit's sync.
+              try { result = await transport.photoEdit(entry.key, entry); }
+              catch (err) {
+                if (entry.kind !== 'photoMove' || ![404, 422].includes(err.status)) throw err;
+                result = remote;
               }
             } else {
               const changes = {};
@@ -299,7 +391,7 @@ export function createQueue({ store, transport }) {
     });
   };
   return {
-    view, patch, photo, status, flush, resolveConflict,
+    view, patch, photo, deletePhoto, movePhoto, status, flush, resolveConflict,
     seed(key, remote) {
       const currentTime = Date.parse(state.records[key]?.updatedAt);
       const incomingTime = Date.parse(remote.updatedAt);

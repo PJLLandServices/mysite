@@ -126,6 +126,26 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     queue.flush().catch(() => {});
   }, []);
   const photoUri = photo => pendingPhotoUri(field.current.queue, photo);
+  // Delete or re-file a photo (PJL-110/111): recorded on the phone first,
+  // like every field action, then synced.
+  const deletePhoto = useCallback(photo => {
+    try {
+      const { queue, key } = field.current;
+      queue.deletePhoto(key, photo);
+      queue.flush().catch(() => {});
+    } catch (err) {
+      Alert.alert("Couldn't delete the photo", err?.message || 'Try again.');
+    }
+  }, []);
+  const movePhoto = useCallback((photo, zoneNumber) => {
+    try {
+      const { queue, key } = field.current;
+      queue.movePhoto(key, photo, zoneNumber);
+      queue.flush().catch(() => {});
+    } catch (err) {
+      Alert.alert("Couldn't move the photo", err?.message || 'Try again.');
+    }
+  }, []);
 
   // The system facts on the arrival screen belong to the PROPERTY, not to
   // this visit — which is why correcting one on a driveway in October is
@@ -390,7 +410,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   // The property half of Remove zone (PJL-98): the visit is already saved.
   const removeZoneOnProperty = (number, why) =>
     removeZoneFromProperty(field.current.queue, field.current.key, { number, ...why }, removePropertyZone);
-  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty };
+  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, removeZoneOnProperty };
   // Only a failed upload or a conflict, never the second a tap spends uploading.
   const notice = syncNoticeFor(syncState);
 

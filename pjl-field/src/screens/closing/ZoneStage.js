@@ -7,11 +7,12 @@
 // them — but the fields are left untouched in the data for spring.
 
 import { useEffect, useState } from 'react';
-import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { uploadWoPhotos, woPhotoUri } from '../../api';
+import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { uploadWoPhotos } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
+import PhotoThumbs from './PhotoThumbs';
 
 // Patrick's field vocabulary on the left, the stored ZONE_ISSUE_TYPES on
 // the right. `pipe`, `wire` and `controller` still exist server-side and
@@ -49,7 +50,7 @@ const REPAIR_TYPES = [
   { key: 'other', label: 'Other (use notes)' },
 ];
 
-export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty }) {
+export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, removeZoneOnProperty }) {
   const zones = wo?.zones || [];
   const zone = zones[zoneIndex] || {};
   const total = zones.length;
@@ -346,20 +347,15 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
       </Section>
 
       <Section title="Photos">
-        {zonePhotos.length ? (
-          <View style={styles.thumbs}>
-            {zonePhotos.map((p) => (
-              <Image
-                key={p.n}
-                source={{ uri: photoUri(p) || woPhotoUri(wo.id, p) }}
-                style={styles.thumb}
-                resizeMode="cover"
-              />
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.none}>No photos on this zone.</Text>
-        )}
+        <PhotoThumbs
+          wo={wo}
+          photos={zonePhotos}
+          photoUri={photoUri}
+          onDelete={deletePhoto}
+          onMove={movePhoto}
+          canMove
+          empty="No photos on this zone."
+        />
         <View style={styles.photoActions}>
           <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
           <Button label="Choose from library" tone="ghost" onPress={() => attach(pickPhoto)} disabled={busy} />
@@ -481,8 +477,5 @@ const styles = StyleSheet.create({
   },
   textarea: { minHeight: 96, textAlignVertical: 'top' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, padding: space.md, paddingTop: 0 },
-  thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, padding: space.md },
-  thumb: { width: 96, height: 96, borderRadius: radius.card, backgroundColor: colors.separator },
-  none: { ...type.caption, padding: space.lg },
   actions: { gap: space.sm },
 });
