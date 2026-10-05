@@ -42,6 +42,7 @@ const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+const woPhotoEdits = require("./lib/wo-photo-edits");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendPaymentExceptionAlert, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
@@ -182,6 +183,9 @@ const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
+// Send / receive / cancel: the PO and its list lines in one commit.
+const purchasing = require("./lib/purchasing");
+const purchasingStore = require("./lib/purchasing-store");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
@@ -681,6 +685,12 @@ const MIME_TYPES = {
   ".webm": "video/webm",
   ".mov": "video/quicktime"
 };
+
+// A purchase order or material list under a recovery hold (purchasing-
+// store.js): 423 Locked, with the office's message and the hold itself.
+function sendRecoveryRequired(res, err) {
+  return sendJson(res, 423, { ok: false, code: "recovery_required", errors: [err.message], recoveryHold: err.hold || null });
+}
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -1708,7 +1718,19 @@ async function handleAuth(req, res, pathname) {
     } else if (session.role === "customer") {
       me = { id: session.uid, role: "customer" };
     }
-    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1 } });
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: {
+      photoRetry: 1, photoEdit: 1, ownerCheck: 1, photoMarkup: 1,
+      // Shrinking photos on the phone before upload (PJL-112) has its own
+      // switch, OFF unless FIELD_PHOTO_SHRINK is set on the server: it is
+      // turned on after the device check on Patrick's phone, and off again
+      // with no app update if it misbehaves. Markup does not depend on it.
+      //   1        shrink every photo before it queues
+      //   compare  the device check: each shot uploads BOTH its untouched
+      //            original and the shrunk copy (labelled "Shrink test"),
+      //            so the two can be compared and their real sizes read off
+      //            the work order. Use on a test visit only.
+      photoShrink: process.env.FIELD_PHOTO_SHRINK === "1" ? 1 : process.env.FIELD_PHOTO_SHRINK === "compare" ? 2 : 0
+    } });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -2891,8 +2913,28 @@ async function readWorkOrderPhotoFile(woId, n) {
   return null;
 }
 
+// Photos that left a work order also leave the findings it copied to the
+// property, which list their photos by number (PJL-110/112).
+async function dropFromDeferred(propertyId, woId, ns) {
+  try {
+    for (const d of await properties.listDeferred(propertyId)) {
+      if (d.fromWoId !== woId) continue;
+      let ids = d.photoIds;
+      for (const n of ns) ids = woPhotoEdits.photoIdsWithout({ photoIds: ids }, n) || ids;
+      if (ids.length !== (d.photoIds || []).length) await properties.updateDeferredIssue(propertyId, d.id, { photoIds: ids });
+    }
+  } catch (err) { console.warn("[wo-photo] deferred photo cleanup failed:", err?.message); }
+}
+
 async function deleteWorkOrderPhotoFile(woId, n) {
   const dir = path.join(WO_PHOTOS_DIR, woId);
+  // The report's downscaled copies (<n>@<edge>.jpeg, lib/wo-report-pdf.js)
+  // go with the original: a deleted photo is deleted (PJL-110).
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith(`${n}@`)) await fs.unlink(path.join(dir, name)).catch(() => {});
+    }
+  } catch {}
   for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
     const file = path.join(dir, `${n}.${ext}`);
     try { await fs.unlink(file); return true; } catch {}
@@ -14386,7 +14428,7 @@ async function handleApi(req, res, pathname) {
   //   GET  /api/part-photo-quality/plan            the cached plan: deterministic upgrades + review rows (staff)
   //   POST /api/part-photo-quality/plan            (re)build it — reads each photo's product page (admin)
   //   POST /api/part-photo-quality/upgrade {hashes} apply exactly the upgrades shown (admin)
-  //   POST /api/part-photo-quality/review/:groupId {action: keep} (admin)
+  //   POST /api/part-photo-quality/review/:groupId {action: keep} | {action: restore-held, hash} (admin)
   // A replacement of the picture only: part match, fitting, approval and
   // confidence are never touched (lib/part-photos.upgradePhotoQuality).
   if (req.method === "GET" && pathname === "/api/part-photo-quality/plan") {
@@ -14427,6 +14469,14 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const groupId = decodeURIComponent(qualityReviewMatch[1]);
+      // A held larger copy Patrick compared and confirmed is the same
+      // photograph: the same image-only swap as /upgrade, for this one row.
+      if (String(payload.action || "") === "restore-held") {
+        const out = await photoQuality.restoreHeld(groupId, { by, hash: String(payload.hash || "") });
+        rebuildCatalogFromOverrides();
+        await settings.recordAudit({ who: by, action: "part-photo.quality.restore-held", note: `Quality review: ${out.skus.join(", ")} restored to the held larger copy, confirmed by eye as the same photograph (${out.from.longest}px → ${out.to.width}×${out.to.height}, match ${out.similarity}; tier, approval and source page unchanged)`, after: out });
+        return sendJson(res, 200, { ok: true, groupId, ...out });
+      }
       const out = await photoQuality.resolveReview(groupId, { action: String(payload.action || ""), by });
       await settings.recordAudit({ who: by, action: "part-photo.quality.review", note: `Quality review: kept ${groupId} as is`, after: out });
       return sendJson(res, 200, { ok: true, groupId, ...out });
@@ -16698,7 +16748,8 @@ async function handleApi(req, res, pathname) {
     const parentId = url.searchParams.get("parentId");
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const withTotals = url.searchParams.get("withTotals") === "1";
-    const all = await materialLists.list({ status, parentType, parentId, includeArchived });
+    const all = (await materialLists.list({ status, parentType, parentId, includeArchived }))
+      .map((rec) => ({ ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }));
     // Newest-first index — same convention as invoices/quotes.
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
     if (!withTotals) return sendJson(res, 200, { ok: true, lists: all });
@@ -16713,6 +16764,7 @@ async function handleApi(req, res, pathname) {
       const created = await materialLists.create(payload);
       return sendJson(res, 201, { ok: true, list: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create material list."] });
     }
   }
@@ -16723,7 +16775,7 @@ async function handleApi(req, res, pathname) {
     const rec = await materialLists.get(id);
     if (!rec) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
     const partsMap = (PARTS && PARTS.parts) || {};
-    return sendJson(res, 200, { ok: true, list: rec, totals: materialLists.computeTotals(rec, partsMap) });
+    return sendJson(res, 200, { ok: true, list: { ...rec, recoveryHold: purchasingStore.holdInfo({ materialLists: [rec.id] }) }, totals: materialLists.computeTotals(rec, partsMap) });
   }
   if (listMatch && req.method === "PATCH") {
     try {
@@ -16734,14 +16786,26 @@ async function handleApi(req, res, pathname) {
       const partsMap = (PARTS && PARTS.parts) || {};
       return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
+      // 409: the client edited an older version (stale_list), asked to
+      // change a purchased line (line_items_locked), or to drop a line a
+      // purchase order was placed for (purchasing_history). 423: a
+      // recovery hold. Nothing was written.
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      const conflict = err && (err.code === "stale_list" || err.code === "line_items_locked" || err.code === "purchasing_history");
+      return sendJson(res, conflict ? 409 : 400, { ok: false, code: err && err.code ? err.code : undefined, errors: [err.message || "Couldn't update material list."] });
     }
   }
   if (listMatch && req.method === "DELETE") {
-    const id = decodeURIComponent(listMatch[1]);
-    const removed = await materialLists.remove(id);
-    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const id = decodeURIComponent(listMatch[1]);
+      const removed = await materialLists.remove(id);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.code === "purchasing_history") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
+      throw err;
+    }
   }
 
   // POST /api/material-lists/:id/plan-purchase-orders — DRY RUN. Returns
@@ -16760,7 +16824,8 @@ async function handleApi(req, res, pathname) {
       // all at the dearer branch; the dialog lets Patrick choose.
       const planBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -16786,6 +16851,7 @@ async function handleApi(req, res, pathname) {
         supplierOptions
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
     }
   }
@@ -16806,9 +16872,13 @@ async function handleApi(req, res, pathname) {
       // from the preview: the dialog and the write are separate requests.
       const genBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
-      if (forceSupplierId && !plan.drafts.length) {
-        return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
+      // Plan and create under the purchasing lock: a double-click's second
+      // request waits, then sees the first's draft and proposes nothing.
+      return await purchasingStore.withPurchasingLock(async () => {
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
+      if (!plan.drafts.length && !plan.missingSupplier.length) {
+        return sendJson(res, 422, { ok: false, code: "nothing_to_order", errors: ["Nothing to order — every need line is already received, on order or on a draft purchase order."] });
       }
       if (!forceSupplierId && !plan.ok) {
         return sendJson(res, 422, {
@@ -16837,7 +16907,9 @@ async function handleApi(req, res, pathname) {
         created.push(po);
       }
       return sendJson(res, 201, { ok: true, purchaseOrders: created });
+      });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate purchase orders."] });
     }
   }
@@ -16875,6 +16947,7 @@ async function handleApi(req, res, pathname) {
       const created = await projects.create(payload);
       return sendJson(res, 201, { ok: true, project: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
     }
   }
@@ -17230,12 +17303,21 @@ async function handleApi(req, res, pathname) {
     const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
     const workOrderIds = Array.isArray(proj.workOrderIds) ? proj.workOrderIds : [];
 
+    const keptLists = [];
     if (cascade) {
       // Test project — the customer wants a clean wipe, not an orphan
       // trail. Delete every attached material list and work order, then
-      // the project itself.
+      // the project itself. A list a purchase order was placed for is
+      // never deleted (2026-10-03) — that order would belong to nothing —
+      // so it is detached and kept, and the reply says which.
       for (const rec of attached) {
-        await materialLists.remove(rec.id);
+        try {
+          await materialLists.remove(rec.id);
+        } catch (err) {
+          if (!err || err.code !== "purchasing_history") throw err;
+          await materialLists.update(rec.id, { parentType: null, parentId: null });
+          keptLists.push({ id: rec.id, reason: err.message });
+        }
       }
       for (const woId of workOrderIds) {
         await workOrders.remove(woId).catch(() => {});
@@ -17257,7 +17339,7 @@ async function handleApi(req, res, pathname) {
     await fs.rm(path.join(PROJECT_JOURNAL_PHOTOS_DIR, id), { recursive: true, force: true }).catch(() => {});
 
     const removed = await projects.remove(id);
-    return sendJson(res, 200, { ok: true, removed, cascade });
+    return sendJson(res, 200, { ok: true, removed, cascade, keptLists });
   }
 
   // POST /api/projects/:id/attach-work-order { workOrderId }
@@ -17923,13 +18005,13 @@ async function handleApi(req, res, pathname) {
                 if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
               } catch (_) {}
             }
-            const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+            const baseN = woPhotoEdits.nextBaseN(fresh);
             const now = new Date().toISOString();
             const newMeta = await savePhotosForWorkOrder(woId, validated, now, baseN, {
               propertyCode,
               woCode: wo.id
             });
-            await workOrders.update(woId, { photos: [...existing, ...newMeta] });
+            await workOrders.update(woId, { photos: [...existing, ...newMeta] }, { photoOnly: true });
             photoMetas.push(...newMeta);
           } catch (photoErr) {
             console.warn("[tasks-done photos] upload failed:", photoErr?.message);
@@ -20343,7 +20425,33 @@ async function handleApi(req, res, pathname) {
     const materialListId = url.searchParams.get("materialListId");
     let all = await purchaseOrders.list({ status, supplierId, materialListId });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    return sendJson(res, 200, { ok: true, purchaseOrders: all });
+    all = all.map((po) => ({ ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) }));
+    // Interrupted purchasing saves recovery could not apply — a person
+    // has to look (purchasing-store.js). Empty when all is well.
+    return sendJson(res, 200, { ok: true, purchaseOrders: all, purchasingRecovery: purchasingStore.recoveryStatus() });
+  }
+
+  // Recovery holds (purchasing-store.js) — what is locked and why, and the
+  // office's release once it has checked the records. Office only. A
+  // release is refused while the PO and list still disagree.
+  if (req.method === "GET" && pathname === "/api/purchasing/recovery-holds") {
+    const holdsSession = await requireAdmin(req);
+    if (!holdsSession) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+    return sendJson(res, 200, { ok: true, ...purchasingStore.recoveryStatus() });
+  }
+  if (req.method === "POST" && pathname === "/api/purchasing/recovery-holds/release") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Office only."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const by = await actorLabel(req, session.uid || "admin");
+      const released = await purchasing.releaseRecoveryHold({ scope: payload.scope, id: payload.id || null, note: payload.note, by,
+        acknowledgeSourceMissing: payload.acknowledgeSourceMissing === true });
+      return sendJson(res, 200, { ok: true, released });
+    } catch (err) {
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't release the hold."] });
+    }
   }
 
   if (req.method === "POST" && pathname === "/api/purchase-orders") {
@@ -20364,6 +20472,7 @@ async function handleApi(req, res, pathname) {
       const created = await purchaseOrders.create(payload);
       return sendJson(res, 201, { ok: true, purchaseOrder: created });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create purchase order."] });
     }
   }
@@ -20372,7 +20481,7 @@ async function handleApi(req, res, pathname) {
   if (poMatch && req.method === "GET") {
     const po = await purchaseOrders.get(decodeURIComponent(poMatch[1]));
     if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-    return sendJson(res, 200, { ok: true, purchaseOrder: po });
+    return sendJson(res, 200, { ok: true, purchaseOrder: { ...po, recoveryHold: purchasingStore.holdInfo(purchaseOrders.poRefs(po)) } });
   }
   if (poMatch && req.method === "PATCH") {
     try {
@@ -20382,6 +20491,7 @@ async function handleApi(req, res, pathname) {
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update purchase order."] });
     }
   }
@@ -20392,8 +20502,13 @@ async function handleApi(req, res, pathname) {
     if (po.status !== "draft") {
       return sendJson(res, 409, { ok: false, errors: [`Can only delete draft POs. This one is "${po.status}". Use cancel instead.`] });
     }
-    const removed = await purchaseOrders.remove(id);
-    return sendJson(res, 200, { ok: true, removed });
+    try {
+      const removed = await purchaseOrders.remove(id);
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      throw err;
+    }
   }
 
   // POST /api/purchase-orders/:id/send — render PDF + CSV, snapshot
@@ -20420,8 +20535,12 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this PO."] });
       }
 
-      // Render PDF + CSV. notify-supplier composes the subject from the
-      // PO if no override is given.
+      // Validate → render + email → commit the PO and its list lines, all
+      // in one purchasing.sendPurchaseOrder call holding the purchasing
+      // lock (2026-10-02). Nothing is emailed unless the send has already
+      // validated; nothing is saved unless both the PO and every list line
+      // it moves save together. A second click waits, then finds the PO
+      // sent (409) — the supplier is not emailed twice.
       const { generatePoPdf } = require("./lib/po-pdf");
       const { generatePoCsv } = require("./lib/po-csv");
       const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
@@ -20429,82 +20548,80 @@ async function handleApi(req, res, pathname) {
       // feeds every render surface so descriptions can't diverge between
       // the PDF/CSV and the email the way they used to (disk vs memory).
       const poPartsMap = (PARTS && PARTS.parts) || {};
-      const pdfBuffer = await generatePoPdf(po, poPartsMap);
-      const csvBuffer = generatePoCsv(po, poPartsMap);
       const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
 
-      // Write both files to the per-PO snapshot directory. Paths persist
-      // on the PO record as repo-relative strings so the resend handler
-      // can find them again. mkdir -p is idempotent.
-      const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
-      await fs.mkdir(poFilesDir, { recursive: true });
-      const pdfFsPath = path.join(poFilesDir, `${po.id}.pdf`);
-      const csvFsPath = path.join(poFilesDir, `${po.id}.csv`);
-      await fs.writeFile(pdfFsPath, pdfBuffer);
-      await fs.writeFile(csvFsPath, csvBuffer);
-      // Store paths repo-relative — survives moving the install dir.
-      const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
-      const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
-
-      // describeLine is injected so notify-supplier.js stays decoupled from
-      // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
-      // stored line description first, then the catalog (no size prefix).
-      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
-      const describeLine = (line) => resolveLineDescription(line, poPartsMap);
-      // The paste block in the email carries THEIR part number, same as the
-      // PDF and CSV — it is pasted straight into the supplier's system.
-      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
-
-      await sendPurchaseOrderEmail({
-        po,
-        toEmail,
-        toName: payload.toName || po.supplierContactName || po.supplierName,
-        subject,
-        bodyText: payload.bodyText || "",
-        pdfBuffer,
-        csvBuffer,
-        describeLine,
-        skuForLine
-      });
-
-      // Flip the PO state — persist the document paths so the resend
-      // path can find the snapshotted files.
-      const sentPo = await purchaseOrders.markSent(id, {
-        toEmail,
-        toName: payload.toName,
-        subject,
-        pdfPath,
-        csvPath
-      });
-
-      // Flip every source material-list line to "ordered" with this PO id,
-      // AND lock its price: stamp the line with the PO line's snapshotted
-      // unitPriceCents so the list stops resolving live from parts.json and
-      // can never disagree with what was actually ordered. Map each source
-      // line id to its PO-line price, grouped by source list so we patch
-      // each list once.
-      const sentPriceByList = new Map();   // listId -> Map(sourceLineId -> unitPriceCents)
-      for (const line of sentPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!sentPriceByList.has(line.sourceListId)) sentPriceByList.set(line.sourceListId, new Map());
-        sentPriceByList.get(line.sourceListId).set(line.sourceLineId, Number(line.unitPriceCents) || 0);
-      }
-      for (const [listId, priceByLineId] of sentPriceByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (priceByLineId.has(l.id) && l.status === "need") {
-            return { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) };
-          }
-          return l;
+      const sendSession = await readSession(req);
+      const by = await actorLabel(req, (sendSession && sendSession.uid) || "admin");
+      const result = await purchasing.sendPurchaseOrder(id, { toEmail, toName: payload.toName, subject, by }, async (draft) => {
+        const pdfBuffer = await generatePoPdf(draft, poPartsMap);
+        const csvBuffer = generatePoCsv(draft, poPartsMap);
+        // Write both files to the per-PO snapshot directory. Paths persist
+        // on the PO record as repo-relative strings so the resend handler
+        // can find them again. mkdir -p is idempotent.
+        const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
+        await fs.mkdir(poFilesDir, { recursive: true });
+        const pdfFsPath = path.join(poFilesDir, `${draft.id}.pdf`);
+        const csvFsPath = path.join(poFilesDir, `${draft.id}.csv`);
+        await fs.writeFile(pdfFsPath, pdfBuffer);
+        await fs.writeFile(csvFsPath, csvBuffer);
+        // describeLine is injected so notify-supplier.js stays decoupled
+        // from parts.json. Same resolver + same catalog as the PDF/CSV.
+        const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
+        const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+        // The paste block in the email carries THEIR part number, same as
+        // the PDF and CSV — it is pasted straight into the supplier's system.
+        const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, draft.supplierId);
+        await sendPurchaseOrderEmail({
+          po: draft,
+          toEmail,
+          toName: payload.toName || draft.supplierContactName || draft.supplierName,
+          subject,
+          bodyText: payload.bodyText || "",
+          pdfBuffer,
+          csvBuffer,
+          describeLine,
+          skuForLine
         });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-
-      return sendJson(res, 200, { ok: true, purchaseOrder: sentPo });
+        // Store paths repo-relative — survives moving the install dir.
+        return {
+          pdfPath: path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/"),
+          csvPath: path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/")
+        };
+      });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       console.warn("[po] send failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/send-outcome — after an interrupted send
+  // (delivery_uncertain), the office records whether the supplier email
+  // actually arrived: { outcome: "sent" | "not_sent" }. Nothing is emailed.
+  // "sent" saves the PO as sent and its list lines as ordered, in one commit.
+  const poSendOutcomeMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/send-outcome$/);
+  if (poSendOutcomeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poSendOutcomeMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const outcomeSession = await readSession(req);
+      const by = await actorLabel(req, (outcomeSession && outcomeSession.uid) || "admin");
+      // The documents rendered for the interrupted send, if they were written.
+      const docs = {};
+      for (const [key, ext] of [["pdfPath", "pdf"], ["csvPath", "csv"]]) {
+        const fsPath = path.join(DATA_DIR, "purchase-orders", "files", `${id}.${ext}`);
+        if (fsSync.existsSync(fsPath)) docs[key] = path.relative(SERVER_DIR, fsPath).split(path.sep).join("/");
+      }
+      const result = await purchasing.resolveUncertainPoSend(id, { outcome: payload.outcome, by, docs });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po });
+    } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't record the send outcome."] });
     }
   }
 
@@ -20526,43 +20643,17 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poReceiveMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markReceived(id, {
+      // The receipt and the list lines it completes, in one commit
+      // (purchasing.js). Quantities are absolute, so a repeat of the same
+      // request records nothing new.
+      const result = await purchasing.receivePurchaseOrder(id, {
         lineUpdates: payload && payload.lineUpdates,
         note: payload && payload.note || ""
       });
-      const receivedPo = result.po;
-
-      // Flip ONLY the lines that became fully received on this event.
-      // Build lineId -> source pointers from the receivedPo.
-      const sourcePointersById = new Map();
-      for (const line of receivedPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.fullyReceivedLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
-            // Keep frozenPriceCents (carried by the spread): a received line
-            // should show the price actually paid, not drift to live catalog.
-            return { ...l, status: "have", poId: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo, fullyReceivedLineIds: result.fullyReceivedLineIds });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, fullyReceivedLineIds: result.fullyReceivedLineIds, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record receipt."] });
     }
   }
@@ -20576,39 +20667,13 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poCancelMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
-      const cancelledPo = result.po;
-
-      // Build per-line source pointers, then flip ONLY the outstanding ones.
-      const sourcePointersById = new Map();
-      for (const line of cancelledPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.outstandingLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
-            // Back to a live planning line — release the price lock so it
-            // resolves from the current catalog again.
-            return { ...l, status: "need", poId: null, frozenPriceCents: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
+      // The cancellation and the list lines it frees, in one commit
+      // (purchasing.js). What already arrived stays received.
+      const result = await purchasing.cancelPurchaseOrder(id, { reason: payload.reason || "" });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
     }
   }
@@ -20631,6 +20696,8 @@ async function handleApi(req, res, pathname) {
       if (po.status !== "sent" && po.status !== "partially_received") {
         return sendJson(res, 409, { ok: false, errors: [`Can't re-send a "${po.status}" PO.`] });
       }
+      // Held, or for a list line that's gone: refused before any email.
+      await purchaseOrders.assertActionable(po);
       const payload = await parseRequestBody(req).catch(() => ({}));
       const toEmail = String(payload.toEmail || po.emailedToEmail || po.supplierEmail || "").trim().toLowerCase();
       if (!toEmail) {
@@ -20691,6 +20758,7 @@ async function handleApi(req, res, pathname) {
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       console.warn("[po] resend failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't re-send purchase order."] });
     }
@@ -20707,6 +20775,8 @@ async function handleApi(req, res, pathname) {
       const newPo = await purchaseOrders.reorderFrom(id, partsMap);
       return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && (err.code === "nothing_to_reorder" || err.code === "source_missing")) return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }
@@ -20738,6 +20808,7 @@ async function handleApi(req, res, pathname) {
       res.end(pdf);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
     }
   }
@@ -20767,6 +20838,7 @@ async function handleApi(req, res, pathname) {
       res.end(csv);
       return;
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render CSV."] });
     }
   }
@@ -20801,7 +20873,8 @@ async function handleApi(req, res, pathname) {
           ? active.map((x) => x.id)
           : active.filter((x) => shopParam.split(",").map((t) => t.trim()).includes(x.id)).map((x) => x.id);
       }
-      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds } : {});
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds, committed } : { committed });
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
       // Surface an existing draft per supplier so the modal can say
       // "refreshes RFQ-…" instead of implying a duplicate gets created.
@@ -20812,6 +20885,8 @@ async function handleApi(req, res, pathname) {
         supplierName: supplierById.get(g.supplierId)?.name || "(unknown supplier)",
         supplierEmail: supplierById.get(g.supplierId)?.email || "",
         lineCount: g.lines.length,
+        // What each supplier will be asked for — the still-to-buy quantity.
+        lines: g.lines.map((l) => ({ sku: l.sku, quantity: l.quantity, unit: l.unit })),
         existingDraftId: draftBySupplier.get(g.supplierId) || null
       }));
       return sendJson(res, 200, {
@@ -20824,6 +20899,7 @@ async function handleApi(req, res, pathname) {
         missingSupplierLines: plan.missingSupplierLines
       });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan quote requests."] });
     }
   }
@@ -20867,7 +20943,8 @@ async function handleApi(req, res, pathname) {
           errors: ["Shopping a list needs at least two suppliers to compare — only one is available."]
         });
       }
-      const opts = shopSupplierIds ? { shopSupplierIds } : {};
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const opts = shopSupplierIds ? { shopSupplierIds, committed } : { committed };
       const plan = quoteRequests.planFromMaterialList(list, partsMap, opts);
       if (!plan.ok) {
         return sendJson(res, 422, {
@@ -20882,6 +20959,7 @@ async function handleApi(req, res, pathname) {
       const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById, opts);
       return sendJson(res, 201, { ok: true, mode: plan.mode, created: result.created, refreshed: result.refreshed });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
     }
   }
@@ -20938,6 +21016,7 @@ async function handleApi(req, res, pathname) {
       if (applied.length) rebuildCatalogFromOverrides();
       return sendJson(res, 200, { ok: true, applied, unchanged, skipped, rows: winners.length });
     } catch (err) {
+      if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply the cheapest quotes."] });
     }
   }
@@ -21896,7 +21975,9 @@ async function handleApi(req, res, pathname) {
         return Boolean(payload.signature && payload.status === "completed" && keys.every((k) => SIGN_AND_COMPLETE.has(k)));
       })();
       const versionCheck = ifMatch && !versionExempt ? ifMatch : null;
-      if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
+      // workOrders.versionMatches: the one If-Match rule (PJL-113) — a photo
+      // or history write since the client's read is not a clash.
+      if (!workOrders.versionMatches(existing, ifMatch, payload)) {
         const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
         const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
         // Merged "Sign, lock & generate invoice" tap (Phase 2 cascade
@@ -22516,9 +22597,29 @@ async function handleApi(req, res, pathname) {
       // field uploads can be straight-from-camera HEIC or customer PDFs.
       const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
-      const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+      let freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing, wo.removedPhotos);
+      // A marked-up photo names its original (PJL-112, lib/wo-photo-edits.js
+      // resolveMarkupOf). Its original deleted meanwhile: the markup is
+      // dropped with a tombstone, so neither comes back.
+      const links = [];
+      const droppedMarkups = [];
+      if (Array.isArray(freshPhotos)) {
+        const keep = [];
+        for (const p of freshPhotos) {
+          if (p?.markupOf == null) { keep.push(p); links.push(null); continue; }
+          const link = woPhotoEdits.resolveMarkupOf(wo, p.markupOf);
+          if (link.error) return sendJson(res, 422, { ok: false, error: "markup_original_missing", errors: [link.error] });
+          if (link.dropped) { droppedMarkups.push(p.clientUploadId || null); continue; }
+          keep.push(p); links.push(link.original);
+        }
+        freshPhotos = keep;
+      }
       if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
-        return sendJson(res, 200, { ok: true, workOrder: wo, added: [] });
+        const tombstones = droppedMarkups.filter(Boolean).map((cid) => ({ n: null, clientUploadId: cid, removedAt: new Date().toISOString(), by: "tech" }));
+        const after = tombstones.length
+          ? await workOrders.update(id, { removedPhotos: [...(wo.removedPhotos || []), ...tombstones] }, { photoBookkeeping: true, photoOnly: true })
+          : wo;
+        return sendJson(res, 200, { ok: true, workOrder: after, added: [] });
       }
       const remaining = MAX_PHOTOS_PER_WO - existing.length;
       if (remaining <= 0) {
@@ -22527,6 +22628,20 @@ async function handleApi(req, res, pathname) {
       let validated;
       try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
+      // A markup is filed where its original is: same zone, finding,
+      // category and label, taken from the server's copy, not the phone's.
+      validated.forEach((v, i) => {
+        const original = links[i];
+        if (!original) return;
+        Object.assign(v.meta, {
+          markupOf: Number(original.n),
+          markupOfUpload: original.clientUploadId || null,
+          zoneNumber: original.zoneNumber ?? null,
+          issueId: original.issueId || null,
+          category: original.category || v.meta.category,
+          label: original.label || ""
+        });
+      });
 
       // Resolve the property code for the descriptive filename slug. When
       // the WO has a linked property, we use its P-YYYY-NNNN; otherwise
@@ -22539,13 +22654,38 @@ async function handleApi(req, res, pathname) {
         } catch (_err) {}
       }
 
-      const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+      // Never a deleted photo's number (PJL-110): signed links and the
+      // report's cached derivative are keyed by it.
+      const baseN = woPhotoEdits.nextBaseN(wo);
       const now = new Date().toISOString();
       const newMeta = await savePhotosForWorkOrder(id, validated, now, baseN, {
         propertyCode,
         woCode: wo.id
       });
-      const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
+      let photosNow = [...existing, ...newMeta];
+      let removedNow = wo.removedPhotos || [];
+      // One live markup per original (D-B2): a new one replaces the old,
+      // which is deleted like any photo (file, tombstone, history).
+      const replaced = [];
+      for (const m of newMeta.filter((x) => x.markupOf != null)) {
+        const original = photosNow.find((p) => Number(p.n) === Number(m.markupOf));
+        for (const old of woPhotoEdits.markupsOf(photosNow, original).filter((x) => x !== m && !newMeta.includes(x))) {
+          await deleteWorkOrderPhotoFile(id, Number(old.n));
+          photosNow = photosNow.filter((p) => p !== old);
+          removedNow = [...removedNow, { n: Number(old.n), clientUploadId: old.clientUploadId || null, removedAt: now, by: "tech" }];
+          replaced.push({ old: old.n, by: m.n, of: m.markupOf });
+        }
+      }
+      const updated = await workOrders.update(id, { photos: photosNow, ...(replaced.length ? { removedPhotos: removedNow } : {}) },
+        { photoOnly: true, photoBookkeeping: replaced.length > 0 });
+      if (replaced.length && wo.propertyId) await dropFromDeferred(wo.propertyId, id, replaced.map((r) => Number(r.old)));
+      for (const m of newMeta.filter((x) => x.markupOf != null)) {
+        const r = replaced.filter((x) => x.by === m.n).map((x) => `#${x.old}`);
+        try {
+          await workOrders.appendHistory(id, { action: "photo_markup", by: "tech",
+            note: `Marked up photo #${m.markupOf} as #${m.n}${r.length ? `, replacing markup ${r.join(", ")}` : ""}` });
+        } catch (err) { console.warn("[wo-history] photo markup entry failed:", err?.message); }
+      }
       // Audit trail per Brief A — one entry per upload batch (not per file)
       // so a 5-photo upload doesn't spam the history viewer. Photos are
       // not scope-protected so this entry stands even on locked WOs.
@@ -22564,35 +22704,76 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // DELETE /api/work-orders/:id/photos/:n — remove a single photo by n.
-  const woPhotoDeleteMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos\/(\d+)$/);
-  if (woPhotoDeleteMatch && req.method === "DELETE") {
+  // DELETE /api/work-orders/:id/photos/:n — delete one photo, for good.
+  // PATCH  /api/work-orders/:id/photos/:n — re-file it: { zoneNumber }
+  //        (a zone on this visit, or null for the whole visit).
+  // Both also answer at /photos/upload/:clientUploadId, for the phone: it
+  // may not know `n` yet when the upload's response was lost (PJL-110/111).
+  //
+  // Under the same per-WO photo lock as uploads: a delete racing an upload
+  // used to write back a photo list read before the other's write —
+  // resurrecting the deleted photo (fall-closing #1 round 2).
+  //
+  // The rules live in lib/wo-photo-edits.js. Allowed at any point in the
+  // visit, before or after Finish (Patrick, D-A2, 2026-10-04). Idempotent:
+  // a photo that is already gone answers 200 { alreadyRemoved: true }, so
+  // the phone's queued retry acknowledges instead of stalling.
+  const woPhotoEditMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos\/(?:(\d+)|upload\/(field-[a-zA-Z0-9-]{1,100}))$/);
+  if (woPhotoEditMatch && (req.method === "DELETE" || req.method === "PATCH")) {
     try {
-      const id = decodeURIComponent(woPhotoDeleteMatch[1]);
-      const n = Number(woPhotoDeleteMatch[2]);
-      // Under the same per-WO photo lock as uploads: a delete racing an
-      // upload used to write back a photo list read before the other's
-      // write — resurrecting the deleted photo (fall-closing #1 round 2).
+      const id = decodeURIComponent(woPhotoEditMatch[1]);
+      const ref = woPhotoEditMatch[2] != null ? { n: Number(woPhotoEditMatch[2]) } : { clientUploadId: woPhotoEditMatch[3] };
+      const payload = req.method === "PATCH" ? await parseRequestBody(req) : null;
+      const by = await actorLabel(req);
       return await fieldPhotoUploads.run(id, async () => {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      const existing = Array.isArray(wo.photos) ? wo.photos : [];
-      const photoMeta = existing.find((p) => Number(p.n) === n);
-      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
-      await deleteWorkOrderPhotoFile(id, n);
-      const nextPhotos = existing.filter((p) => Number(p.n) !== n);
-      const updated = await workOrders.update(id, { photos: nextPhotos });
+
+      if (req.method === "DELETE") {
+        const r = woPhotoEdits.removePhoto(wo, ref, { by });
+        if (!r.photo) {
+          // Nothing to delete. A tombstone for an upload that never landed
+          // is still written, so it cannot land afterwards.
+          const updated = r.removedPhotos.length !== (wo.removedPhotos || []).length
+            ? await workOrders.update(id, { removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true })
+            : wo;
+          return sendJson(res, 200, { ok: true, workOrder: updated, alreadyRemoved: true });
+        }
+        const n = Number(r.photo.n);
+        // The photo, and its markups with it (PJL-112).
+        for (const g of r.removed) await deleteWorkOrderPhotoFile(id, Number(g.n));
+        const updated = await workOrders.update(id, { photos: r.photos, removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true });
+        // A finding copied to the property lists its photos by number; the
+        // property must not keep pointing at a photo that no longer exists.
+        if (wo.propertyId) await dropFromDeferred(wo.propertyId, id, r.removed.map((g) => Number(g.n)));
+        try {
+          await workOrders.appendHistory(id, { action: "photo_delete", by, note: r.note });
+        } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
+        return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+      }
+
+      if (!payload || !Object.prototype.hasOwnProperty.call(payload, "zoneNumber")) {
+        return sendJson(res, 422, { ok: false, error: "zone_required", errors: ["Say which zone to move the photo to."] });
+      }
+      const m = woPhotoEdits.movePhoto(wo, ref, payload.zoneNumber);
+      if (m.alreadyRemoved) return sendJson(res, 200, { ok: true, workOrder: wo, alreadyRemoved: true });
+      if (m.error) return sendJson(res, m.error === "photo_not_found" ? 404 : 422, { ok: false, error: m.error, errors: [m.message] });
+      if (m.unchanged) return sendJson(res, 200, { ok: true, workOrder: wo, moved: { n: Number(m.photo.n), from: m.from, to: m.to }, unchanged: true });
+      const updated = await workOrders.update(id, { photos: m.photos }, { photoOnly: true });
+      if (m.detached?.deferredId && wo.propertyId) {
+        try {
+          const entry = (await properties.listDeferred(wo.propertyId)).find((d) => d.id === m.detached.deferredId);
+          const kept = woPhotoEdits.photoIdsWithout(entry, m.photo.n);
+          if (kept) await properties.updateDeferredIssue(wo.propertyId, entry.id, { photoIds: kept });
+        } catch (err) { console.warn("[wo-photo] deferred photo detach failed:", err?.message); }
+      }
       try {
-        await workOrders.appendHistory(id, {
-          action: "photo_delete",
-          by: await actorLabel(req),
-          note: `Removed photo #${n} (${photoMeta.category || "general"})`
-        });
-      } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
-      return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+        await workOrders.appendHistory(id, { action: "photo_move", by, note: m.note });
+      } catch (err) { console.warn("[wo-history] photo move entry failed:", err?.message); }
+      return sendJson(res, 200, { ok: true, workOrder: updated, moved: { n: Number(m.photo.n), from: m.from, to: m.to }, detached: m.detached });
       });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't change the photo."] });
     }
   }
 
@@ -23503,7 +23684,8 @@ async function handleApi(req, res, pathname) {
             }
             // Photos attached to this issue ride into the deferred entry
             // by reference (the WO is still the photo source-of-truth).
-            const photoIds = (wo.photos || [])
+            // The photos the customer sees (PJL-112 customerPhotos).
+            const photoIds = woPhotoEdits.customerPhotos(wo.photos)
               .filter((p) => issueId && p.issueId === issueId)
               .map((p) => Number(p.n))
               .filter(Number.isFinite);
@@ -23706,7 +23888,8 @@ async function handleApi(req, res, pathname) {
                 if (found) { originalType = found.type; originalNotes = found.notes || originalNotes; break; }
               }
             }
-            const photoIds = (wo.photos || [])
+            // The photos the customer sees (PJL-112 customerPhotos).
+            const photoIds = woPhotoEdits.customerPhotos(wo.photos)
               .filter((p) => issueId && p.issueId === issueId)
               .map((p) => Number(p.n))
               .filter(Number.isFinite);
@@ -24762,6 +24945,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
       if (isStandby) {
         // No slot to validate — the whole point.
       } else if (useAdminCustom) {
+        // A force-book bypasses the corridor and the hours, not the
+        // calendar: a spring opening on an October day is a mistake the
+        // public gate already makes impossible, and the admin paths must
+        // not be the one door it fits through (2026-10-02 — a customer
+        // was emailed "Spring opening on October 10").
+        const fit = openBucket.serviceForDate(serviceKey, geoFilter.localDateKey(startDate),
+          { services: BOOKABLE_SERVICES, configFor: seasonsLib.configFor });
+        if (!fit.ok) {
+          const suggested = fit.suggestedKey ? BOOKABLE_SERVICES[fit.suggestedKey] : null;
+          return sendJson(res, 422, {
+            ok: false,
+            code: "service_out_of_season",
+            suggestedServiceKey: fit.suggestedKey,
+            message: `${service.label} is a ${fit.season} service and that date isn't in ${fit.season}`
+              + (suggested ? ` — book it as ${suggested.label}.` : "."),
+            errors: [`${service.label} is a ${fit.season} service; pick a date in ${fit.season}`
+              + (suggested ? ` or book it as ${suggested.label}.` : ".")]
+          });
+        }
         // Physical-conflict check. Force-book bypasses corridor +
         // hours, but it must NOT silently double-book — overlapping
         // the same crew with another active booking would create a
@@ -28459,6 +28661,9 @@ async function orderDayForDriving(rows) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const leadId = normalizeString(payload.leadId, 40);
       const date = normalizeString(payload.date, 10);
+      // The half Patrick asked for. Afternoon unless he said morning —
+      // "on our way home" is still the default, no longer the only answer.
+      const bucketKey = normalizeString(payload.bucket, 10) === "morning" ? "morning" : "afternoon";
       if (!leadId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return sendJson(res, 422, { ok: false, code: "bad_request", errors: ["Pick a waiting customer and a day."] });
       }
@@ -28473,6 +28678,32 @@ async function orderDayForDriving(rows) {
       }
 
       const s = lead.standby || {};
+      // The service to book — the standby's own unless Patrick picked
+      // another in the drawer. A seasonal service on a date outside its
+      // season is refused with the same band in the date's season offered
+      // back: a spring opening placed in October is a fall closing, not a
+      // spring opening in October (2026-10-02).
+      const overrideKey = normalizeString(payload.serviceKey, 60);
+      if (overrideKey && !(BOOKABLE_SERVICES[overrideKey] && BOOKABLE_SERVICES[overrideKey].bookable)) {
+        return sendJson(res, 422, { ok: false, code: "service_unknown", errors: ["Unknown service."] });
+      }
+      const serviceKey = overrideKey || s.serviceKey;
+      const fit = openBucket.serviceForDate(serviceKey, date, { services: BOOKABLE_SERVICES, configFor: seasonsLib.configFor });
+      if (!fit.ok) {
+        const suggested = fit.suggestedKey ? BOOKABLE_SERVICES[fit.suggestedKey] : null;
+        return sendJson(res, 422, {
+          ok: false,
+          code: "service_out_of_season",
+          suggestedServiceKey: fit.suggestedKey,
+          suggestedServiceLabel: suggested ? suggested.label : null,
+          message: suggested
+            ? `${BOOKABLE_SERVICES[serviceKey]?.label || serviceKey} isn't a ${fit.season} service on ${date} — book it as ${suggested.label} instead.`
+            : `${BOOKABLE_SERVICES[serviceKey]?.label || serviceKey} is a ${fit.season} service; ${date} is outside that season.`,
+          errors: [suggested
+            ? `That's a ${fit.season} service and ${date} isn't in ${fit.season}. Switch it to ${suggested.label}.`
+            : `That's a ${fit.season} service and ${date} isn't in ${fit.season}. Pick a date in season or a different service.`]
+        });
+      }
       let coords = s.coords || null;
       if (!coords && lead.contact?.address) {
         const geo = await geocode(lead.contact.address);
@@ -28482,7 +28713,7 @@ async function orderDayForDriving(rows) {
       const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
       const endOfDay = new Date(`${date}T23:59:59`);
       const slots = await listAvailableSlots({
-        serviceKey: s.serviceKey,
+        serviceKey,
         customerCoords: coords,
         bookings: bookingsNow,
         blocks: scheduleData.blocks,
@@ -28493,26 +28724,58 @@ async function orderDayForDriving(rows) {
       });
 
       const onDay = slots.filter((sl) => geoFilter.localDateKey(new Date(sl.start)) === date);
-      const afternoon = onDay.filter((sl) => new Date(sl.start).getHours() >= 12);
-      const pick = afternoon[0] || null;
+      const inHalf = onDay.filter((sl) => (new Date(sl.start).getHours() >= 12 ? "afternoon" : "morning") === bucketKey);
+      let pick = inHalf[0] || null;
+      let forced = false;
+
+      // THE ENGINE'S "NO" IS NOT PATRICK'S "NO". The open bucket holds
+      // exactly the customers the public calendar could not seat — too
+      // far off every route, a full half-day, a date past the public
+      // window (Nov 1–6 is reserved for THIS). Asking the same engine for
+      // permission to place them refused the placement for the same
+      // reason it refused the booking (Patrick, 2026-10-02: "I cannot
+      // place them wherever I want"). So when the engine has no slot in
+      // the half he chose, the placement is his call: the first half-hour
+      // of that half the crew is not already standing in. Same posture
+      // as the admin custom-time path this books through — the corridor,
+      // the caps and the season window step aside; a physical double-
+      // booking never does. He is told it was forced, with the half-day
+      // still the only time the customer hears.
+      if (!pick) {
+        const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
+        const minutes = Number(BOOKABLE_SERVICES[serviceKey]?.minutes) || 30;
+        const [y, mo, d] = date.split("-").map(Number);
+        const from = parseHHmmToMinutes(bucket.from);
+        const to = parseHHmmToMinutes(bucket.to);
+        for (let mm = from; mm + minutes <= to; mm += 30) {
+          const start = new Date(y, mo - 1, d, 0, 0, 0, 0);
+          start.setMinutes(mm);
+          const end = new Date(start.getTime() + minutes * 60 * 1000);
+          const clash = bookingsNow.some((b) => b.start && b.end
+            && new Date(b.start).getTime() < end.getTime() && new Date(b.end).getTime() > start.getTime());
+          if (clash) continue;
+          pick = { start: start.toISOString(), bucketKey, bucketWindow: bucket.windowLabel };
+          forced = true;
+          break;
+        }
+      }
       if (!pick) {
         return sendJson(res, 409, {
           ok: false,
-          code: onDay.length ? "afternoon_full" : "day_unavailable",
-          message: onDay.length
-            ? "That day's afternoon is full — try another day from the list."
-            : "The engine won't put this customer on that day — try another from the list.",
-          errors: [onDay.length
-            ? "That day's afternoon is full. Pick another day."
-            : "That day isn't available for this customer. Pick another day."]
+          code: "no_room",
+          message: `Every half-hour of that ${bucketKey} already has a stop on it — pick the other half, or another day.`,
+          errors: [`That ${bucketKey} is physically full. Pick the other half-day or another day.`]
         });
       }
 
       return sendJson(res, 200, {
         ok: true,
         slotStart: pick.start,
-        bucketKey: pick.bucketKey || "afternoon",
-        bucketWindow: pick.bucketWindow || "12 PM – 5 PM"
+        bucketKey: pick.bucketKey || bucketKey,
+        bucketWindow: pick.bucketWindow || (bucketKey === "morning" ? "8 AM – 12 PM" : "12 PM – 5 PM"),
+        serviceKey,
+        serviceLabel: BOOKABLE_SERVICES[serviceKey]?.label || serviceKey,
+        forced
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't find a slot."] });
@@ -29992,6 +30255,16 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
       }
 
+      // A field phone names the account its queued work was recorded under
+      // (x-pjl-field-owner, pjl-field/src/offline/transport.mjs). A session
+      // that is another account must not take that work: it would land
+      // under the wrong tech. Checked here, on the request itself, so the
+      // phone no longer reads /api/session before every change (PJL-113).
+      const fieldOwner = req.headers["x-pjl-field-owner"];
+      if (fieldOwner && String(fieldOwner) !== String(session.uid)) {
+        return sendJson(res, 403, { ok: false, error: "owner_mismatch", errors: ["Sign in with the account that recorded this work."] });
+      }
+
       // Admin action log. This gate is the ONE place every guarded request
       // passes through with its session already resolved, which is why the
       // hook lives here rather than being sprinkled across ~200 routes
@@ -30260,6 +30533,11 @@ function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Finish (or undo) a purchase-order commit a crash interrupted, before the
+// first request can read the two files disagreeing.
+try { purchasingStore.recover(); } catch (err) { console.error("[purchasing] recovery at boot failed:", err); }
+try { purchasingStore.checkConsistency(); } catch (err) { console.error("[purchasing] consistency check at boot failed:", err); }
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);

@@ -54,4 +54,43 @@ function waitingLeads(leads) {
     .sort((a, b) => String(a.standby.requestedAt || "").localeCompare(String(b.standby.requestedAt || "")));
 }
 
-module.exports = { rankDaysForCoords, waitingLeads };
+// Does this service belong on this date? A seasonal service placed on a
+// date outside its season's serviceable window is a mistake, not a
+// choice: a customer who joined the open bucket in spring for a "Spring
+// opening", placed in October, was booked — and emailed — a spring
+// opening on October 10 (Patrick, 2026-10-02: "lol ...wtf."). The public
+// page cannot do this (the season gate emits no slot), so only the admin
+// paths need the check. Non-seasonal services are always fine.
+//
+//   services   BOOKABLE_SERVICES
+//   configFor  seasons.configFor (season, year) -> { serviceableFrom, serviceableThrough }
+//
+// Returns { ok: true } or { ok: false, season, suggestedKey } where
+// suggestedKey is the same band in the date's own season (spring_open_6z
+// on an October day → fall_close_6z), or null when no season covers the
+// date.
+const FAMILY_SEASON = { spring_opening: "spring", fall_closing: "fall" };
+const FAMILY_PREFIX = { spring_opening: "spring_open_", fall_closing: "fall_close_" };
+
+function serviceForDate(serviceKey, dateKey, { services, configFor } = {}) {
+  const service = services && services[serviceKey];
+  const season = service && FAMILY_SEASON[service.family];
+  if (!season) return { ok: true };
+  const year = Number(String(dateKey).slice(0, 4));
+  const inside = (name) => {
+    let cfg = null;
+    try { cfg = configFor(name, year); } catch { cfg = null; }
+    return Boolean(cfg && cfg.serviceableFrom && cfg.serviceableThrough
+      && dateKey >= cfg.serviceableFrom && dateKey <= cfg.serviceableThrough);
+  };
+  if (inside(season)) return { ok: true };
+  const other = Object.keys(FAMILY_SEASON).find((f) => FAMILY_SEASON[f] !== season);
+  const band = serviceKey.startsWith(FAMILY_PREFIX[service.family])
+    ? serviceKey.slice(FAMILY_PREFIX[service.family].length)
+    : null;
+  const candidate = band ? `${FAMILY_PREFIX[other]}${band}` : null;
+  const suggestedKey = candidate && services[candidate] && inside(FAMILY_SEASON[other]) ? candidate : null;
+  return { ok: false, season, suggestedKey };
+}
+
+module.exports = { rankDaysForCoords, waitingLeads, serviceForDate };

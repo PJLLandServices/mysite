@@ -775,6 +775,21 @@
 .mlb-savebar-savestate.is-saving { color: #C49A2A; }
 .mlb-savebar-savestate.is-saved  { color: #1B4D2E; }
 .mlb-savebar-savestate.is-error  { color: #8A2A1F; }
+/* Shown only after a stale-write refusal (409 stale_list): the unsaved
+   edit stays on screen until the user chooses to reload. */
+.mlb-savebar-reload {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #8A2A1F;
+  border-radius: 8px;
+  background: #fff;
+  color: #8A2A1F;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mlb-savebar-reload:hover { background: #FBEAE7; }
 
 /* When the CRM sidebar becomes visible (>1180px per crm.css), push the
    savebar past it so the sidebar gradient doesn't bleed under the bar. */

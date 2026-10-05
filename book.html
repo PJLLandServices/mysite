@@ -435,6 +435,28 @@
 }
 .book-error[hidden] { display: none; }
 
+/* "Oops — looks like you may be looking for a season that isn't here."
+   Shown under the service cards when the picked service's season is not
+   the one we are booking, with the same band in the open season offered. */
+.book-season-switch {
+  margin-top: 16px;
+  background: linear-gradient(135deg, rgba(224,123,36,0.10), rgba(224,123,36,0.02));
+  border: 1px solid rgba(224,123,36,0.45);
+  border-radius: 10px;
+  padding: 16px 18px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.book-season-switch[hidden] { display: none; }
+.book-season-switch strong { color: var(--green); }
+.book-season-switch .season-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.book-season-switch .season-actions button {
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  padding: 10px 16px; border-radius: 8px; border: 1px solid var(--green);
+}
+.book-season-switch .season-yes { background: var(--green); color: #fff; }
+.book-season-switch .season-no { background: #fff; color: var(--green); }
+
 .book-success {
   background: linear-gradient(135deg, rgba(74,140,92,0.10), rgba(74,140,92,0.02));
   border: 1px solid rgba(74,140,92,0.30);
@@ -622,6 +644,7 @@
       <h2 id="serviceHeading">What do you need done?</h2>
       <p class="lead" id="serviceLead">Pick the closest match. If you're not sure, choose "Site visit" and Patrick will scope it for you.</p>
       <div class="service-grid" id="serviceGrid"></div>
+      <div class="book-season-switch" id="seasonSwitch" role="alertdialog" aria-live="polite" hidden></div>
       <p class="book-other-link" id="bookOtherWrap" hidden>
         <a href="#" id="bookOther">I want to book something else →</a>
       </p>

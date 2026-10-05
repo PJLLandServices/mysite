@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createQueue } from "../pjl-field/src/offline/queue.mjs";
+import { classify, createRequest, createTransport } from "../pjl-field/src/offline/transport.mjs";
 
 const src = fs.readFileSync("pjl-field/src/offline/field.js", "utf8").replace(/^import .*;\r?\n/gm, "").replace(/\bexport /g, "");
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
@@ -69,7 +70,7 @@ function world() {
     throw new Error("unexpected " + p);
   };
   const load = () => vm.runInNewContext(src + "\n({ openFieldWorkOrder, flushBeforeFinish, resolveFieldConflicts, fieldStatus });",
-    { createQueue, readLocal, writeLocal, storeForOwner, HOST: "https://x.local", AuthRequiredError: class AuthRequiredError extends Error {}, withClientVersion: (headers) => headers,
+    { createQueue, classify, createRequest, createTransport, readLocal, writeLocal, storeForOwner, HOST: "https://x.local", AuthRequiredError: class AuthRequiredError extends Error {}, withClientVersion: (headers) => headers,
       fetch, AbortController, setTimeout, clearTimeout, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } });
   // The office, at the desk, straight to the server.
   S.officeWo = (patch) => { Object.assign(S.wo, patch); if (patch.zones) S.wo.zones = patch.zones.map(hydrateZone); S.wo.updatedAt = tick(); };
@@ -189,10 +190,11 @@ await test("a 409 version_conflict from a raced save retries on its own (round 2
   const { S, load } = world(); const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
   q.patch(k, { zones: setZone(q.view(k).zones, 2, { status: "working_well" }) });
   S.fail409Once = true;                 // the server's in-lock If-Match refuses the first try
+  // PJL-113: the pass re-reads and resends at once, rather than waiting
+  // for the next background pass — still no manual retry.
   await q.flush();
-  assert.equal(q.status(k).error?.code, "version_conflict");
-  await q.flush();                      // the next background pass, NOT a manual retry
   assert.equal(q.status(k).pending, 0, "the edit synced without the tech doing anything");
+  assert.equal(q.status(k).error, null, "and no error was left behind");
   assert.equal(S.wo.zones[1].status, "working_well");
 });
 

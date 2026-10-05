@@ -17,9 +17,14 @@
 import * as ImagePicker from 'expo-image-picker';
 import { mediaTypeOf } from './media-type';
 
+// quality 0.40 (was 0.55), PJL-113: the upload is most of what a closing
+// sends, and the server keeps a 2400 px re-encode at quality 82 of
+// whatever arrives, so the extra detail at 0.55 was mostly discarded. This
+// is the no-native-change step; resizing on the phone (to 2400 px, before
+// upload) is the larger one and comes with the photo markup canvas.
 const OPTIONS = {
   mediaTypes: ['images'],
-  quality: 0.55,
+  quality: 0.4,
   base64: true,
   exif: false,
   allowsEditing: false,
@@ -34,24 +39,34 @@ function toPayload(asset, meta) {
   };
 }
 
+// With shrinking on (the server's photoShrink switch, PJL-112), the photo
+// is taken at 0.80 and resized on the phone to 2400 px at 0.75 before it
+// queues: a sharper source and a smaller upload (0.60 MB against 0.75 MB
+// at 0.40, measured in test-photo-canvas.mjs on one 4032×3024 JPEG from
+// the website's files — a stand-in, not a photo from Patrick's phone; the
+// device check measures real ones). If the resize fails, the 0.80 original
+// goes up as it is.
+export const SHRINK_SOURCE_QUALITY = 0.8;
+const options = ({ shrink = false } = {}) => (shrink ? { ...OPTIONS, quality: SHRINK_SOURCE_QUALITY } : OPTIONS);
+
 // Returns a photo payload, or null when the tech backed out — backing
 // out is a normal outcome, not an error to report.
-export async function takePhoto(meta = {}) {
+export async function takePhoto(meta = {}, opts) {
   const perm = await ImagePicker.requestCameraPermissionsAsync();
   if (!perm.granted) {
     throw new Error('Camera access is off for PJL Field. Turn it on in Settings → PJL Field.');
   }
-  const result = await ImagePicker.launchCameraAsync(OPTIONS);
+  const result = await ImagePicker.launchCameraAsync(options(opts));
   if (result.canceled) return null;
   return toPayload(result.assets?.[0], meta);
 }
 
-export async function pickPhoto(meta = {}) {
+export async function pickPhoto(meta = {}, opts) {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) {
     throw new Error('Photo access is off for PJL Field. Turn it on in Settings → PJL Field.');
   }
-  const result = await ImagePicker.launchImageLibraryAsync(OPTIONS);
+  const result = await ImagePicker.launchImageLibraryAsync(options(opts));
   if (result.canceled) return null;
   return toPayload(result.assets?.[0], meta);
 }

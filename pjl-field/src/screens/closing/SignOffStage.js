@@ -33,7 +33,7 @@ const BYPASS_REASONS = [
   { key: 'other', label: 'Other (say why)' },
 ];
 
-export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrokeChange, getDraft }) {
+export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLabel, onStrokeChange, getDraft }) {
   const recordedSignoff = getDraft?.('signoff');
   // null until asked. Not defaulted: which of these is "normal" is the
   // thing that varies, and guessing wrong makes the common case worse.
@@ -253,7 +253,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
 
       <View style={styles.actions}>
         <Button
-          label={busy ? 'Finishing…' : 'Finish and invoice'}
+          label={busy ? (busyLabel || 'Finishing…') : 'Finish and invoice'}
           onPress={finish}
           disabled={busy || saving || blockers.length > 0}
         />

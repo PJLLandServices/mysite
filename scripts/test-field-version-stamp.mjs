@@ -123,7 +123,9 @@ if (cv?.describeClientVersion) {
   }
   // The offline queue's own request() (it imports react-native, so it is
   // checked in source): it must use the same header helper.
-  ok(/headers:\s*withClientVersion\(/.test(read("pjl-field/src/offline/field.js")), "C. the offline sync's requests carry it too (withClientVersion)");
+  // The offline sync's requests are built by offline/transport.mjs with
+  // the header function field.js hands it (PJL-113).
+  ok(/headers:\s*withClientVersion\b/.test(read("pjl-field/src/offline/field.js")) && /headers:\s*headers\(/.test(read("pjl-field/src/offline/transport.mjs")), "C. the offline sync's requests carry it too (withClientVersion)");
   ok(/setClientVersionHeader\(clientVersionHeader\)/.test(read("pjl-field/App.js")), "C. App.js installs it at startup");
   ok(/clientVersionText\(\)/.test(read("pjl-field/src/screens/TodayScreen.js")), "C. the Today tab shows the lines");
 }

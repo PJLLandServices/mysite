@@ -2,6 +2,116 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-04 (The Not-on-the-plan tray kept customers who had already found a home, or were
+already done):** Patrick, on the Season Plan's tray of 17: *"Fortunately some have found homes,
+and some have been completed. Can you take a look at why 'not on the plan' isn't being
+found?"* Two readers of one question. The BOARD (`gatherBookedRows`) finds a customer's visit
+through the lead their property is linked to and keeps a completed stop on its day as *done*.
+The TRAY (`assignments.unplanned` → `outreach.assessEligibility` → `deriveBookingState`) found
+a booking only by its `propertyId` stamp — null whenever the lead was linked to the property
+AFTER the booking was mirrored, or never linked at all — and read a completed visit as *not
+booked*. So a customer who booked themselves and was linked later, and a customer whose closing
+was already done, were both offered a route day again. **Fixed by naming the rule once, in
+each place it was missing:** `bookings.belongsToProperty(record, property)` — the id stamp, the
+lead link (`property.leadIds`), the address (`addressNormalized`) — and `listForProperty`, which
+`deriveBookingState` now reads (the id-only `listByProperty` stays for its other callers).
+`outreach.seasonSettled(state)` — booked OR completed — is what `assessEligibility` asks; it
+answers `already_booked` or the new `already_done`, and `outreach.verdictIsSettled(verdict)` is
+the one question the preflight and the tray ask of it (neither compares the string any more).
+Cascades, walked: the preflight and `assign()` now count a completed customer as *settled*
+(nothing created, nothing sent); outreach's bulk send skips them as `already_done` and the
+outreach screen shows **Done** on the row instead of *Not booked*; the customer portal already
+read `completed` and is unchanged. NOT touched: the board's own reader, `isInSeasonWindow`, the
+`fall_close_` service test (an October repair is still not a closing), the plan file. Coverage:
+`scripts/test-unplanned-settled.mjs` (38, real readers over a sandbox store; 21 of them fail on
+the old code) and two new assertions in `test-season-plan-unplanned.mjs`, both in `build:check`.
+**2026-10-02, same hour (The booking page asks before it books the wrong season):** Patrick,
+on the same customer: *"I believe the webpage should prompt the client: 'Oops — it looks like
+you may be looking for a season in the past. We are currently booking for (upcoming season).
+Confirm fall closing is what you are looking for?'"* The catalog already says which seasons
+are open (`season.open` per service, from `seasons.publicBookingStatus`); `js/booking.js` never
+read it. Now, at the tap: a service whose season is not open, when the same band exists in an
+open season (`sameBandInOpenSeason`, the spring_open_ ↔ fall_close_ prefix swap), opens a
+callout under the cards in Patrick's words — *Oops — it looks like you may be looking for a
+season that's already past (or not here yet). We're currently booking fall closings. Is a fall
+closing what you're looking for?* — with **Yes — book a fall closing** (swaps the service, and
+a deep link's family filter, and carries on) and **No, I want a spring opening (first dates
+March 1, 2027)** (keeps the choice). A tap on a service in the open season, or a non-seasonal
+one, asks nothing. A deep link no longer LOCKS a service whose season isn't open when the open
+season has its band — the customer sees the card and gets the question. The open-bucket join
+itself is unchanged: pre-booking next spring stays possible by answering No. NOT touched:
+FLOW-03's engine, hold, reserve. Coverage: `scripts/test-season-switch.mjs` (18 source guards,
+in `build:check`). **Patrick's acceptance test — not yet walked:** on the public booking page
+tap **Spring opening** today; the Oops callout should appear under the cards; **Yes** should
+land you on the zones step with Fall winterization selected; **No** should carry on with
+spring (and show no dates before March).
+**2026-10-02, same hour (A spring opening was booked — and emailed — for October 10):**
+Patrick, holding a customer's confirmation: *"Your PJL service is booked — Spring opening (1-4
+zones residential) on Saturday, October 10"* — *"lol ...wtf."* — *"i believe this may be a issue
+with out system."* It is. Read live: the public calendar returns **zero** spring-opening slots
+in October (`season_closed` on every day), so a customer cannot do this alone. The route in:
+the public services catalog marks spring as *bookable, dates start 2027-03-01*, and the time
+picker's **First available** card is always on offer — so a customer can join the open bucket
+today for a "Spring opening"; `lead.standby.serviceKey` keeps it; and the placement (above,
+minutes earlier) booked whatever service the standby carried on whatever date was chosen,
+through the `admin_custom` reserve path, which checks physical overlap and nothing about the
+calendar. The Schedule page's custom-time Book is the same door. **Fixed at both doors, by one
+rule:** `openBucket.serviceForDate(serviceKey, dateKey, { services, configFor })` — a seasonal
+family on a date outside its season's SERVICEABLE window is refused, with the same band in the
+date's own season offered back (`spring_open_6z` on an October day → `fall_close_6z`; null in
+January, where no season covers the date). `POST /api/admin/open-bucket/slot` now takes a
+`serviceKey` (the drawer's pick, the standby's own by default), answers `422
+service_out_of_season` + `suggestedServiceKey` on a mismatch, and returns the `serviceKey` /
+`serviceLabel` it resolved so the reserve books the same thing; the `admin_custom` branch of
+`/api/booking/reserve` makes the same check before its overlap test. The drawer row gains a
+service select (this season's services first), defaulting to the same band in the page's
+season and wearing a warn tag — "joined for Spring opening — booking as Fall winterization" —
+when it swapped; a drag-drop books that band too. Deliberately NOT changed: the public page can
+still join the open bucket for a season that has not started (pre-booking next spring is a
+thing); the mismatch is caught where it did the damage, at placement. Coverage:
+`test-open-bucket-placement.mjs` 24 → 35 — a spring standby placed on a fall day is refused
+with `fall_close_4z` offered back, placed as that band it books as a fall closing, the
+force-booked reserve refuses the same, and the rule's table on the library; `test-place-tray`
+35 → 36. CI's e2e `journey-8` had the same bug as the fixture it was testing — it booked its
+"last spring's visit" as a spring opening two days from today, in October, through
+`admin_custom` — and the new guard refused it; `journey.mjs` gains `springDay()` (a weekday in
+the next spring's serviceable window) and the journey books there, 39 passed. **Raymond's
+record is still wrong** (booked, priced and work-ordered as a spring
+opening): on his booking page set the status to Cancelled, then book him again from the
+Schedule page as the fall band — he gets a cancellation and a fresh confirmation.
+**2026-10-02 (The open bucket is placed where Patrick says, not where the engine allows):**
+Patrick: *"right now currently I have someone in an open bucket, but I cannot place them
+wherever I want."* Three walls, all from the 2026-09-09 placement fix: the drawer listed only
+the three cheapest days; every placement rode the afternoon (a morning drop was refused); and
+`POST /api/admin/open-bucket/slot` asked `listAvailableSlots` for a slot and refused the
+placement when the engine had none — `day_unavailable` for a customer too far off the route,
+`afternoon_full` at the cap, nothing at all past `publicBookingThrough`. **The open bucket holds
+exactly the customers the public calendar could not seat; asking the same engine for permission
+to place them refused the placement for the same reason it refused the booking.** Nov 1–6 — the
+admin tail the booking window reserves "for admin placement" — was unreachable from the one
+screen built to place people. Fixed: the resolver takes `bucket` (morning | afternoon, afternoon
+by default — "on our way home" is still the default, no longer the only answer), returns the
+engine's slot in that half when it has one, and otherwise the first half-hour of that half with
+no physical overlap against `activeBookings()` — the same posture as the `admin_custom` reserve
+path it books through (corridor, caps, hours and the season window step aside; a double-booking
+never does) — flagged `forced: true` so the toast says "past the route filter — your call". The
+only refusal left is `no_room`: every half-hour of that half already holds a stop. The drawer
+lists best days (with cost) → every other route day → "Any other date…" with a date box, plus a
+Morning/Afternoon select; a chip dropped on a half-day block takes that half, dropped on the day
+takes the afternoon; `dropRefusal` no longer refuses a morning. The customer still hears only the
+half-day window. Coverage: `test-open-bucket-placement.mjs` 16 → 24 — the full-afternoon case
+now asserts `no_room` and that the MORNING of the same day is placeable; a Mississauga standby
+against an all-Newmarket day (far past the 90 bound) is placed, `forced`, books through the
+ordinary admin path and loses its standby envelope; a placement on the first weekday after
+`publicBookingThrough` (the admin tail) lands. That suite also stops writing its day down
+(`"2026-10-06"`, four days from going stale the way `test-day-order`'s did on Oct 1): the next
+weekday three days out, pulled forward to the fall window's first day, with the Toronto UTC
+offset computed for the day so the fixture survives the November clock change.
+`test-place-tray.mjs` 34 → 35: a morning drop is allowed, the drawer's day list carries the full
+plan and a date box. **Patrick's acceptance test — not yet walked:** open the Open bucket
+drawer; the waiting customer's row should show a day list with "Best days / Other route days /
+Any other date…", a Morning/Afternoon select, and Book + notify; pick the day you wanted, press
+it — the booking lands and the toast says whether it was past the filter.
 **2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
 The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
 (`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already
@@ -6727,9 +6837,9 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-22a | **Invoice PDFs are re-rendered on demand, never frozen** — **OPEN, no fix shipped** | Found 2026-08-20 during the letterhead investigation (`docs/LETTERHEAD_REFACTOR_INVESTIGATION.md`). Unlike POs, WO reports and quotes — all three of which freeze their customer-facing PDF to disk with a recorded path — invoices carry **no `pdfPath`**. All six call sites (customer email, portal view, admin download, Stripe receipt, deposits, project-complete) call `generateInvoicePdf` and render fresh from the live record. **A reprint of a paid invoice can therefore differ from what the customer was sent**, and any future change to `invoice-pdf.js` retroactively restyles every invoice ever issued. Freezing them is a separate architectural decision, not a refactor — recorded here so it is a known risk with an owner rather than a surprise. |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
-| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Changed 2026-09-21 (second pass) — what a supplier document says about the parts.** PO-2026-0012 went to Central Pro carrying two identity bugs. (1) The email's quick-paste block — the thing the branch pastes into their system — still listed OUR SKUs while the PDF and CSV carried theirs; `renderQuickPasteTable`/`renderQuickPasteText` now take an injected `skuForLine` (server.js passes `resolveSupplierSku` on all four send/resend paths) and print PART # then OUR SKU, falling back to ours when no resolver is given. (2) A catalog description still held an import-era tag naming the OTHER supplier — "… 500 ft (SiteOne 207CD500)" — so Central's own PO quoted SiteOne's number back at them; `stripSupplierTag` in `lib/format.js` now drops any parenthetical containing a part-number-shaped token (4+ chars, upper-case/digits/dashes, at least one digit) inside `resolveLineDescription`, so "(New)" and "(price per roll)" survive and a rival's code cannot ride out on any document. The one tagged catalog description was also cleaned at the source. `scripts/test-supplier-doc-identity.mjs` (11 assertions, in `build:check`) pins both, and fails against the pre-fix code. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. |
+| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Changed 2026-09-21 (second pass) — what a supplier document says about the parts.** PO-2026-0012 went to Central Pro carrying two identity bugs. (1) The email's quick-paste block — the thing the branch pastes into their system — still listed OUR SKUs while the PDF and CSV carried theirs; `renderQuickPasteTable`/`renderQuickPasteText` now take an injected `skuForLine` (server.js passes `resolveSupplierSku` on all four send/resend paths) and print PART # then OUR SKU, falling back to ours when no resolver is given. (2) A catalog description still held an import-era tag naming the OTHER supplier — "… 500 ft (SiteOne 207CD500)" — so Central's own PO quoted SiteOne's number back at them; `stripSupplierTag` in `lib/format.js` now drops any parenthetical containing a part-number-shaped token (4+ chars, upper-case/digits/dashes, at least one digit) inside `resolveLineDescription`, so "(New)" and "(price per roll)" survive and a rival's code cannot ride out on any document. The one tagged catalog description was also cleaned at the source. `scripts/test-supplier-doc-identity.mjs` (11 assertions, in `build:check`) pins both, and fails against the pre-fix code. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. **2026-10-03 (Material List save defect — Patrick's priority #1, fixed):** the 2026-09-27 guard refused ANY `lineItems` write once a line was have/ordered/on a PO/price-locked; the builder saves the whole list on every edit, so after the first "Have" every add, qty change, removal and rename came back 400 while the screen kept the change and a reload lost it — and PO send #2 / receive / cancel (same whole-list `update()`) threw after the PO was already marked. Reproduced locally; production had not yet hit it (only all-need lists edited since the deploy; no PO ever received). **The rule now (`lib/material-lists.js`):** `protectedLineViolations(current, patchLines)` — protection is PURCHASING PROVENANCE (ordered, or a `poId` / frozen purchase price), never `status === "have"` alone; a protected line must come back by id with sku/qty/status/poId/frozenPriceCents unchanged and may not be dropped; its notes may change; no PATCH may introduce purchasing state. A hand-marked Have line is planning: editable, removable, toggleable. `flipLines(id, fn)` is the PO door (send/receive/cancel in server.js) and the only path that sets ordered/poId/frozen, limited to need→ordered, ordered→have (price kept), ordered→need (price released). `baseUpdatedAt` on the PATCH → 409 `stale_list`, nothing written; the builder keeps the unsaved edit on screen, shows "This material list changed elsewhere. Your latest change wasn't saved. Reload to continue." with a deliberate Reload button (no automatic reload, no merge). `line_items_locked` also answers 409. Tests: `test-material-list-line-protection.mjs` (52; 35 fail on the old store), `test-project-materials.mjs` rewritten to the provenance rule. No migration. |
 | FLOW-48 | **The picker shows each real fitting once, with its suppliers — and adds the part you chose** — **UNMAPPED** (opened 2026-09-26, P-PJL-35 M2a) | Hop chain: **Suppliers page logo upload → `POST /api/suppliers/:id/logo` (resize only) → `/api/suppliers` → picker chip; Part photos "Same fitting as…" + "Make default for this fitting" → `POST /api/part-photo-groups/:id/default` → `fittingDefaultFor()` → `/api/parts` `photo.fittingDefaultSku` → `picker-rows.js` one row per verified fitting → main Add = default part; panel Add = that offer's part #; same-part # alternate supplier disabled.** Material-list lines and PO routing (FLOW-27) unchanged. Covered by `test-picker-rows.mjs`, `test-supplier-logos.mjs`, `test-part-photo-lifecycle.mjs`, `test-admin-gates.mjs`. **What still needs Patrick on production:** (1) upload the SiteOne and Central logos he approved on /admin/suppliers and set short names; (2) link the two Pro-Spray 12" part numbers as the same fitting and confirm ONE picker row; (3) choose "Make default for this fitting" on the other part and see the row's description, part #, price and chip switch; (4) open the chip, add from each supplier, and confirm each line is that supplier's part #; (5) on a single part # with two suppliers, confirm the alternate's Add is disabled with "Supplier selection coming next"; (6) generate POs from that list and confirm each line lands on its part's default supplier, as before. |
-| FLOW-49 | **The AI finds a catalog part's photo, proves it, and only a proven photo can go live** — **UNMAPPED** (opened 2026-09-27, P-PJL-35 M3a: engine only) | Hop chain: **`photo-backfill` run (calibration sample or chosen SKUs) → `photo-ai.find` (manufacturer site → SiteOne/Central → open web for generic only) → our server fetches each page (`fetchPageSafely`) and image (`fetchImageSafely`, resize only) → `photo-evidence.partNumberOnPage` (visible text only; branded distributor codes via `supplierCodeMapping`) / `pageMatchesSpec` → `photo-ai.verify` (image + spec only) → generic: second independent source + `photo-ai.compare` → `tierFor` → `part-photos.recordAiResult` (live only if Confident AND auto-approve on; never over a live photo) → `applyGrouping` (auto-link only same mfr + mfr part # on official pages, and never two different live photos; rest = proposals).** Covered by `test-photo-backfill.mjs` (mocked AI + web). Review tab (M3b): `GET /api/part-photo-review` → queues → `approveCandidate` (Patrick's APPROVED photo, shared by the fitting) / `rejectAiResult` (Not confident; rejected images never auto-approve again; an auto-approval's rejection sends back its same-run same-kind siblings) / `resolveFitting` (confirm = Patrick's link, dismiss = never asked again). Calibration (M3c): `POST /api/part-photo-backfill/calibration` → `startCalibration()` (15-part sample, auto-approve OFF, one run at a time) → real Claude + safe fetchers → results to the Review tab. First calibration run on production 2026-09-27: 15 parts, 0 errors, 6 to review, 9 no reliable photo; Patrick approved 7 and uploaded 1. Follow-up: our server extracts product images from the page HTML; known-brand recovery; size normalisation; usage counters; `rerun-unresolved` door. **Still to walk:** the re-run of the 7 unresolved parts (auto-approve OFF) and its recovery rate; then the full run (no route for it yet). **Changed 2026-09-28 — Fast Product Lookup + image-quality gate (Patrick).** Two findings drove this: the 50-part wave averaged 203k/153k input tokens per branded/generic part, almost all of it the web-search finder; and 53 of the 100 live photos were under 800px on the longest side — 30 of them 96×96 SiteOne og:image thumbnails saved while the same pages carried a 1200×1200 `__zoom` image. (1) `lib/photo-fast-lookup.js`: before any finder call, the supplier's own search + product page through `fetchPageSafely` (SiteOne works server-side: server-rendered `/en/search?text=` tiles, Product JSON-LD, `data-zoom-image`; SupplyHouse answers HTTP 403 to every non-browser request; Central Pro's site has no public catalog — both are reported per part as blocked/unavailable, never worked around). A result is chosen only when its slug's leading tokens or title equal one of OUR numbers, or (generic, description query) its title names the same type, every size as a whole token, the same set of ends and the same material; the page and its pictures then go through the UNCHANGED check → verify → cross → tier rules. A branded hit makes no finder call; a generic hit with one source gets exactly one finder pass (the last) for the second source; a miss runs the finder as before. (2) `lib/photo-quality.js`: `rankImageUrls` tries the largest member of a picture's family (SiteOne's zoom over its thumbnail) first; every download is measured (`part-photos.inspectImage`: source dimensions + edge-strength sharpness) BEFORE it is saved — under 300px or blurry (edge < 40) is never stored and is noted on the page line; under 800px or soft (edge < 90) is kept as "low quality — review needed" and can never back a Confident result (`qualityCap`, applied after `tierFor`); ≥800 sharp is ok, ≥1000 good; among same-tier candidates the highest grade / largest source wins. (3) The store keeps the original bytes (`orig.<ext>`) and a 2000 copy when the source is larger than 1200 (never upscaled; `photo.full` URL only then; the viewer's srcset uses it), 1200/2000 at WebP q85 (was 80: 46.5 → 48.8 dB PSNR, +25% bytes — the 1200 copy was not the crispness problem, the 96px sources were), source dims + grade on every candidate and photo, shown on the review card. (4) A dry-run **benchmark** door — `GET /api/part-photo-backfill/benchmark-plan`, `POST …/benchmark {skus}` (admin; exact canonical list; ≤10 parts every one of which an earlier run processed; live parts included for comparison; NOTHING written to the stores, no grouping) — with per-part rows (resolved by, verdict, chosen photo's source size + grade, calls, tokens, searches, seconds) against the last wave's per-part averages; per-part wall time and a fast-path split on every run's status. Local (no-model) benchmark on the 10 chosen parts from this machine: 5 exact SiteOne hits (HCPCM300, HC150FLOW, R12H, 1449-007, 439211), all with a 1200×1200 source, 7–9 s each including image downloads and 0 finder calls; 5 misses in 1.6–2.8 s (POPO150250, DS75C, SC8112, PP075X400 — SiteOne's is the NSF 125 PSI roll, correctly not matched — and 205020) that fall through to the finder unchanged. Covered by `scripts/test-photo-fast-lookup.mjs` (in `build:check`) plus the existing photo suites. **Still needs Patrick:** merge + Manual Deploy (hold until his calibration run `BF-202609280044-3e93` is done), then press "Run the fast-path benchmark" once for the vision/tier half of the numbers; decide whether the 53 under-800px live photos get re-fetched through the gate (no door for that yet). **Walked on production 2026-09-28 (#353 deployed as `a192356`; benchmark `BF-202609281051-75cc`, dry run, 10 parts, 0 errors, started by Patrick's session on his approval):** the fast path found the product page for 5 of 10 (HCPCM300, HC150FLOW, R12H alone; 1449-007 and 439211 with one finder pass for the second source); 5 misses (POPO150250, DS75C, SC8112, PP075X400, 205020) ran the finder as before. Pure fast-path parts cost 1–2 Claude calls, 3.5k–7k input tokens and 23–38 s against the wave's 3.4 calls / 203k / several minutes; every photo chosen from a fast-path page was a 1200×1200 "good" source. Overall 27 calls / 1.32M input tokens for 10 parts (131k per part against the wave's ~178k). Results: HCPCM300 and R12H Confident; HC150FLOW (the Hunter family-image watch-list part) TBD with a proper 1200px photo instead of "no reliable photo"; 1449-007, 439211, 205020, PP075X400 TBD; POPO150250, DS75C, SC8112 not confident. Nothing changed in the photo stores (verified: states, live count and review queues identical before and after). Open question for the cleanup pass: on 1449-007 and 439211 the tier step preferred a low-resolution second-source candidate over SiteOne's 1200px one (tier ranks before grade); the enriched benchmark rows (this PR) will show which check held the SiteOne candidate back. The Review tab's plan GET was broken on first use (`url is not defined`) — fixed here. **Changed 2026-09-28 — the budget gate and the finder switch (Patrick: "this should not cost me any more than $10").** The two days of runs cost about $150 (21.3M + 4.5M Opus 5 tokens, ~$1.50 a part), almost all of it the web-search finder feeding fetched pages back as input. Now: (1) every Claude response is priced from the model that answered (`photo-ai.costOf`: list prices + $0.01 a web search) and added to the run's `usage.usd` and to a standing ledger in the state file (`state.spend`); (2) `budgetUsd` (env `PHOTO_BUDGET_USD`, default $10) is a hard cap — a run pauses itself with `pausedReason: "budget"` when the ledger reaches it, and start/resume refuse until the cap is raised; (3) the finder is OFF unless a wave is started with `finder: true` (admin, `POST /wave {skus, finder}`): a fast-path miss makes no web search and ends "not confident — finder off: not found on the supplier sites", a generic single-source hit lands at TBD with its one 1200px source; (4) the vision and compare calls run on `PHOTO_VISION_MODEL` (default: the finder's model) so Patrick can move them to a cheaper model by env; (5) every wave plan carries dollars (`cost.finderOff` / `cost.finderOn` worst case, spent, remaining) and the run line shows this run's dollars, the budget and the finder state. `scripts/test-photo-budget.mjs` (in `build:check`). Worst case for the remaining 178 parts with the finder off: about $8 on Opus 5 for the vision calls, about $3 on Sonnet 5.5. **Final form (Patrick, Sep 28 2026, after the accounting: ~$155 for 126 part-runs, ~$1.23 each):** (a) bulk waves **cannot** invoke the finder — `start()` and `startWave()` take no finder option, the wave route reads only `skus`, and the only way the finder ever runs is the harness-only `finderDefault: true` (a future one-part manual research action, cost shown first, is not built); (b) a deterministic miss — no candidate image at all — is **`needs_research`**, a tier and catalog state of its own with its own Review-tab queue and progress count (`tierFor({hasCandidate:false})` returns it; `photoStateFor`, `recordAiResult`, `buildReviewQueues`, `catalogProgress` and the run summary all honour it), never "Not confident", which now means exactly "evidence was checked and found insufficient or wrong"; the run makes zero finder calls and zero web searches for it and moves straight to the next part; (c) the $10 cap and the dollar ledger stay as a failsafe; (d) the vision model stays Opus 5. `scripts/test-photo-budget.mjs` (35) proves: a `finder: true` argument to a wave changes nothing and the route has no such field; a miss makes zero finder calls/web searches, becomes Needs research, sits in that queue and the run continues; the cap still pauses spending; Confident / TBD / Not-confident semantics unchanged (a vision fail is still Not confident). quality upgrade of live photos (Patrick).** `lib/photo-quality-upgrade.js` + `part-photos.upgradePhotoQuality`: for every live photo under 800px, re-read the product page it came from, find a LARGER member of the same picture family (`photo-quality.familyKeyOf`), measure it, and prove it is the same picture (normalised correlation of 24×24 greyscale copies ≥ 0.85). Only a same-family, same-picture, ok/good copy is a "deterministic" upgrade; uploaded photos (no page), pages without a larger copy, a larger copy that is a different picture or still too small go to the **Quality** review queue on the Review tab ("Keep as is", or replace by hand through the existing upload door). Routes: `GET/POST /api/part-photo-quality/plan` (POST = admin, builds asynchronously, one page + 1–3 images per photo), `POST /api/part-photo-quality/upgrade {hashes}` (admin; the exact list shown, in order), `POST /api/part-photo-quality/review/:groupId`. Applying moves the group's photo hash to the larger copy and nothing else: tier, approvedBy/At, links, fitting membership and the AI result are untouched; the old hash goes to the history as `quality-upgrade`; `source` keeps its page and method and records `upgradedFrom`; a photo that changed since the plan is skipped, never overwritten; nothing is ever upscaled. `scripts/test-photo-quality-upgrade.mjs` (32, in `build:check`). **Still needs Patrick:** merge + deploy, build the plan on production, read the counts and before/after, and approve before anything is applied. **Changed 2026-10-01 — resolution restoration, one rule, and review candidates covered (Patrick).** The first production plan (`QU-202610012211-acf6`, nothing applied) showed two gaps: the review queue still held 96×96 candidates (111BC, 205120, TLCOUP) because the job only looked at live photos, and 12 SiteOne originals proven to be the same picture (match 0.995+) were kept at 96px only because the 1200px original graded "soft". Resolution restoration is now separated from photo/evidence approval. **The rule** (`photo-quality-upgrade.restorationDecision`, one place): a stored image under 800px is restored when the larger copy is on the SAME stored source page, in the same picture family, ≥ 800px, has strictly more native pixels, and correlates **≥ 0.98** with the stored image; on that path a soft or blurry grade does NOT block — it is measured and recorded on the restored image and shown on the card. The quality gate for new or different candidate images is unchanged. A larger same-family copy under 0.98 (the Rain Bird store's padded squares: VB7RND 0.94, 000001/ESPSM3 0.89) is HELD for Patrick's eye and shown beside the stored image, never restored automatically. **Scope:** live photos and the review candidates the Review tab shows (`photo-review.visibleCandidates` — one rule shared by the card and the plan). **Applying** a candidate row (`part-photos.restoreCandidateImage`) replaces that one candidate's image asset in place and nothing else: its tier, evidence checks, position, run, source page, the group's tier/reason/AI result/updatedAt, links and approvals are untouched — a TBD candidate stays TBD, a Not-confident one stays Not confident (111BC's dimension drawing is 1200px and still Not confident); a candidate that was rejected, approved (part went live), or whose larger copy is already a candidate is skipped. Review cards now receive each candidate's source size, grade and "restored from its 96×96 thumbnail". `scripts/test-photo-quality-upgrade.mjs` (55): the rule as a table, the seven audited candidates incl. the soft and the blurry one, < 0.98 held, different family / different page / < 800px / not-more-pixels refused, never enlarged, changed-since-plan skips, no model/finder/web-search code in the module; mutation-checked six ways. Local rebuild of the plan with the new code against production's current rows: 51 stored images → 39 deterministic (32 live: 18 sharp + 11 soft + 3 blurry SiteOne originals; 7 candidates), 12 review (3 held, 9 with no usable larger copy or uploaded). **Still needs Patrick:** review the PR; merge + one deploy; rebuild the plan on production; approve before anything is applied. |
+| FLOW-49 | **The AI finds a catalog part's photo, proves it, and only a proven photo can go live** — **UNMAPPED** (opened 2026-09-27, P-PJL-35 M3a: engine only) | Hop chain: **`photo-backfill` run (calibration sample or chosen SKUs) → `photo-ai.find` (manufacturer site → SiteOne/Central → open web for generic only) → our server fetches each page (`fetchPageSafely`) and image (`fetchImageSafely`, resize only) → `photo-evidence.partNumberOnPage` (visible text only; branded distributor codes via `supplierCodeMapping`) / `pageMatchesSpec` → `photo-ai.verify` (image + spec only) → generic: second independent source + `photo-ai.compare` → `tierFor` → `part-photos.recordAiResult` (live only if Confident AND auto-approve on; never over a live photo) → `applyGrouping` (auto-link only same mfr + mfr part # on official pages, and never two different live photos; rest = proposals).** Covered by `test-photo-backfill.mjs` (mocked AI + web). Review tab (M3b): `GET /api/part-photo-review` → queues → `approveCandidate` (Patrick's APPROVED photo, shared by the fitting) / `rejectAiResult` (Not confident; rejected images never auto-approve again; an auto-approval's rejection sends back its same-run same-kind siblings) / `resolveFitting` (confirm = Patrick's link, dismiss = never asked again). Calibration (M3c): `POST /api/part-photo-backfill/calibration` → `startCalibration()` (15-part sample, auto-approve OFF, one run at a time) → real Claude + safe fetchers → results to the Review tab. First calibration run on production 2026-09-27: 15 parts, 0 errors, 6 to review, 9 no reliable photo; Patrick approved 7 and uploaded 1. Follow-up: our server extracts product images from the page HTML; known-brand recovery; size normalisation; usage counters; `rerun-unresolved` door. **Still to walk:** the re-run of the 7 unresolved parts (auto-approve OFF) and its recovery rate; then the full run (no route for it yet). **Changed 2026-09-28 — Fast Product Lookup + image-quality gate (Patrick).** Two findings drove this: the 50-part wave averaged 203k/153k input tokens per branded/generic part, almost all of it the web-search finder; and 53 of the 100 live photos were under 800px on the longest side — 30 of them 96×96 SiteOne og:image thumbnails saved while the same pages carried a 1200×1200 `__zoom` image. (1) `lib/photo-fast-lookup.js`: before any finder call, the supplier's own search + product page through `fetchPageSafely` (SiteOne works server-side: server-rendered `/en/search?text=` tiles, Product JSON-LD, `data-zoom-image`; SupplyHouse answers HTTP 403 to every non-browser request; Central Pro's site has no public catalog — both are reported per part as blocked/unavailable, never worked around). A result is chosen only when its slug's leading tokens or title equal one of OUR numbers, or (generic, description query) its title names the same type, every size as a whole token, the same set of ends and the same material; the page and its pictures then go through the UNCHANGED check → verify → cross → tier rules. A branded hit makes no finder call; a generic hit with one source gets exactly one finder pass (the last) for the second source; a miss runs the finder as before. (2) `lib/photo-quality.js`: `rankImageUrls` tries the largest member of a picture's family (SiteOne's zoom over its thumbnail) first; every download is measured (`part-photos.inspectImage`: source dimensions + edge-strength sharpness) BEFORE it is saved — under 300px or blurry (edge < 40) is never stored and is noted on the page line; under 800px or soft (edge < 90) is kept as "low quality — review needed" and can never back a Confident result (`qualityCap`, applied after `tierFor`); ≥800 sharp is ok, ≥1000 good; among same-tier candidates the highest grade / largest source wins. (3) The store keeps the original bytes (`orig.<ext>`) and a 2000 copy when the source is larger than 1200 (never upscaled; `photo.full` URL only then; the viewer's srcset uses it), 1200/2000 at WebP q85 (was 80: 46.5 → 48.8 dB PSNR, +25% bytes — the 1200 copy was not the crispness problem, the 96px sources were), source dims + grade on every candidate and photo, shown on the review card. (4) A dry-run **benchmark** door — `GET /api/part-photo-backfill/benchmark-plan`, `POST …/benchmark {skus}` (admin; exact canonical list; ≤10 parts every one of which an earlier run processed; live parts included for comparison; NOTHING written to the stores, no grouping) — with per-part rows (resolved by, verdict, chosen photo's source size + grade, calls, tokens, searches, seconds) against the last wave's per-part averages; per-part wall time and a fast-path split on every run's status. Local (no-model) benchmark on the 10 chosen parts from this machine: 5 exact SiteOne hits (HCPCM300, HC150FLOW, R12H, 1449-007, 439211), all with a 1200×1200 source, 7–9 s each including image downloads and 0 finder calls; 5 misses in 1.6–2.8 s (POPO150250, DS75C, SC8112, PP075X400 — SiteOne's is the NSF 125 PSI roll, correctly not matched — and 205020) that fall through to the finder unchanged. Covered by `scripts/test-photo-fast-lookup.mjs` (in `build:check`) plus the existing photo suites. **Still needs Patrick:** merge + Manual Deploy (hold until his calibration run `BF-202609280044-3e93` is done), then press "Run the fast-path benchmark" once for the vision/tier half of the numbers; decide whether the 53 under-800px live photos get re-fetched through the gate (no door for that yet). **Walked on production 2026-09-28 (#353 deployed as `a192356`; benchmark `BF-202609281051-75cc`, dry run, 10 parts, 0 errors, started by Patrick's session on his approval):** the fast path found the product page for 5 of 10 (HCPCM300, HC150FLOW, R12H alone; 1449-007 and 439211 with one finder pass for the second source); 5 misses (POPO150250, DS75C, SC8112, PP075X400, 205020) ran the finder as before. Pure fast-path parts cost 1–2 Claude calls, 3.5k–7k input tokens and 23–38 s against the wave's 3.4 calls / 203k / several minutes; every photo chosen from a fast-path page was a 1200×1200 "good" source. Overall 27 calls / 1.32M input tokens for 10 parts (131k per part against the wave's ~178k). Results: HCPCM300 and R12H Confident; HC150FLOW (the Hunter family-image watch-list part) TBD with a proper 1200px photo instead of "no reliable photo"; 1449-007, 439211, 205020, PP075X400 TBD; POPO150250, DS75C, SC8112 not confident. Nothing changed in the photo stores (verified: states, live count and review queues identical before and after). Open question for the cleanup pass: on 1449-007 and 439211 the tier step preferred a low-resolution second-source candidate over SiteOne's 1200px one (tier ranks before grade); the enriched benchmark rows (this PR) will show which check held the SiteOne candidate back. The Review tab's plan GET was broken on first use (`url is not defined`) — fixed here. **Changed 2026-09-28 — the budget gate and the finder switch (Patrick: "this should not cost me any more than $10").** The two days of runs cost about $150 (21.3M + 4.5M Opus 5 tokens, ~$1.50 a part), almost all of it the web-search finder feeding fetched pages back as input. Now: (1) every Claude response is priced from the model that answered (`photo-ai.costOf`: list prices + $0.01 a web search) and added to the run's `usage.usd` and to a standing ledger in the state file (`state.spend`); (2) `budgetUsd` (env `PHOTO_BUDGET_USD`, default $10) is a hard cap — a run pauses itself with `pausedReason: "budget"` when the ledger reaches it, and start/resume refuse until the cap is raised; (3) the finder is OFF unless a wave is started with `finder: true` (admin, `POST /wave {skus, finder}`): a fast-path miss makes no web search and ends "not confident — finder off: not found on the supplier sites", a generic single-source hit lands at TBD with its one 1200px source; (4) the vision and compare calls run on `PHOTO_VISION_MODEL` (default: the finder's model) so Patrick can move them to a cheaper model by env; (5) every wave plan carries dollars (`cost.finderOff` / `cost.finderOn` worst case, spent, remaining) and the run line shows this run's dollars, the budget and the finder state. `scripts/test-photo-budget.mjs` (in `build:check`). Worst case for the remaining 178 parts with the finder off: about $8 on Opus 5 for the vision calls, about $3 on Sonnet 5.5. **Final form (Patrick, Sep 28 2026, after the accounting: ~$155 for 126 part-runs, ~$1.23 each):** (a) bulk waves **cannot** invoke the finder — `start()` and `startWave()` take no finder option, the wave route reads only `skus`, and the only way the finder ever runs is the harness-only `finderDefault: true` (a future one-part manual research action, cost shown first, is not built); (b) a deterministic miss — no candidate image at all — is **`needs_research`**, a tier and catalog state of its own with its own Review-tab queue and progress count (`tierFor({hasCandidate:false})` returns it; `photoStateFor`, `recordAiResult`, `buildReviewQueues`, `catalogProgress` and the run summary all honour it), never "Not confident", which now means exactly "evidence was checked and found insufficient or wrong"; the run makes zero finder calls and zero web searches for it and moves straight to the next part; (c) the $10 cap and the dollar ledger stay as a failsafe; (d) the vision model stays Opus 5. `scripts/test-photo-budget.mjs` (35) proves: a `finder: true` argument to a wave changes nothing and the route has no such field; a miss makes zero finder calls/web searches, becomes Needs research, sits in that queue and the run continues; the cap still pauses spending; Confident / TBD / Not-confident semantics unchanged (a vision fail is still Not confident). quality upgrade of live photos (Patrick).** `lib/photo-quality-upgrade.js` + `part-photos.upgradePhotoQuality`: for every live photo under 800px, re-read the product page it came from, find a LARGER member of the same picture family (`photo-quality.familyKeyOf`), measure it, and prove it is the same picture (normalised correlation of 24×24 greyscale copies ≥ 0.85). Only a same-family, same-picture, ok/good copy is a "deterministic" upgrade; uploaded photos (no page), pages without a larger copy, a larger copy that is a different picture or still too small go to the **Quality** review queue on the Review tab ("Keep as is", or replace by hand through the existing upload door). Routes: `GET/POST /api/part-photo-quality/plan` (POST = admin, builds asynchronously, one page + 1–3 images per photo), `POST /api/part-photo-quality/upgrade {hashes}` (admin; the exact list shown, in order), `POST /api/part-photo-quality/review/:groupId`. Applying moves the group's photo hash to the larger copy and nothing else: tier, approvedBy/At, links, fitting membership and the AI result are untouched; the old hash goes to the history as `quality-upgrade`; `source` keeps its page and method and records `upgradedFrom`; a photo that changed since the plan is skipped, never overwritten; nothing is ever upscaled. `scripts/test-photo-quality-upgrade.mjs` (32, in `build:check`). **Still needs Patrick:** merge + deploy, build the plan on production, read the counts and before/after, and approve before anything is applied. **Changed 2026-10-01 — resolution restoration, one rule, and review candidates covered (Patrick).** The first production plan (`QU-202610012211-acf6`, nothing applied) showed two gaps: the review queue still held 96×96 candidates (111BC, 205120, TLCOUP) because the job only looked at live photos, and 12 SiteOne originals proven to be the same picture (match 0.995+) were kept at 96px only because the 1200px original graded "soft". Resolution restoration is now separated from photo/evidence approval. **The rule** (`photo-quality-upgrade.restorationDecision`, one place): a stored image under 800px is restored when the larger copy is on the SAME stored source page, in the same picture family, ≥ 800px, has strictly more native pixels, and correlates **≥ 0.98** with the stored image; on that path a soft or blurry grade does NOT block — it is measured and recorded on the restored image and shown on the card. The quality gate for new or different candidate images is unchanged. A larger same-family copy under 0.98 (the Rain Bird store's padded squares: VB7RND 0.94, 000001/ESPSM3 0.89) is HELD for Patrick's eye and shown beside the stored image, never restored automatically. **Scope:** live photos and the review candidates the Review tab shows (`photo-review.visibleCandidates` — one rule shared by the card and the plan). **Applying** a candidate row (`part-photos.restoreCandidateImage`) replaces that one candidate's image asset in place and nothing else: its tier, evidence checks, position, run, source page, the group's tier/reason/AI result/updatedAt, links and approvals are untouched — a TBD candidate stays TBD, a Not-confident one stays Not confident (111BC's dimension drawing is 1200px and still Not confident); a candidate that was rejected, approved (part went live), or whose larger copy is already a candidate is skipped. Review cards now receive each candidate's source size, grade and "restored from its 96×96 thumbnail". `scripts/test-photo-quality-upgrade.mjs` (55): the rule as a table, the seven audited candidates incl. the soft and the blurry one, < 0.98 held, different family / different page / < 800px / not-more-pixels refused, never enlarged, changed-since-plan skips, no model/finder/web-search code in the module; mutation-checked six ways. Local rebuild of the plan with the new code against production's current rows: 51 stored images → 39 deterministic (32 live: 18 sharp + 11 soft + 3 blurry SiteOne originals; 7 candidates), 12 review (3 held, 9 with no usable larger copy or uploaded). **Still needs Patrick:** review the PR; merge + one deploy; rebuild the plan on production; approve before anything is applied. **2026-10-02 (applied on production; held rows confirmed by eye):** plan `QU-202610020248-bc6a` applied — 40 restorations (33 live + 7 review candidates), 0 skipped; verified only those image hashes changed, tiers / checks / approvals / groups / queues identical, $0, no model calls; live photos under 800px 55 → 22, review candidates under 800px 7 → 0. Patrick then compared the three HELD rows side by side (VB7RND, 000001, ESPSM3 — one Rain Bird file each, stored on a padded square canvas vs the unpadded original; padded onto a square the match is 0.99+) and confirmed each is the same photograph. **New door, one row at a time:** `photo-quality-upgrade.restoreHeld(id, { hash })` — "Same photo — use the larger copy" on a held Quality card, behind a confirm; `POST /api/part-photo-quality/review/:id { action: "restore-held", hash }` (admin). It performs the SAME swap as Apply (`swapImage`, now the one call site for both doors): only the image changes; source page, method, approvedBy/approvedAt, tier, links, AI result stay; the old hash goes to the history as `quality-upgrade`; `upgradedFrom.confirmed = { basis: "visual", similarity }` records that his eye, not the 0.98 line, decided. Refused: a row with no held copy, a hash that is not the held copy shown, a deterministic row, a row already answered "Keep as is", a photo changed since the plan. **Not changed:** `RESTORE_SIMILARITY_MIN` (0.98), the correlation, the planner, Apply's exact-list rule. `test-photo-quality-upgrade.mjs` 55 → 78 (section 6 fails on the old code: `restoreHeld is not a function`); walked in a real browser on a local server with mock images (cancel = nothing changes; confirm = 265×265 → 878×999, approval stamp and source page identical, row leaves the queue). **Still needs Patrick:** merge + one deploy, then press the button on VB7RND, 000001 and ESPSM3 himself (or say so per part). |
 | FLOW-47 | **A verified part photo reaches the parts picker — and nothing unverified does** — **PASS — walked on production 2026-09-26 by Patrick** (opened 2026-09-26, P-PJL-35 M1; code #313, thumbnail follow-up #321) | Hop chain: **`/admin/part-photos` upload or https link → `POST /api/part-photos/:sku/photo` (requireAdmin) → `lib/part-photos.js` processImage (resize only) → content-addressed WebP on disk + group/link stores → `rebuildCatalogFromOverrides` → `photoStateFor()` → `/api/parts` `photo` (verified only) → Material List picker thumbnail → viewer.** Same-fitting: `POST …/link {sameAsSku}` shares the group. Edit safety: a part-number/description edit hides the photo until `POST …/reconfirm`. Covered by `scripts/test-part-photo-lifecycle.mjs` (63, build:check) and `test-admin-gates.mjs`. **What still needs Patrick:** on production, (1) open Materials → Part photos, set a real photo for one part by upload and one by pasting a manufacturer image link; (2) link a second SKU with "Same fitting as…"; (3) open a material list, search both, confirm the thumbnails and the viewer on desktop and phone, and that every other part shows "No photo"; (4) edit one part's description and confirm its photo hides until "Photo is still right". |
 | FLOW-46 | **Quote financing (Klarna) — offer → apply → approve/decline → sign → capture** — **UNMAPPED** (opened 2026-09-19) | **First-ever registration for this flow** — PJL-34 (admin enable, Stripe Payment Link, capture/void, the Pending Financing queue, the capture-deadline reminder sweep) shipped across several earlier PRs with no `FLOW_REGISTER.md` entry at all; this row covers that pre-existing behaviour AND the PJL-35 re-sequencing below in one place, since they're one flow. Hop chain: **admin "Enable financing" on a DRAFT quote (`enableFinancingForQuote`, grosses up pricing — draft-only, pricing frozen once sent, which is the actual mechanism behind "a customer who wants financing gets a completely different proposal," not a live toggle) → sent to the customer → `financing.stage` state machine (`not_offered → link_sent → authorized/declined/voided`, `authorized → captured/partially_captured/expired/voided`) → capture or void on the linked invoice**. **PJL-35 (2026-09-19): financing now starts BEFORE signature, not after.** A new customer-facing "Apply for financing" button/route (`POST /api/approve/:id/:token/apply-financing`) calls `klarna.onQuoteAccepted` directly — reused UNCHANGED, since it already no-ops (`{ alreadyRan: true }`) once `financing.stage` has moved past `not_offered`, which is also what makes the three PRE-EXISTING post-signature call sites (`server.js` — remote e-sign, portal accept, pdf-return admin attestation) safe to leave byte-for-byte untouched: whichever trigger fires first does the real work, the others are silent no-ops. Two new customer-facing hero/footer bands on the proposal page (serve-time injected in `injectProposalAcceptFooter`, never baked into the saved file) read `financing.stage` live and show the apply/waiting/approved/declined state; the footer band only shows the Accept & sign button once `authorized` (or after a `declined` customer chooses to pay another way) — **before that, there is deliberately nothing to sign**, which is the direct fix for the risk Patrick raised ("wouldn't the sequence make the customer sign... and then..."): under the old order a signature could exist before the financing outcome did, under this order it can't. **The correctness fix this re-sequencing required:** `financing.stage === "authorized"` alone stopped being a safe "clear to schedule" signal the moment authorization could happen pre-signature — `quotes.isAccepted(q)` is now the one shared rule (replacing at least three slightly different ad hoc inline checks) used by the proposal page's own footer, `listPendingFinancing`'s new `signed` field, and the authorized-alert email/SMS copy, which now says "clear to schedule" only when both are true and "still needs a signature" otherwise. New customer-facing decline email (`notify-customer.js`'s `sendFinancingDeclineEmail`) — PJL-34 only ever alerted Patrick internally on a decline; the customer heard nothing. Deliberately left alone: the financing state machine's transition rules (never referenced signature status to begin with, needed no change); Stripe integration, gross-up math, eligibility rules, capture/void — all untouched. **Badge asset (corrected 2026-09-19):** Patrick had already supplied the real Klarna badge (a self-contained pink-pill PNG, own background — used in every approved mockup against both the light hero band and the dark footer band) earlier in this same session; it was saved to the mockup scratchpad but not carried into the repo when the real bands were built, so the first version of this code referenced two placeholder files (`/klarna-badge-{black,white}.svg`) that never existed. Fixed same-day: the real asset now lives at `server/klarna-badge.png`, one file for both bands, sized to the same 78px-tall minimum-size math either way. **What still needs Patrick — not yet walked, and can't be walked from this sandbox** (`docs/HANDOFF_KLARNA_TEST_MODE.md`: outbound calls to `api.stripe.com` are blocked by this environment's egress policy): one full test-mode walk — open a financing-enabled proposal as a customer, click Apply for financing, complete Klarna's TEST checkout, confirm the hero/footer bands update through every state, confirm the decline email arrives on a declined test run, confirm the Pending Financing page reads "awaiting signature" before signing and "clear to schedule" after. |
 | FLOW-45 | **A failed send is either re-sent or waved off — never nagged about forever** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **Email health → "Never went out" → for `outreach` rows the health read names the season whose catch-up covers them (`catchUp: {season, year, count}`, from each row's booking) → **Send the N blast emails now** → `POST /api/assignments/:season/:year/catch-up` (rebuilt from each booking, inside the 9–8 window; a closed window is said, not thrown) → the ledger's later successes drop those rows on the next load. Anything else → **Dismiss** (row) or **Dismiss all** → `POST /api/admin/email-health/dismiss` → `mailerLog.dismissFailures()` writes `data/email-dismissed.json` (who, when) → `outstandingFailures()` excludes them; the ledger itself is untouched**. **LEDGER-01 (2026-09-12):** Patrick, on forty "outreach · send by hand" rows from the revoked-password morning (2026-09-11 9:03): "how do we get rid of all this garbage." The rows were true — those blast emails never went out and had not been re-sent — but the panel's only advice was "send by hand", forty times, because `outreach` is not rebuildable from the ledger. It IS rebuildable by the cadence (FLOW-3x catch-up), which the Season Plan already offers; the panel now offers the same press where the failures are read. And a failure Patrick has handled another way (phoned, stale) needed a way off the list that kept the record. **Deliberately left alone:** the ledger (append-only history; dismissals live beside it); `RESENDABLE_KINDS` (a magic link and a cadence step are still not rebuilt from the ledger); the send window. `scripts/test-email-dismiss.mjs` (20, in `build:check`) pins dismiss-takes-only-those-rows, idempotence, the record of who/when, the untouched ledger, the injectable Set, bad input, the admin-gated route, the catch-up pointer, and the panel's controls; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** open Email health: the box shows "Send the N blast emails now"; press it inside the window → "N sent"; reload → those rows are gone. Press Dismiss on any leftover row → it disappears; Dismiss all → the box empties; the Recent failures list below still shows the history. |
@@ -6861,6 +6971,91 @@ export are required before push; device acceptance is still outstanding.
 See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
+
+## 2026-10-02 — FIELD-TTP-LANE-01: the Tap to Pay release lane (built, not yet used; no PASS flow touched)
+
+**What it is.** `.github/workflows/field-app-ttp-lane.yml` is one gated way to put the Tap to Pay
+line (`claude/field-taptopay`, #305) on Patrick's working phone, and to roll the phone back. That
+phone is hand-built from `0c638a8`, runtime `41661c6ff465c4c52451347262fc9fc638271ed6`.
+
+It replaces hand-ported hotfixes on the old emergency branch
+(`claude/eas-update-pjl-field-wgmjtt`, `field-app-hotfix-taptopay.yml`). That branch stays
+untouched as the fallback until this lane has published and the phone has passed field
+acceptance.
+
+**Nothing runs by itself.** The workflow's only trigger is `workflow_dispatch`, and its default
+mode is check-only. Merging it publishes nothing.
+
+| Mode | What it needs | What it does |
+|---|---|---|
+| check-only | the lane commit | runs the guard, publishes nothing, holds no Expo token |
+| publish | run from main; the lane branch's head; the typed phrase `publish <12 of sha> to 41661c6f` | guard → stamp `src/buildInfo.json` → guard again → `eas update --platform ios --branch production --json` → checks every reported update is iOS, on the phone's runtime, in one group |
+| rollback | run from main; a known-good group in `config/ttp-lane.json`; the phrase `rollback to <group>` | `update:view` confirms the group is the recorded iOS update on the phone's runtime, then `update:republish --group … --platform ios --json` |
+
+**Permissions.**
+- The workflow level grants nothing.
+- The `release` job has `contents: read` only.
+- A separate `record` job has `contents: write`. It runs only after a successful publish or
+  rollback, and only pushes an annotated `field-ttp/<mode>/<UTC>-<id>` tag.
+- Every run also leaves its record in the job summary and a 90-day artifact.
+
+**The runtime pin (temporary; `docs/TTP_RUNTIME_PIN.md`).** On a Linux runner the lane tree
+fingerprints as `a7df9c32…`, not the phone's `41661c6f…`. So the lane commits
+`expo.runtimeVersion = "41661c6f…"`, and nothing rewrites `app.json` during publish.
+
+A literal runtime switches off the fingerprint's protection. `scripts/ttp-lane-guard.mjs` (main's
+copy, never the lane's) therefore proves native compatibility without trusting it:
+
+| Gate | Checks |
+|---|---|
+| G0 | The tree is the requested commit, clean, and descended from `0c638a8`. After the stamp, it is that commit plus `buildInfo.json` alone. |
+| G1 | Every native-relevant file equals `0c638a8`'s. The one exception is `expo.runtimeVersion`: policy → the exact literal, byte for byte. |
+| G2 | With that field put back, in a throwaway copy, the fingerprint is `a7df9c322260d841aac44036eef0d60a2d987459`. |
+| G3 | The published tree's fingerprint is `ebf53e3862fc12574e4c49540320c1f312fa5e22`, and everything the fingerprint reads is a file G1 compares. |
+| G4 | The tree resolves to runtime `41661c6f…`. |
+
+Both native-build workflows (`field-app-build.yml`, `field-app-taptopay-build.yml`) refuse while
+any literal runtime is present. `field-app-taptopay-build.yml` now checks out
+`claude/field-taptopay`; it had pointed at the stale #151 branch.
+
+**Not covered by any check:** a hand build in Xcode on the Mac. The pin must come out first; the
+removal steps are in the doc.
+
+**Guard proofs (real `expo-updates` fingerprints, Linux, eas-cli 23.2.0 tooling, 2026-10-02):**
+
+| Tree | G0 | G1 | G2 | G3 | G4 | Result |
+|---|---|---|---|---|---|---|
+| Pinned lane `2124cba` | ✅ | ✅ | ✅ a7df9c32 | ✅ ebf53e38 | ✅ | **PASS** |
+| …stamped, `--after-stamp` | ✅ | ✅ | ✅ | ✅ | ✅ | **PASS** |
+| #305 today `0c638a8` (unpinned) | ✅ | ❌ | — | ❌ a7df9c32 | ❌ | FAIL |
+| #368 `c8b533cb` (unpinned) | ✅ | ❌ | — | ❌ | ❌ | FAIL |
+| `ios.supportsTablet` edited | ✅ | ❌ names the field | — | ❌ 544e3180 | ✅ | FAIL |
+| pinned to another literal | ✅ | ❌ | — | ❌ 74fa725c | ❌ | FAIL |
+| `expo-location` 19.0.8 → 19.0.7 | ✅ | ❌ package files | ❌ 054f4b95 | ❌ a6b82c2b | ✅ | FAIL |
+| `node_modules` native file drifted, lockfile unchanged | ✅ | ✅ | ❌ 19984363 | ❌ 28754651 | ✅ | FAIL |
+| `app.json` rewritten in the checkout (the old lane's move) | ❌ dirty | ✅ | ✅ | ❌ | ❌ | FAIL |
+| "stamp" commit that also rewrites `app.json` | ❌ | ✅ | ✅ | ❌ | ❌ | FAIL |
+
+Two rows show why G4 alone proves nothing: the dependency change and the drifted module both still
+resolve to the phone's runtime.
+
+**Tests.**
+- `scripts/test-ttp-lane-workflow.mjs` (in `build:check`, 75 checks) covers:
+  - the trigger, permissions and step order;
+  - no step touching `app.json`;
+  - the guard on a git fixture with a stand-in fingerprint;
+  - the typed phrases and the EAS result shapes (eas-cli 23.2.0's own);
+  - both build workflows' refusal, run for real;
+  - that no other workflow can publish when these files merge.
+- Against main's old build workflows it fails 7 checks.
+- `scripts/test-ota-channel.mjs` allows a literal runtime only when it is exactly the phone's, and
+  requires both build workflows to refuse one.
+
+**Not yet done, each separately approved:**
+1. fast-forward #305 to the pinned lane head;
+2. Patrick's check-only run, then his publish run;
+3. field acceptance on the phone;
+4. retiring the old emergency branch.
 
 ## 2026-10-01 — FIELD (FLOW-31): Customer Summary "Done" crashed the whole app — fixed (#361)
 
@@ -7780,3 +7975,500 @@ confirm the day list now shows fewer hours, and that the original time is
 still on the record; (4) confirm a technician signed in on the phone
 cannot reach the correction; (5) on a T&M job, confirm the labour line
 bills the corrected hours.
+
+## 2026-10-02 — PO-LIST-01: a purchase order and its material-list lines save together or not at all
+
+**The defect (live since 2026-09-27, 688550c).** Send, receive and cancel saved the PO, then
+replaced the source list's whole line array through `materialLists.update()`. Once a list had been
+bought from, the 2026-09-27 guard (`lineItemsLockedBy`) correctly refused that replacement — after
+the PO had already saved. So: receive-in-full and cancel answered 400 with the PO saved and its list
+lines still "ordered" on it; a second PO from the same list answered 500 after the supplier had been
+emailed, its lines never marked; two clicks on Send emailed the supplier twice. A re-order also
+dropped its material-list link, so whatever arrived on it counted toward no job.
+
+**The rule now.** `server/lib/purchasing.js` is the one path for send / receive / cancel. Under one
+lock shared by every purchase-order and material-list write (`purchasing-store.withPurchasingLock`),
+it validates the PO transition, works out every affected list line from the PO's resulting state
+(`lineMove` — the one rule), emails (send only, still holding the lock), then commits both files in
+one journalled commit (`commitFiles`: journal → temp-file-and-rename each file → drop journal). A
+failed write puts back whatever was written; a crash part-way is finished by `recover()` at boot and
+before every locked operation; a journal overtaken by later writes is set aside, never applied.
+Only a line's `status`, `poId` and `frozenPriceCents` change, only on the line the PO line points at
+(`sourceListId` + `sourceLineId`), and past "sent" only while it points back at this PO. Receipt
+quantities are absolute, so a repeat request changes nothing and writes nothing. The wholesale-
+replacement guard is unchanged. A re-order keeps `sourceMaterialListIds` and each line's source
+pointers, and is written with its `reorder_of` history in one write; a PO saved without a link
+(made before this fix, or by hand) is left as it is — nothing is inferred.
+
+**Deliberately left alone.** The supplier email still goes out before the commit: if the commit then
+fails, nothing is saved and a retry emails again (the lock stops a double-click doing it). Sending a
+PO whose list line is already ordered on another PO, or already received, sends it and leaves that
+line alone, as before; the response lists such lines as `notMoved`. Lines left split by the defect
+are NOT repaired: `node scripts/audit-po-list-lines.mjs` (read-only; `--browser` prints a snippet that
+reads the live site's own GET endpoints) lists each one with the repair the rule would make, for
+Patrick's approval.
+
+**Tests.** `scripts/test-po-list-consistency.mjs` (106 checks; 27 fail on the old code) walks first
+send, a second PO from a bought-from list, partial and full receipt, cancel before and after a partial
+receipt, re-order, repeated send / receive / cancel, two simultaneous sends, a write failing on either
+file, a crash between the two, and unrelated purchased lines and POs byte-for-byte unchanged.
+`scripts/test-po-reorder-link.mjs` (41; 16 fail on the old code) and `scripts/test-purchasing-audit.mjs`
+(29) cover the re-order link and the audit.
+
+**Real crashes (2026-10-02, Patrick: "throwing an exception is not the same as the server dying").**
+`scripts/test-po-crash-recovery.mjs` (128 checks; 83 fail on the old code) runs each request in a real
+server process and SIGKILLs it at an exact point (`scripts/lib/crash-at.cjs`, test-only preload):
+after the first data file changed, mid-way through the second, after both but before the journal is
+removed, and just before / just after the supplier email. A fresh process then boots on what was left.
+Recovery completes the save deterministically (an intact journal is always rolled forward); the PO
+and list agree; unrelated records are byte-for-byte unchanged; a retry counts nothing twice; booting
+again, or replaying the journal, changes nothing. A truncated or corrupt journal is set aside
+unapplied (`purchasing-journal.corrupt-<time>.json`), the data files are left exactly as they were,
+and the problem is reported (server log, `purchasing-recovery-log.json`, GET /api/purchase-orders
+`purchasingRecovery`); a missing journal leaves a split the boot-time read-only check reports
+(`list_ahead_of_po`). On the old code a kill mid-write left material-lists.json unreadable, and a
+retry after a crash emailed the supplier twice.
+
+**Supplier email: no automatic duplicate — not "at most once" (Patrick, 2026-10-02).** Exactly-once
+delivery can't be guaranteed — the server can die after the mail server accepts a message and before
+anything is saved. So, as for change requests (2026-09-27), a send is claimed on disk (`sendInFlight`)
+before the email goes and cleared in the same commit that saves the outcome. If the process dies in
+between, the next send is refused as `delivery_uncertain` (409) and the PO page shows "Delivery
+uncertain" with two buttons: "It went — mark as sent" (saves sent + list lines ordered, no email) or
+"It didn't go — allow sending again" (`POST /api/purchase-orders/:id/send-outcome`). Every attempt
+stays in `sendAttempts`. What is guaranteed: the system never sends a second email on its own. What
+is NOT: if the office chooses "It didn't go" and sends again while the first email had in fact
+arrived, the supplier gets two — the button asks the office to confirm that, in those words, first.
+
+**Fail closed when recovery can't prove the state.** A journal that can't be read or no longer
+matches the files, an unreadable data file, or — at boot — a PO and list line that disagree, puts a
+**recovery hold** on the records involved (`purchasing-holds.json`): the PO and list the journal
+header names, the PO and list of each disagreeing line, or — when nothing says which — every PO and
+material list. The rest of the website starts normally. A held record can be read, but send,
+receive, cancel, re-order, edit, delete, restore, re-send, settle a send, and creating a PO from a
+held list are all refused (423 `recovery_required`) with a message saying why and what the office
+must do; the PO and material-list pages show it. No code chooses which record is right. The office
+releases a hold (`POST /api/purchasing/recovery-holds/release`, admin, with a note) only once the
+records no longer disagree; the release is logged. Note for deploying: any lines the old defect left
+split (see the read-only audit) will be held at the first boot, until they are repaired with
+approval.
+
+**One definition of "agree" (Patrick, 2026-10-02).** `server/lib/purchasing-audit.js`
+`auditPurchasingLines` is the only classifier: the boot check holds on its findings, and the live audit's
+browser snippet embeds its source. `scripts/test-purchasing-matrix.mjs` runs the snippet for every case
+and requires byte-identical output. The model: the PO line is the record of what was ordered, what
+arrived and at what price, and nothing on the list side ever rewrites it. For a list line:
+received = everything that arrived on every non-draft PO claiming it (cancelled ones too). At most ONE
+non-cancelled PO may claim a line. "ordered" must point at that PO while its line is outstanding;
+"have" means it arrived (or no PO ever claimed it: stock on hand); "need" means nothing active and
+something still to order. Severity "hold" means the records contradict each other (held at boot).
+"review" means the quantities don't add up: short, or what arrived was ordered again. It is not held,
+because a draft's quantity can be edited on purpose. "Repairable by rule" only when the repair changes
+nothing but the list line's status / poId / locked price, the PO record already holds what arrived and
+its price, any locked price equals that PO price, and the quantities add up. A cancelled PO that
+delivered part of a line is always "needs a person".
+
+**Live behaviour aligned with it.**
+- **Send** refuses a line already ordered on another PO, already received, or claimed twice on one
+  PO (409 `lines_not_orderable`), before anything is written or emailed.
+- **Re-order** of a cancelled PO asks only for what didn't arrive. It claims a list line only if that
+  line still needs ordering; a repeat purchase keeps the list and project link but claims no line.
+- **Generating POs from a list** orders each need line's quantity less what has already arrived
+  (`receivedByListLine`). Before this, cancelling after a partial delivery put the whole line back to
+  "need" and the next generation re-ordered the parts that had arrived.
+- **One "still to order" calculation** (`purchase-orders.stillToOrder`). For a line: its quantity
+  minus everything that arrived (cancelled POs included), minus what is still outstanding on a sent
+  PO, minus (when creating a PO) what is on a draft. It is used by: PO plan and generate (assigned
+  or one supplier), re-order (capped at it), quote-request plan and generate (drafts not counted),
+  and the send gate. Generate runs under the purchasing lock, so a double-click's second request
+  finds the first's draft and proposes nothing. The send gate refuses any order that, after part of
+  a line was delivered, would take the line past its quantity (`lines_not_orderable`).
+- **Why "need" after a part-delivered cancel agrees, while "ordered" on the cancelled PO does not.**
+  "need" is what the live cancel produces, and it means "still to order = quantity − arrived". Every
+  path above proposes exactly that, which `scripts/test-po-remainder-paths.mjs` proves (10 needed,
+  6 arrived → 4 everywhere, never 10 again). "ordered" on the cancelled PO contradicts the PO, and
+  what the office intends for the rest can't be read from the records, so it is "needs a person".
+- **Quote requests (RFQs).** An RFQ asks for what is still to buy when it is raised. Its quantity is
+  a question for the supplier and never becomes a PO quantity: comparing quotes ranks unit prices,
+  applying the cheapest writes unit prices to the catalog, and a PO is only ever generated from the
+  list with the quantity recalculated at that moment. An RFQ raised for 10, answered after 6
+  arrived, therefore leads to an order for 4. The plan preview now lists what each supplier will be
+  asked for.
+
+The matrix (8 PO states × 6 list states, plus 16 extra cases) and the old classifier's 47 misses are
+in the PR.
+
+`scripts/test-po-remainder-paths.mjs` (63 checks through the real routes; 21 fail on the previous
+commit) covers: PO plan and generate, assigned and one supplier, reopened and repeated;
+double-clicks on Generate and Re-order; RFQ plan and generate, assigned and shopped; an early RFQ
+for 10 answered after the delivery; quote comparison; applying the cheapest; the PO made from the
+quote; the 4 arriving (10 in all, "have"); a hand-made order for 10 refused at send; and
+cancellation and re-order after a quoted purchase.
+
+**2026-10-03 — three checker corrections (Codex line-by-line review).**
+- **Open vs completed orders.** A list line may have any number of COMPLETED orders behind it (6
+  on one, the other 4 on a later one); that is history, not a contradiction. Only two OPEN orders
+  (sent / partly received, still outstanding) for one line are (`multiple_open_orders`, replacing
+  `multiple_active_claims`). The live receive rule now matches: a fully received order moves its
+  line to "have" only when everything that arrived on every order covers the line; otherwise to
+  "need", unlinked, so the rest is ordered (6 of 10 in → "need", 4 still to order). The send gate
+  blocks only another OPEN order; a completed one counts against the quantity instead.
+- **Mixed prices.** The list holds one locked price per line. A repair that locks a price is offered
+  only when every receipt behind the line (and, for "ordered", the open order) came at that one
+  price; otherwise "needs a person". A "have" line whose receipts span prices is reported as
+  `mixed_receipt_prices` (review, not held): the PO records keep the true cost of each receipt.
+- **Missing sources.** A PO line whose list, or list line, no longer exists is classified by the
+  PO's state. Draft: `draft_source_missing` (review) — a mistake, and the send gate refuses it.
+  Sent, partly received, received or cancelled: `source_missing` (hold, needs a person, in the
+  totals) — purchasing history. That PO is held (boot check, and at runtime before any send,
+  receive, cancel, re-send or re-order: 423 `recovery_required`); no list is held.
+- **The unlock rule.** Every other hold is released only once the records agree. A missing source
+  can never be made to agree by any repair (the line is gone), so its hold is released by the
+  office's review instead — and only when the release says so explicitly
+  (`acknowledgeSourceMissing: true`; a note alone gets 409 `acknowledgement_required`). The review
+  (who, when, note) is stamped on those PO lines and in the PO history; a browser can't send it.
+  **It does not make the records agree:** the checker keeps reporting and counting the line as
+  `source_missing_reviewed` (severity "reviewed", its own total), only no longer held. After the
+  review, and after any restart: receive and cancel work and touch no list (they record what
+  happened); re-send works (a copy of the same document); **re-order is refused** (409
+  `source_missing` — it would be a new purchase for no job). Releasing a hold on a list or on
+  everything never clears a missing source; that PO gets its own hold.
+- **No new orphans.** A material list a non-draft PO (or an interrupted send) points at can't be
+  permanently deleted (`DELETE`, bulk purge, timed Trash purge — 409 `purchasing_history`), and its
+  lines that such a PO points at can't be removed by a line-replacing save, even once back at
+  "need". It can still go to the Trash and come back. A project deleted "with everything" detaches
+  and keeps such a list and names it in the reply (`keptLists`); the project page says so.
+- **Browser audit** also reads `GET /api/admin/trash/material-lists`, so a list in the Trash is not
+  reported missing (three GETs, still read-only).
+
+`scripts/test-po-source-missing.mjs` (73 checks through the real routes; 32 fail on the commit
+before the corrections, and 13 of the unlock-rule checks fail on fc15694) covers line removal and list deletion refused, Trash and purge, project cascade, the draft
+send refusal, the locked sent PO (receive, cancel, re-send, re-order; no email; nothing changed),
+the boot hold, the review on release (note plus explicit confirmation), each action after it
+and after a restart, the forged review dropped, and release of a hold on everything. The matrix gained the open/completed, mixed-price and missing-source cases (115 of its
+checks fail on the previous classifier).
+
+**2026-10-04 — combined with #375 (material-list line protection, merged first as db7c8c0).**
+One owner per concern:
+- **The PO lifecycle path is #367's** (`purchasing.js`: send / receive / cancel commit the PO and its
+  list lines together, journalled, crash-recovered, no automatic duplicate email). #375's
+  `flipLines` (a second, non-atomic PO door in `material-lists.js`) is removed; its transition rule
+  is kept as the one shared check, `material-lists.purchasingTransitionError`, and `planListMoves`
+  refuses any line move that breaks it (409 `purchasing_transition_invalid`): only need → ordered,
+  ordered → have (price kept), ordered → need (price released).
+- **List editing is #375's**: line-by-line protection (`protectedLineViolations` — a line on an
+  order, or carrying a PO or a frozen price, comes back unchanged; hand-marked Have and Need lines
+  stay editable), and the stale-save refusal (`baseUpdatedAt` → 409 `stale_list`, the edit stays
+  on screen with a Reload button). A purchasing commit moves the list's `updatedAt`, so a builder
+  save made before it is refused as stale.
+- **Combined:** a line with receipts behind it but back at "need" (6 of 10 arrived) doesn't look
+  purchased to #375's rule, so #367's guard keeps it: it can't be dropped or given another SKU;
+  its quantity stays editable and still-to-order follows it.
+`scripts/test-material-list-line-protection.mjs` now drives the real PO door (purchase orders sent,
+received and cancelled through `purchasing.js`) and adds the combined checks (68 checks).
+
+All seven suites run in `build:check`.
+
+## 2026-10-04 — FIELD-PHOTO-EDIT-01: delete or move a work-order photo from the phone (PJL-110, PJL-111; no PASS flow touched)
+
+**What it is.** On the closing screens, tapping a photo thumbnail now offers **Move to zone…** (zone
+photos) and **Delete photo** (zone and water-off photos). Both are recorded on the phone first and
+synced through the offline queue, like every other field action. Patrick's decisions (2026-10-04):
+delete is **for good** (D-A1), allowed **at any time** from the phone, before or after Finish (D-A2),
+and a finding's photo moved to another zone **comes off the finding, and the app says so** (D-A3).
+
+**Hop chain.** Thumbnail → action sheet → `queue.deletePhoto` / `queue.movePhoto`
+(`pjl-field/src/offline/queue.mjs`) → `transport.photoEdit` (`offline/field.js`) →
+`DELETE` / `PATCH /api/work-orders/:id/photos/:n` or `…/photos/upload/:clientUploadId`, under the
+per-work-order photo lock → `server/lib/wo-photo-edits.js` → `wo.photos`, `wo.removedPhotos`,
+the property's deferred `photoIds`, history.
+
+**The one rule.** `wo-photo-edits.js` decides which photo is meant (`findPhoto`), what a delete
+leaves (`removePhoto`) and what a move does (`movePhoto`). The phone's queue applies the same
+re-filing (`refiled`) so the screen and the server agree.
+
+**Delete is for good, and stays true afterwards.** The file goes, the report's cached copy
+(`<n>@1400.jpeg`) goes, and the photo leaves `wo.photos`. A tombstone with no bytes is kept in
+`wo.removedPhotos`, and it does two things:
+- **A photo number is never reused** (`nextBaseN`). Before this, deleting the highest-numbered
+  photo handed its number to the next upload. An old signed email link then showed a different
+  photo, and the report's cached copy of the deleted photo stood in for the new one.
+- **A late upload cannot bring a photo back** (`field-photo-uploads.newPhotos`). This matters when
+  the phone deletes a photo whose upload is still on its way.
+
+Both routes are idempotent: a photo that is already gone answers 200 `alreadyRemoved`, so a retried
+queue entry acknowledges instead of stalling.
+
+**Offline cases** (`scripts/test-photo-delete-offline.mjs`, real queue + real server rules):
+- A photo that never left the phone is dropped with its bytes and never uploads.
+- A photo that may have reached the server gets a queued server delete. That covers an uploaded
+  photo, an attempted upload, an upload in flight, and an entry left by the previous app version.
+- A move re-files a queued upload's own bytes, plus a server move when needed.
+- A move the server refuses outright (the zone left the visit) is dropped rather than holding the
+  visit's sync.
+- A session advertises `fieldOffline.photoEdit: 1`. A phone on a server without it keeps the change
+  and says the server needs the update.
+
+**Lifecycle walk (CLAUDE.md):**
+- **Customer:** the next report render, the status-update email strip, the portal and signed photo
+  links no longer show a deleted photo. A moved photo shows under its new zone.
+- **Patrick / the office:** work-order history keeps `photo_delete` (photo number, zone, category,
+  who) and `photo_move` (from → to, who, and any finding it came off).
+- **Linked records:** the property's deferred findings drop a deleted photo, and drop a moved photo
+  that came off its finding. Later copies (`wo-findings`) read `wo.photos`, so they never list it.
+- **Capacity, invoice, season plan:** untouched; a photo is not billable.
+- **Deliberately left alone:**
+  - A report **already frozen and sent** (`wo.reportSnapshots`) keeps the photo. It is the legal
+    record of what the customer received.
+  - An email already sent keeps its link, which now answers "Photo not found".
+  - Build-mode task-log and scope-change photo references are not cleaned. The field app's delete
+    and move are on closing visits only.
+
+**Coverage.**
+- `scripts/test-photo-delete-move.mjs`: 33 checks, booted server, temp data. 23 fail on the old
+  code, including number reuse.
+- `scripts/test-photo-delete-offline.mjs`: 13 checks; all 13 fail on the old queue. Mutation
+  checks: dropping the in-flight delete fails 3; dropping the `sent` stamp fails 2.
+- The existing offline and photo suites stay green, and the iOS bundle exports.
+
+**What still needs Patrick:** after the server deploys and the update reaches the phone,
+on a test visit:
+1. Delete a zone photo while offline, then reconnect, and confirm it is gone from the web work
+   order.
+2. Move a photo from one zone to another and confirm the work order shows it under the new zone.
+3. Delete the water-off photo.
+
+## 2026-10-04 — FIELD-SYNC-01: the field app syncs as it goes, so Finish no longer waits minutes (PJL-113; no PASS flow touched)
+
+**The defect.** Finish took 5–8 minutes on every closing. Three causes, all fixed here:
+- one server error held the whole visit's sync until Finish;
+- every change cost 3–4 round trips;
+- a server restart read as "signed out".
+
+**What changed on the phone.**
+- **Error classes.** `classify()` in `pjl-field/src/offline/transport.mjs` is the one rule:
+  - **transient** (no signal, a timeout, any 5xx including Render's HTML 502, 429, a version
+    clash) retries on its own with backoff of 2, 4, 8, 16 then 28 s, and never holds anything;
+  - **permanent** (a conflict to choose, a closed visit, a validation 4xx) holds that one entry
+    until a tap or Finish;
+  - **auth** is 401/403 only.
+- **Two lanes** (`queue.mjs` flush):
+  - **Changes, one at a time:** saves with If-Match and the three-way merge, plus photo deletes
+    and moves. A failed save holds only the later saves on that record.
+  - **Photos, two at a time:** a photo never waits for a save, and a save never waits for a photo.
+    An answer that arrives late never replaces a newer copy of the record.
+- **Fewer round trips.**
+  - The account is checked once per pass. The server's owner check below covers each request,
+    and the check is skipped for 5 minutes when the server enforces it.
+  - A save goes against the phone's last server copy. It re-reads once only on a 409, and is
+    merged and resent in the same pass.
+  - A photo goes straight up; the server dedupes by upload id.
+  - Adjacent saves to one record go as one request when nothing on the server moved.
+  - A pass with nothing to send makes no request at all.
+- **The watcher** (`offline/field.js` `watchFieldQueue`) follows the queue's own backoff
+  (`nextDelay`). A phone back in signal resumes within 30 s, with no tap.
+- **Finish** says what is left, counting down (`sync-notice.js` `finishProgressText`), for
+  example "Uploading 3 photos · 4.1 MB left · 1 change…".
+- **Picker quality** is 0.40 (was 0.55). Resizing on the phone needs the WebView canvas and comes
+  with photo markup (PJL-112).
+
+**What changed on the server.**
+- **Owner check.** A request carrying `x-pjl-field-owner` under any other session is refused with
+  403 `owner_mismatch`, at the auth gate. The session advertises `fieldOffline.ownerCheck`. A
+  phone talking to an older server keeps the old session read before every change.
+- **One If-Match rule:** `workOrders.versionMatches`, used by the PATCH route and by `update()`.
+  - A version the phone read still matches after writes that touched only photos, deleted-photo
+    tombstones or history. Those are `versionChain` steps, valid only while their head is the
+    record's version.
+  - A PATCH carrying `photos` gets no allowance.
+  - Without this rule, every photo upload made the next zone save a 409 and a re-read.
+
+**Measured** (`scripts/perf-field-sync.mjs`):
+- **Setup:** the real queue and transport against the real server; 300 ms round trip; one shared
+  1.5 MB/s uplink. The visit is 12 zones and 12 photos, with a 1.58 MB test photo at quality
+  0.55.
+- **Baseline:** main's queue and transport. **After:** this branch.
+
+| | Baseline | After |
+|---|---|---|
+| Requests, walking the visit and syncing as it goes | 113 | 26 (1 account check + 13 saves + 12 photos) |
+| Requests at Finish once caught up | 1 | 0 |
+| Requests to drain a no-signal visit | 101 | 14 |
+| Time to drain a no-signal visit, real time (`--real`, `PERF_ONLY=backlog`) | 177.8 s | 113.3 s — the uplink floor: 21 MB at 1.5 MB/s is 112 s |
+| One 500 on the first zone save | 25 pending and 0 photos on the server until Finish | all synced on the next ordinary pass |
+| Wait before resuming after a long signal drop | 15 s (fixed timer) | ≤ 29 s backoff, no tap |
+
+**Acceptance (PJL-113).** The request rule was approved by Patrick on 2026-10-05 (Option A; no
+delay added to zone saves). Every other criterion is unchanged.
+
+**How it was measured.** `scripts/perf-field-sync.mjs`: the real queue, transport and server; 300 ms
+round trip; one shared 1.5 Mbps uplink; the 12-zone / 12-photo reference visit. Photo bytes and times
+use the harness's synthetic photo, or where marked, the one benchmark photograph from the website's
+files uploaded 12 times (described in FIELD-PHOTO-MARKUP-01). These are not real captures from the
+phone.
+
+| Criterion | Measured (#378) | Status |
+|---|---|---|
+| Connected reference visit: **≤ 30 total requests**, with no redundant session or full work-order rereads, and no more than one save per meaningful change *(approved rule)* | **26** = 1 account check + 13 saves + 12 photos, for 25 changes. 0 rereads (baseline 113, with 63 session and 25 record reads) | **Met** |
+| No-signal catch-up: **≤ 20 requests** | **14** | **Met** |
+| Queue **≤ 2 pending** 30 s after any action, normal signal | max **1** in the harness | Met in the harness; **real phone pending** |
+| Temporary 5xx and network errors **recover automatically** | one 500 mid-visit: synced on the next ordinary pass. Signal drop: resumed after ≤ 29 s of backoff, no tap | **Met** |
+| Finish when caught up: **0–2 requests**, and completes in **≤ 15 s on the real phone** | **0** requests | Requests met; **15 s on the real phone pending** |
+| Finish shows exactly what remains, never a bare spinner | "Uploading N photos · X MB left · N changes…" | **Met** (test) |
+| Bytes uploaded **≤ 40% of baseline** (shrinking ships over the air, behind its switch) | benchmark photo: 14.8 MB → 11.9 MB (**80%**); with shrinking (PJL-112, off by default) 9.6 MB (**65%**) | **Not met**, open |
+| Total sync time **≤ 40% of baseline** | backlog, real time: synthetic photo 177.8 → 113.3 s (**64%**); benchmark photo 118.2 → 64.9 s (**55%**), with shrinking 52.5 s (**44%**) | **Not met**, open |
+
+**Why the two open rows remain open.** On a 1.5 Mbps uplink, photo bytes are almost all of the
+remaining time.
+- Reaching 40% needs about 0.37 MB per photo, for example 2400 px at a lower JPEG quality than the
+  0.75 approved for testing. That is a quality decision for Patrick, made after the device check
+  compares real captures.
+- Not weakened here.
+
+**Lifecycle walk (CLAUDE.md):**
+- **Nothing about what is recorded changes.** Sign-off gates, prices and the completion cascade
+  are untouched.
+- **Finish still requires everything uploaded** (D-C1: not now).
+- **Background upload while the phone is locked** is not attempted (D-C2: investigate later).
+- **Version check outside the phone:** the office's web pages use the same PATCH route. They gain
+  the same allowance: a photo added by the tech no longer makes the office's save a clash.
+
+**Coverage:**
+- `scripts/test-field-sync.mjs`: 13 checks; 8 fail on main's queue, and the transport checks
+  fail on main because the module does not exist there.
+- `scripts/test-field-sync-server.mjs`: 13 checks; 7 fail on the server before this change.
+- `scripts/perf-field-sync.mjs`: 11 assertions, in CI at a 40× time scale.
+- Existing suites:
+  - The merge suites are unchanged in substance and green.
+  - Mechanical updates only: three suites now pass the new module into the field.js sandbox, and
+    two source guards point at the moved code.
+  - `test-field-offline`'s fake server now answers a stale If-Match with 409, as the real server
+    does; it used to crash the test instead.
+  - `test-field-offline`'s "closed visit" fake now bumps the version when it closes the visit, as
+    the real server does.
+  - `test-field-conflicts` round 2 now expects the 409 to clear in the same pass. It used to
+    clear only on the next pass.
+
+**What still needs Patrick (real phone):**
+1. A 12-zone closing on normal signal, noting the header's pending count after each zone.
+2. Finish in 15 s or less.
+3. Airplane mode for one zone, then off: the backlog drains with no tap.
+
+## 2026-10-05 — FIELD-PHOTO-MARKUP-01: mark up a work-order photo; shrink photos on the phone, separately switchable (PJL-112; no PASS flow touched)
+
+**What it is.** Tap a photo thumbnail and choose **Mark up**, or tap **Mark up this photo** right
+after taking one. The editor has pen, arrow, circle and text, in red, yellow or white, thin or thick,
+with undo and reset. All controls are 56 pt; Cancel and Done are always on screen. It is PJL's own
+editor, a WebView canvas like the signature pad, so it ships over the air; Apple's Markup would need
+native code.
+
+**Patrick's decisions (2026-10-04):**
+- **D-B1:** the customer's report shows the marked-up version only, and the original stays on the
+  work order.
+- **D-B2:** "Mark up again" starts from the original and replaces the previous markup.
+- **D-B3:** markup is offered as a button and never opens on its own.
+- **Extra requirement:** markup and shrinking are independently releasable and testable.
+
+**Data model** (`server/lib/wo-photo-edits.js`):
+- **The link.** A markup is a new photo with `markupOf` (the original's number) and
+  `markupOfUpload` (its upload id). The upload route resolves the link, by number or by upload id,
+  and files the markup where the **server's** copy of the original is: zone, finding, category,
+  label. The original is never changed.
+- **One live markup per original.** The old one is deleted like any photo: file, tombstone,
+  `photo_markup` history saying which it replaced.
+- **They travel together.** Moving the original moves its markup. Deleting the original deletes its
+  markup. Removing the markup keeps the original.
+- **A markup that outlives its original** (deleted meanwhile) is dropped with a tombstone. A markup
+  of a photo that was never there is refused.
+
+**The one rule for what a customer sees:** `customerPhotos`, an original with a live markup shown
+as its markup, in its place. It is used by:
+- the report PDF's customer audience (the office's internal report keeps both);
+- the findings copied to the property, which the portal shows;
+- both on-site quote declined-item sinks;
+- the status-update photo strip.
+
+**Deliberately left alone:**
+- The office's photo counts (daily record, project totals) count both files, which is true of
+  what is stored.
+- The completion-photo gate counts a markup too. That is harmless: a markup always has its
+  original, and a fall closing needs none.
+- Admin and tech web pages list both photos.
+
+**Phone** (`queue.mjs`):
+- `markup()` queues the copy like any photo. A markup waits in the photo lane for its original's
+  upload.
+- Marking up again drops a markup still waiting to upload.
+- Deleting a photo drops its pending markups.
+- A queued delete or move shows on the pair at once.
+- The thumbnails pair them (`photo-pairs.mjs`): the markup shows in the original's place, badged
+  "Marked up". The menu offers Mark up / Mark up again, Remove markup, Move to zone… and Delete
+  photo.
+- A server without `photoMarkup` is never sent a markup; the phone keeps it and says why.
+
+**Shrinking: separate, and OFF by default.**
+- **The switch:** the server's `fieldOffline.photoShrink`, on only with `FIELD_PHOTO_SHRINK=1`. It
+  turns on, and off, with no app update.
+- **Separate code:** its own page (`photo-canvas.mjs` SHRINK_HTML) and its own hidden component
+  (`PhotoShrinker.js`), mounted only while the switch is on. The editor does not touch either.
+- **With it on:** the camera takes the photo at 0.80, and the phone resizes it to 2400 px at JPEG
+  0.75 before it queues. Anything short of a smaller JPEG within 10 s sends the original
+  unchanged: the page not ready, a photo it can't decode, a result that would be bigger, or no
+  answer.
+- **0.75, not the planned 0.85** (D-C3). Measured on the benchmark photo (below): at 0.85 the
+  2400 px copy (0.80 MB) is no smaller than the full-size photo at the picker's 0.40 (0.75 MB).
+  At 0.75 it is 0.60 MB. The server re-encodes at 82 whatever arrives.
+- **Markup** saves at 0.85, so the drawing stays crisp.
+
+**Measured: the upload for a closing.** The benchmark photo is **one** 4032×3024 JPEG from the
+website's own files (`landscape-lighting-hero.jpg`):
+- it is iPhone-sized, but it carries no camera data, so it is not proven to be an iPhone photo;
+- it is **not** from Patrick's phone;
+- it was re-encoded at each picker quality and **uploaded 12 times**. These are not 12 separate
+  captures.
+
+The backlog was drained in real time at 300 ms / 1.5 Mbps (`scripts/perf-field-sync.mjs --real`,
+`PERF_PHOTO_FILE`). Real captures from the device are measured by the device check below.
+
+| | Upload | Drain |
+|---|---|---|
+| main today (picker 0.55, full size; old queue) | 14.8 MB | 118.2 s |
+| #378 (picker 0.40, full size) | 11.9 MB | 64.9 s |
+| #378 + shrinking on (0.80 → 2400 px @ 0.75) | 9.6 MB | 52.5 s |
+
+The earlier "21 MB" was the harness's synthetic textured image; a real photograph compresses much
+better. **On this benchmark photo, shrinking saves a further ~19% of the bytes.** That is useful on a weak uplink,
+not transformative. Most of the gain from smaller uploads came from the picker quality change in
+#378.
+
+**Coverage:**
+- `scripts/test-photo-markup.mjs`: 32 checks, booted server, all three switch states (off, `1`, `compare`).
+- `scripts/test-photo-markup-offline.mjs`: 15 checks: the real queue against the real server rules,
+  the canvas drawing code, and source guards for D-B3 and for markup and shrinking staying apart.
+- Both are in build:check and fail on #378's code: 14 of 17 counted and 15 of 15.
+- `scripts/test-photo-canvas.mjs` (`npm run test:photo-canvas`): 25 checks; both pages in real
+  Chromium on the benchmark photo. **Not in build:check**, because CI installs no browser. Run it on any
+  change to `photo-canvas.mjs`.
+
+**What still needs Patrick: two device checks, each its own gate.** Shrinking stays OFF until the
+second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing only.
+
+1. **Markup, with shrinking off** (it ships this way):
+   - open, draw and save about five full-size photos in a row, using every tool;
+   - the editor does not freeze or run out of memory;
+   - the saved markup is crisp on the work order and on the customer's report;
+   - the original is still on the work order for the office.
+2. **Shrinking, on a test visit, with `FIELD_PHOTO_SHRINK=compare`.** Each shot then uploads its
+   untouched original **and** the shrunk copy beside it (labelled "Shrink test"), so both come from
+   the same capture.
+   - Take about five current iPhone camera photos: a sprinkler head or nozzle up close, a valve or
+     valve box, piping or a leak, and a wider zone or property shot.
+   - Compare each original with its shrunk copy for readability, on the office's work-order page.
+   - Record the real before and after bytes: open
+     `https://www.pjllandservices.com/api/work-orders/<WO id>` in the signed-in browser. Each
+     photo's uploaded size is `originalBytes` when the server re-compressed it, otherwise `bytes`.
+     The office page does not show sizes.
+   - Mark up a shrunk photo and confirm the markup stays crisp.
+   - No freeze or memory warning while taking the photos.
+3. **Then** set `FIELD_PHOTO_SHRINK=1` only if check 2 passes. If it misbehaves later, unset it:
+   markup is unaffected.

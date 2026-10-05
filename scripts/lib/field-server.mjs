@@ -50,7 +50,12 @@ export function assertLocalBase(url) {
   return url;
 }
 
-export async function bootServer({ port, env = {} } = {}) {
+// seedData: a data directory to start from (copied in before the server
+//   boots — e.g. what a crashed server left on disk), so boot-time recovery
+//   runs against it.
+// preload: extra test-only modules required into the server process
+//   (e.g. scripts/lib/crash-at.cjs, which kills it at a chosen point).
+export async function bootServer({ port, env = {}, seedData = null, preload = [] } = {}) {
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-field-server-"));
   for (const entry of fs.readdirSync(ROOT)) {
     if (entry === "server" || entry === ".git") continue;
@@ -64,6 +69,7 @@ export async function bootServer({ port, env = {} } = {}) {
   });
   const DATA = path.join(TMP, "server", "data");
   fs.mkdirSync(DATA, { recursive: true });
+  if (seedData) fs.cpSync(seedData, DATA, { recursive: true });
   // Pricing overrides live in data/ on the real box; the repo ships one.
   const rates = path.join(ROOT, "server", "data", "project-rates.json");
   if (fs.existsSync(rates)) fs.copyFileSync(rates, path.join(DATA, "project-rates.json"));
@@ -91,14 +97,14 @@ export async function bootServer({ port, env = {} } = {}) {
     throw new Error(`refusing to boot a test server:\n  - ${problems.join("\n  - ")}`);
   }
 
-  const child = spawn(process.execPath, ["--require", STUB, path.join(TMP, "server", "server.js")], {
+  const child = spawn(process.execPath, ["--require", STUB, ...preload.flatMap((p) => ["--require", p]), path.join(TMP, "server", "server.js")], {
     cwd: TMP, env: childEnv, stdio: ["ignore", "pipe", "pipe"]
   });
   let logs = "";
   let exited = null;
   child.stdout.on("data", (c) => { logs += c; });
   child.stderr.on("data", (c) => { logs += c; });
-  child.on("exit", (code) => { exited = code ?? "signal"; });
+  child.on("exit", (code, sig) => { exited = code ?? sig ?? "signal"; });   // the signal name, so a kill seen late reads the same as one seen live
   let up = false;
   for (let i = 0; i < 100 && !up && exited === null; i++) {
     await new Promise((r) => setTimeout(r, 150));
@@ -114,6 +120,9 @@ export async function bootServer({ port, env = {} } = {}) {
   let cookie = "";
   const srv = {
     TMP, DATA, BASE, OUTBOX,
+    child,
+    // Resolves with the exit code or signal once the process has ended.
+    exited: () => new Promise((r) => { if (exited !== null) r(exited); else child.once("exit", (code, sig) => r(code ?? sig)); }),
     logs: () => logs,
     lib: (name) => require(path.join(TMP, "server", "lib", name)),
     data: (name) => {
@@ -122,6 +131,9 @@ export async function bootServer({ port, env = {} } = {}) {
     },
     writeData: (name, value) => fs.writeFileSync(path.join(DATA, `${name}.json`), JSON.stringify(value, null, 2)),
     outbox: () => fs.readFileSync(OUTBOX, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)),
+    // The signed-in session's cookie, for a client the test drives itself
+    // (scripts/perf-field-sync.mjs runs the app's own transport).
+    cookie: () => cookie,
     async login({ role = "admin" } = {}) {
       const users = srv.lib("users.js");
       const email = `${role}-${Date.now()}@pjl.test`;

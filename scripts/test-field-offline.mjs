@@ -24,7 +24,8 @@ function fixture() {
     read: async () => { if (!online) throw new Error('offline'); return clone(remote); },
     patch: async (key, patch, version) => {
       if (!online) throw new Error('offline');
-      assert.equal(version, remote.updatedAt);
+      // The real server's in-lock If-Match answer: 409 version_conflict.
+      if (version !== remote.updatedAt) throw Object.assign(new Error('version_conflict'), { code: 'version_conflict', status: 409 });
       writes++;
       remote = { ...remote, ...clone(patch), updatedAt: `v${writes + 1}` };
       return clone(remote);
@@ -132,7 +133,7 @@ await test('a locally queued property correction survives in the visit decoratio
   assert.equal(f.make().view('wo:WO-1').property.system.shutoffLocation, 'Garage');
 });
 await test('a closed visit retains new field edits instead of writing after completion', async () => {
-  const f = fixture(); f.queue.patch('wo:WO-1', { backFlush: 'no' }); f.change({ status: 'completed' });
+  const f = fixture(); f.queue.patch('wo:WO-1', { backFlush: 'no' }); f.change({ status: 'completed', updatedAt: 'closed-v' });
   await f.queue.flush(); assert.equal(f.writes(), 0); assert.equal(f.queue.status('wo:WO-1').error.code, 'closed');
 });
 console.log(`field-offline: ${pass} passed, ${fail} failed`);

@@ -390,6 +390,10 @@ function blankWorkOrder() {
     // Issue photos reference back via issueId so the editor can group
     // them per issue at render time.
     photos: [],
+    // Deleted photos, as tombstones with no bytes: { n, clientUploadId,
+    // removedAt, by }. Keeps a photo number from being reused and a deleted
+    // upload from landing again (lib/wo-photo-edits.js, PJL-110).
+    removedPhotos: [],
     // Customer sign-off — the legally binding moment per spec §4.3.2.
     // imageData is the dataURL of the signature canvas; ip + userAgent
     // are captured server-side at sign time (never trust the client).
@@ -636,6 +640,7 @@ function hydrate(w) {
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
     photos: Array.isArray(w?.photos) ? w.photos : [],
+    removedPhotos: Array.isArray(w?.removedPhotos) ? w.removedPhotos : [],
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
     serviceChecklist: { ...(w?.serviceChecklist || {}) },
     signature: { ...base.signature, ...(w?.signature || {}) },
@@ -1492,6 +1497,8 @@ async function appendHistory(id, entry) {
   if (entry?.after !== undefined) stored.after = entry.after;
   next.history.push(stored);
   next.updatedAt = now;
+  // History never clashes with a client's edit (versionMatches).
+  chainQuietWrite(records[idx], next);
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -1824,14 +1831,37 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
+// THE rule for a work order's If-Match (PJL-113). A version the client
+// read still matches when every write since it only touched what a client
+// edit never carries: the photo list, deleted-photo tombstones, history.
+// The field phone uploads photos alongside its zone saves; without this,
+// each photo (and the history line it writes) made the next zone save a
+// 409 and a re-read. A PATCH that itself carries `photos` gets no such
+// allowance — it could overwrite a photo it never saw.
+//
+// `versionChain` is { head, bases }: the versions those quiet writes
+// stepped over, valid only while `head` is still the record's version, so
+// any other write (a save, a status change, a stamp) ends the allowance.
+function versionMatches(wo, ifMatch, patch = {}) {
+  if (!ifMatch || !wo?.updatedAt || ifMatch === wo.updatedAt) return true;
+  if (patch && (Object.prototype.hasOwnProperty.call(patch, "photos") || Object.prototype.hasOwnProperty.call(patch, "removedPhotos"))) return false;
+  const chain = wo.versionChain;
+  return !!chain && chain.head === wo.updatedAt && Array.isArray(chain.bases) && chain.bases.includes(ifMatch);
+}
+function chainQuietWrite(current, next) {
+  const prior = current.versionChain && current.versionChain.head === current.updatedAt && Array.isArray(current.versionChain.bases)
+    ? current.versionChain.bases : [];
+  next.versionChain = { head: next.updatedAt, bases: [...prior, current.updatedAt].filter(Boolean).slice(-50) };
+}
+
+async function update(id, patch, { ifMatch = null, systemWrite = false, photoBookkeeping = false, photoOnly = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
   const current = records[idx];
   // Optimistic concurrency, checked HERE — inside the store lock, against
   // the record as it is at the moment of the write (fall-closing #1).
-  if (ifMatch && current.updatedAt && ifMatch !== current.updatedAt) {
+  if (!versionMatches(current, ifMatch, patch)) {
     const err = new Error("version_conflict");
     err.code = "VERSION_CONFLICT";
     err.current = current;
@@ -1985,6 +2015,10 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
   // tech-mode photo-upload versions v17-v23. Fix lives here, not in
   // the upload UI.
   if (Array.isArray(patch.photos)) next.photos = patch.photos;
+  // Deleted-photo tombstones (PJL-110, lib/wo-photo-edits.js). Written only
+  // by the photo routes, under the photo lock — never from a PATCH body, so
+  // no client can un-delete a photo or free a photo number for reuse.
+  if (photoBookkeeping && Array.isArray(patch.removedPhotos)) next.removedPhotos = patch.removedPhotos;
   // On-site quote field — shallow-merged so partial updates don't clobber
   // siblings. The endpoints handle field-by-field validation; this layer
   // just persists what's allowed through.
@@ -2068,6 +2102,9 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
     }
   }
   next.updatedAt = new Date().toISOString();
+  // A photo-only write (the photo routes pass photoOnly) leaves earlier
+  // versions valid for a client's other edits.
+  if (photoOnly && Object.keys(patch).every((k) => k === "photos" || k === "removedPhotos")) chainQuietWrite(current, next);
 
   // Status transition gets a free history entry — caller (dispatcher)
   // handles other mutation types via appendHistory() directly. Mirrors
@@ -2706,6 +2743,7 @@ async function listBuildWosForProject(projectId) {
 
 module.exports = {
   TEMPLATES,
+  versionMatches,
   ZONE_STATUSES,
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,

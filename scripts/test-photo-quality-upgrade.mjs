@@ -362,6 +362,86 @@ const row = (sku, hash) => [...plan.upgrades, ...plan.review].find((r) => r.skus
   const g = { candidates: [{ hash: "1" }, { hash: "2" }, { hash: "3" }, { hash: "4" }, { hash: "5" }], rejectedHashes: ["4"] };
   check("visibleCandidates: the last three not rejected, oldest first — the one rule the card and the plan share", JSON.stringify(review.visibleCandidates(g).map((c) => c.hash)) === JSON.stringify(["2", "3", "5"]) && review.visibleCandidates(null).length === 0);
 }
+
+// ---- 6. a HELD row Patrick confirmed by eye (Oct 2 2026) --------------------------------
+// VB7RND, 000001 and ESPSM3: the Rain Bird store's padded squares against
+// their unpadded originals correlate under 0.98, so the plan holds them. He
+// compared each pair and confirmed the same photograph. "Same photo — use
+// the larger copy" performs the SAME resolution restoration for that one
+// row: only the image changes; the 0.98 line and the plan are untouched.
+try {
+  const dir3 = tmp();
+  const h3 = await harness(dir3);
+  // A held REVIEW CANDIDATE too: a padded 96px thumbnail of an unpadded zoom.
+  const CH = fam("47000-1"), pch = P("held-candidate", 47000);
+  PAGES[pch] = page(CH.thumb, CH.zoom);
+  IMAGES[CH.thumb] = ["hc", 96, { pad: 0.02 }]; IMAGES[CH.zoom] = ["hc", 1200];
+  h3.catalog.HC1 = { sku: "HC1", partNumber: "HC1", description: "Part HC1" };
+  {
+    const saved = await h3.store.saveCandidateImage(await make(IMAGES[CH.thumb]));
+    const c = { hash: saved.hash, width: saved.width, height: saved.height, sizes: saved.sizes, imageSource: saved.imageSource, sharpness: saved.sharpness, quality: saved.quality, source: { pageUrl: pch, imageUrl: CH.thumb, domain: "www.siteone.com", pass: 2, official: false, imageVia: "og:image" }, checks: CHECKS(VISION_FAIL), tier: "not_confident" };
+    await h3.store.recordAiResult("HC1", h3.catalog.HC1, { tier: "not_confident", kind: "generic", reason: "Not confident: the photo doesn't match (productShot).", runId: "R3", candidates: [c], chosen: 0, pages: [{ url: pch, domain: "www.siteone.com", fetch: "ok", partNumber: "pass", images: 1 }] });
+  }
+  const plan3 = await h3.q.buildPlan({ by: "patrick" });
+  const hRow = plan3.review.find((r) => r.skus.includes("H1")), bRow = plan3.review.find((r) => r.skus.includes("B1")), aRow = plan3.upgrades.find((r) => r.skus.includes("A1")), cRow = plan3.review.find((r) => r.skus.includes("HC1"));
+  check("held: H1 (live) and HC1 (candidate) are held with a larger copy; nothing about them is in the deterministic list", !!(hRow && hRow.held && cRow && cRow.held && cRow.kind === "candidate") && !plan3.upgrades.some((r) => r.skus.includes("H1") || r.skus.includes("HC1")));
+  const expected3 = plan3.upgrades.map((r) => r.upgrade.hash);
+  const b4 = await h3.store.snapshot();
+  const partsBefore = h3.parts();
+  await rejects("held: a review row with NO held copy cannot be restored", () => h3.q.restoreHeld(bRow.id, { by: "Patrick Lalande", hash: "x" }), /No larger copy is held/);
+  await rejects("held: the hash must be the exact held copy shown", () => h3.q.restoreHeld(hRow.id, { by: "Patrick Lalande", hash: aRow.upgrade.hash }), /differs from the one shown/);
+  await rejects("held: no hash, no restoration", () => h3.q.restoreHeld(hRow.id, { by: "Patrick Lalande" }), /differs from the one shown/);
+  await rejects("held: a deterministic row is not a held row (it goes through Apply)", () => h3.q.restoreHeld(aRow.id, { by: "Patrick Lalande", hash: aRow.upgrade.hash }), /isn't in the quality review queue/);
+  await rejects("held: an unknown row is refused", () => h3.q.restoreHeld("PG-9999", { by: "Patrick Lalande", hash: hRow.held.hash }), /isn't in the quality review queue/);
+  check("held: every refusal left the stores untouched", JSON.stringify(await h3.store.snapshot()) === JSON.stringify(b4));
+
+  const out = await h3.q.restoreHeld(hRow.id, { by: "Patrick Lalande", hash: hRow.held.hash });
+  const after = await h3.store.snapshot();
+  const g0 = b4.groups[hRow.groupId], g1 = after.groups[hRow.groupId];
+  check("held live: the photo is now the larger copy (1200px), never enlarged", g1.photo.hash === hRow.held.hash && g1.photo.source.width === 1200 && out.to.hash === hRow.held.hash && out.from.hash === h3.hashes.H1 && out.basis === "visual");
+  check("held live: tier, approvedBy, approvedAt, AI result and review record are exactly as before", g1.tier === g0.tier && g1.approvedBy === "Patrick Lalande" && g1.approvedBy === g0.approvedBy && g1.approvedAt === g0.approvedAt && JSON.stringify(g1.ai) === JSON.stringify(g0.ai) && JSON.stringify(g1.review) === JSON.stringify(g0.review));
+  check("held live: the product-page provenance is kept — same page, same domain, same method; NOT turned into an upload", g1.source.pageUrl === g0.source.pageUrl && g1.source.pageUrl === PG.h && g1.source.domain === g0.source.domain && g1.source.method === g0.source.method && g1.source.method !== "upload" && g1.source.imageUrl === H.zoom);
+  check("held live: the old hash is in the history as a quality-upgrade, and the record says it was confirmed by eye, with the measured match", g1.history.some((x) => x.hash === h3.hashes.H1 && x.replacedBy === "quality-upgrade") && g1.source.upgradedFrom.hash === h3.hashes.H1 && g1.source.upgradedFrom.confirmed && g1.source.upgradedFrom.confirmed.basis === "visual" && g1.source.upgradedFrom.confirmed.similarity === hRow.held.similarity, JSON.stringify(g1.source.upgradedFrom));
+  check("held live: links, fitting membership and every OTHER group are byte-identical", JSON.stringify(after.links) === JSON.stringify(b4.links) && Object.keys(b4.groups).filter((id) => id !== hRow.groupId).every((id) => JSON.stringify(after.groups[id]) === JSON.stringify(b4.groups[id])));
+  const partsAfter = h3.parts();
+  check("held live: the part is still verified, still Patrick's, and shows the 1200px photo", partsAfter.H1.photoState === "verified" && partsBefore.H1.photoState === "verified" && partsAfter.H1.photo.approvedBy === "Patrick Lalande" && partsAfter.H1.photo.approvedAt === partsBefore.H1.photo.approvedAt && partsAfter.H1.photo.width === 1200);
+  const s3 = await h3.q.summary();
+  check("held live: the row leaves the review list and counts as applied; the deterministic list is exactly what it was", !s3.review.some((r) => r.id === hRow.id) && s3.counts.applied === 1 && s3.counts.confirmed === 1 && JSON.stringify(s3.upgrades.map((r) => r.upgrade.hash)) === JSON.stringify(expected3));
+  await rejects("held live: a second press does nothing", () => h3.q.restoreHeld(hRow.id, { by: "Patrick Lalande", hash: hRow.held.hash }), /isn't in the quality review queue/);
+
+  // The candidate kind: same door, only the candidate's image changes.
+  const gc0 = after.groups[cRow.groupId];
+  await h3.q.restoreHeld(cRow.id, { by: "Patrick Lalande", hash: cRow.held.hash });
+  const after2 = await h3.store.snapshot();
+  const gc1 = after2.groups[cRow.groupId];
+  check("held candidate: the image is 1200px now; its tier, checks, source page, the group's tier/reason/AI result are unchanged — Not confident stays Not confident", gc1.candidates[0].hash === cRow.held.hash && gc1.candidates[0].imageSource.width === 1200 && gc1.candidates[0].tier === "not_confident" && JSON.stringify(gc1.candidates[0].checks) === JSON.stringify(gc0.candidates[0].checks) && gc1.candidates[0].source.pageUrl === pch && gc1.candidates[0].source.restoredFrom.confirmed.basis === "visual" && gc1.tier === "not_confident" && gc1.reason === gc0.reason && JSON.stringify(gc1.ai) === JSON.stringify(gc0.ai) && h3.parts().HC1.photoState === "not_confident" && !gc1.photo);
+
+  // The rule and the deterministic door are untouched by any of this.
+  check("held: the 0.98 line is unchanged — 0.979 is still held, never automatic", qu.RESTORE_SIMILARITY_MIN === 0.98 && qu.restorationDecision({ current: { width: 96, height: 96 }, proposed: { width: 1200, height: 1200 }, similarity: 0.979 }).restore === false && qu.restorationDecision({ current: { width: 96, height: 96 }, proposed: { width: 1200, height: 1200 }, similarity: 0.979 }).held === true);
+  const applied = await h3.q.apply({ by: "patrick", hashes: expected3 });
+  check("held: Apply still takes exactly the deterministic list, and only that", applied.applied.length === expected3.length && applied.skipped.length === 0);
+  const rebuilt = await h3.q.buildPlan({ by: "patrick" });
+  check("held: a rebuilt plan no longer lists H1 or HC1 (both are 800px or more now) and holds nothing new", ![...rebuilt.upgrades, ...rebuilt.review].some((r) => r.skus.includes("H1") || r.skus.includes("HC1")));
+  fs.rmSync(dir3, { recursive: true, force: true });
+
+  // Changed since the plan, or already answered "Keep as is" → nothing happens.
+  const dir4 = tmp();
+  const h4 = await harness(dir4);
+  const plan4 = await h4.q.buildPlan({ by: "patrick" });
+  const hRow4 = plan4.review.find((r) => r.skus.includes("H1"));
+  await h4.q.resolveReview(hRow4.id, { action: "keep", by: "patrick" });
+  await rejects("held: a row answered 'Keep as is' stays kept", () => h4.q.restoreHeld(hRow4.id, { by: "Patrick Lalande", hash: hRow4.held.hash }), /isn't in the quality review queue/);
+  check("held: the kept photo is untouched", (await h4.store.snapshot()).groups[hRow4.groupId].photo.hash === h4.hashes.H1);
+  fs.rmSync(dir4, { recursive: true, force: true });
+  const dir5 = tmp();
+  const h5 = await harness(dir5);
+  const plan5 = await h5.q.buildPlan({ by: "patrick" });
+  const hRow5 = plan5.review.find((r) => r.skus.includes("H1"));
+  await h5.store.setPhoto("H1", h5.catalog.H1, await make(["patrick-h", 900]), { by: "Patrick Lalande", source: { method: "upload" } });
+  await rejects("held: a photo Patrick replaced since the plan was built is never overwritten", () => h5.q.restoreHeld(hRow5.id, { by: "Patrick Lalande", hash: hRow5.held.hash }), /isn't in the quality review queue/);
+  check("held: his upload is exactly as he left it", (await h5.store.snapshot()).groups[hRow5.groupId].source.method === "upload");
+  fs.rmSync(dir5, { recursive: true, force: true });
+} catch (err) { check("held: the section ran to the end", false, err.message); }
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log(`\ntest-photo-quality-upgrade: ${passed} passed, ${failed} failed`);
