@@ -50,7 +50,7 @@ const REPAIR_TYPES = [
   { key: 'other', label: 'Other (use notes)' },
 ];
 
-export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, removeZoneOnProperty }) {
+export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, markupPhoto, justTaken, photoOptions, removeZoneOnProperty }) {
   const zones = wo?.zones || [];
   const zone = zones[zoneIndex] || {};
   const total = zones.length;
@@ -170,7 +170,7 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
   const attach = async (getter) => {
     setBusy(true);
     try {
-      const photo = await getter({ category: 'issue', zoneNumber: zone.number, label: `zone_${zone.number}` });
+      const photo = await getter({ category: 'issue', zoneNumber: zone.number, label: `zone_${zone.number}` }, photoOptions);
       if (!photo) return;
       await attachPhoto(photo);
     } catch (err) {
@@ -353,6 +353,8 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
           photoUri={photoUri}
           onDelete={deletePhoto}
           onMove={movePhoto}
+          onMarkup={markupPhoto}
+          justTaken={justTaken}
           canMove
           empty="No photos on this zone."
         />

@@ -1,16 +1,23 @@
-// A visit's photo thumbnails, each one tappable: move it to another zone,
-// or delete it (PJL-110/111).
+// A visit's photo thumbnails, each one tappable: mark it up, move it to
+// another zone, or delete it (PJL-110/111/112).
 //
-// Both are queued on the phone like every other field action (offline/
-// queue.mjs deletePhoto / movePhoto): the screen changes at once, and the
-// server catches up when there is signal. A delete is for good — the
-// confirm step is the only safeguard, so it says so.
+// All of it is queued on the phone like every other field action (offline/
+// queue.mjs markup / deletePhoto / movePhoto): the screen changes at once,
+// and the server catches up when there is signal. A delete is for good —
+// the confirm step is the only safeguard, so it says so.
+//
+// A marked-up photo shows in its original's place, badged, because that is
+// what the customer's report shows (D-B1). The original stays on the work
+// order; "Mark up again" always starts from it (D-B2), and "Remove markup"
+// puts it back.
 
 import { useState } from 'react';
 import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { woPhotoUri } from '../../api';
+import { pairPhotos } from '../../photo-pairs.mjs';
 import { PickerSheet } from '../../ui';
 import { colors, radius, space, type } from '../../theme';
+import { Button } from './parts';
 
 const FINDING_LABEL = {
   broken_head: 'sprinkler head',
@@ -33,27 +40,31 @@ const visitZones = (wo) => (wo?.zones || [])
   .map((z) => ({ number: Number(z.number), location: z.location || '' }))
   .sort((a, b) => a.number - b.number);
 
-// `canMove`: offer "Move to zone…" (zone photos). Water-off photos are
-// delete-only: the photo is the water-off record, not a zone's.
-export default function PhotoThumbs({ wo, photos, photoUri, onDelete, onMove, canMove = false, empty }) {
+// `canMove`: offer "Move to zone…" (zone photos). Water-off photos are not
+// moved: the photo is the water-off record, not a zone's.
+// `justTaken`: the upload id of the photo just taken, for its "Mark up"
+// button (D-B3: offered, never opened on its own).
+export default function PhotoThumbs({ wo, photos, photoUri, onDelete, onMove, onMarkup, canMove = false, justTaken, empty }) {
   const [moving, setMoving] = useState(null);
 
-  const confirmDelete = (photo) => {
-    Alert.alert(
-      'Delete this photo?',
-      "It's removed from the visit and the customer's report. This can't be undone.",
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete photo', style: 'destructive', onPress: () => onDelete(photo) },
-      ],
-    );
+  const confirm = (title, message, action, run) => {
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: action, style: 'destructive', onPress: run },
+    ]);
   };
 
-  const openActions = (photo) => {
-    const options = canMove ? ['Cancel', 'Move to zone…', 'Delete photo'] : ['Cancel', 'Delete photo'];
+  const openActions = ({ original, markup }) => {
+    const options = ['Cancel', markup ? 'Mark up again' : 'Mark up', ...(markup ? ['Remove markup'] : []), ...(canMove ? ['Move to zone…'] : []), 'Delete photo'];
     const pick = (label) => {
-      if (label === 'Move to zone…') setMoving(photo);
-      if (label === 'Delete photo') confirmDelete(photo);
+      if (label === 'Mark up' || label === 'Mark up again') onMarkup(original);
+      if (label === 'Remove markup') {
+        confirm('Remove the markup?', 'The photo goes back to how it was taken. The drawing is deleted.', 'Remove markup', () => onDelete(markup));
+      }
+      if (label === 'Move to zone…') setMoving(original);
+      if (label === 'Delete photo') {
+        confirm('Delete this photo?', `It's removed from the visit and the customer's report${markup ? ', with its markup' : ''}. This can't be undone.`, 'Delete photo', () => onDelete(original));
+      }
     };
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -83,25 +94,36 @@ export default function PhotoThumbs({ wo, photos, photoUri, onDelete, onMove, ca
     { key: 'visit', label: 'Whole visit (no zone)', note: offFinding(null), zoneNumber: null },
   ] : [];
 
+  const tiles = pairPhotos(photos);
+  const fresh = justTaken ? tiles.find((t) => t.original.clientUploadId === justTaken && !t.markup) : null;
   return (
     <>
-      {photos.length ? (
+      {tiles.length ? (
         <>
           <View style={styles.thumbs}>
-            {photos.map((p) => (
-              <Pressable
-                key={p.n}
-                onPress={() => openActions(p)}
-                onLongPress={() => openActions(p)}
-                style={({ pressed }) => pressed && styles.pressed}
-                accessibilityRole="button"
-                accessibilityLabel={canMove ? 'Photo — move or delete' : 'Photo — delete'}
-              >
-                <Image source={{ uri: photoUri(p) || woPhotoUri(wo.id, p) }} style={styles.thumb} resizeMode="cover" />
-              </Pressable>
-            ))}
+            {tiles.map((t) => {
+              const shown = t.markup || t.original;
+              return (
+                <Pressable
+                  key={String(t.original.n)}
+                  onPress={() => openActions(t)}
+                  onLongPress={() => openActions(t)}
+                  style={({ pressed }) => pressed && styles.pressed}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Photo${t.markup ? ', marked up' : ''} — mark up, ${canMove ? 'move ' : ''}or delete`}
+                >
+                  <Image source={{ uri: photoUri(shown) || woPhotoUri(wo.id, shown) }} style={styles.thumb} resizeMode="cover" />
+                  {t.markup ? <Text style={styles.badge}>Marked up</Text> : null}
+                </Pressable>
+              );
+            })}
           </View>
-          <Text style={styles.hint}>{canMove ? 'Tap a photo to move it to another zone or delete it.' : 'Tap a photo to delete it.'}</Text>
+          {fresh ? (
+            <View style={styles.fresh}>
+              <Button label="Mark up this photo" tone="ghost" onPress={() => onMarkup(fresh.original)} />
+            </View>
+          ) : null}
+          <Text style={styles.hint}>{canMove ? 'Tap a photo to mark it up, move it to another zone or delete it.' : 'Tap a photo to mark it up or delete it.'}</Text>
         </>
       ) : (
         <Text style={styles.none}>{empty}</Text>
@@ -125,7 +147,12 @@ export default function PhotoThumbs({ wo, photos, photoUri, onDelete, onMove, ca
 const styles = StyleSheet.create({
   thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, padding: space.md },
   thumb: { width: 96, height: 96, borderRadius: radius.card, backgroundColor: colors.separator },
+  badge: {
+    position: 'absolute', left: 4, bottom: 4, paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.brand, color: colors.onBrand, fontSize: 11, fontWeight: '600',
+  },
   pressed: { opacity: 0.6 },
+  fresh: { paddingHorizontal: space.md },
   hint: { ...type.caption, paddingHorizontal: space.md, paddingBottom: space.sm },
   none: { ...type.caption, padding: space.lg },
 });

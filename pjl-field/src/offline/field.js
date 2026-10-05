@@ -17,7 +17,16 @@ async function sessionOwner() {
   if (!s.authenticated || !s.user?.id || !['admin', 'tech'].includes(s.role)) {
     throw Object.assign(new AuthRequiredError(), { code: 'auth' });
   }
+  // What the server supports and has switched on, kept for offline use
+  // (fieldFeatures).
+  try { writeLocal('field-features', s.fieldOffline || {}); } catch {}
   return s.user.id;
+}
+// The server's switches as last heard (PJL-112): `photoShrink` turns on
+// shrinking photos on the phone, `photoMarkup` says markups can be
+// uploaded. Off when never heard.
+export function fieldFeatures() {
+  try { return readLocal('field-features') || {}; } catch { return {}; }
 }
 async function owner() {
   try {
@@ -202,6 +211,26 @@ export function fieldStatus(queue, key) {
   const id = queue.view(key)?.property?.id;
   const property = id ? queue.status(`prop:${id}`) : null;
   return { ...visit, pending: visit.pending + (property?.pending || 0), error: visit.error || property?.error || null };
+}
+// A photo as a data URL, for the markup editor (PJL-112): the bytes still
+// on the phone, or the server's copy (which needs signal).
+export async function photoDataUrl(queue, woId, photo) {
+  if (photo.pending) {
+    const payload = queue.photoPayload(photo.clientUploadId);
+    if (!payload) throw new Error('The photo on this phone cannot be read.');
+    return `data:${payload.mediaType};base64,${payload.data}`;
+  }
+  const response = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(woId)}/photo/${encodeURIComponent(photo.n)}`, {
+    credentials: 'include', headers: withClientVersion({}),
+  }).catch(() => null);
+  if (!response?.ok) throw new Error('Connect to load this photo for marking up.');
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('The photo could not be read.'));
+    reader.readAsDataURL(blob);
+  });
 }
 export function pendingPhotoUri(queue, photo) {
   if (!photo.pending) return null;

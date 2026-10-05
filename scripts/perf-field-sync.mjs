@@ -170,8 +170,12 @@ try {
   // quality of the test photo — a proxy: the iPhone's encoder is not
   // libjpeg, so the bytes here show the direction, not the phone's number.
   const appQuality = Number(process.env.PERF_PHOTO_QUALITY || /quality:\s*([\d.]+)/.exec(fs.readFileSync(path.join(ROOT, "pjl-field/src/photos.js"), "utf8"))[1]);
-  const photo55 = await testPhoto(Math.round(appQuality * 100));
-  console.log(`test photo at quality ${appQuality}: ${mb(photo55.length * 0.75)} (${mb(photo55.length)} as base64)`);
+  // PERF_PHOTO_FILE: upload this JPEG as it is instead (a photograph, or
+  // one already shrunk by the phone's canvas — scripts/test-photo-canvas.mjs).
+  const photo55 = process.env.PERF_PHOTO_FILE
+    ? fs.readFileSync(path.resolve(ROOT, process.env.PERF_PHOTO_FILE)).toString("base64")
+    : await testPhoto(Math.round(appQuality * 100));
+  console.log(`test photo ${process.env.PERF_PHOTO_FILE ? process.env.PERF_PHOTO_FILE : `at quality ${appQuality}`}: ${mb(photo55.length * 0.75)} (${mb(photo55.length)} as base64)`);
 
   // ---- walk + finish --------------------------------------------------------
   if (!ONLY || ONLY === "walk") {

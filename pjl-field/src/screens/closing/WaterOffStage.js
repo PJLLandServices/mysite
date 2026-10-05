@@ -14,14 +14,14 @@ import { pickPhoto, takePhoto } from '../../photos';
 import { Button, ChoiceRow, Section } from './parts';
 import PhotoThumbs from './PhotoThumbs';
 
-export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, photoUri, deletePhoto }) {
+export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, photoUri, deletePhoto, markupPhoto, justTaken, photoOptions }) {
   const [busy, setBusy] = useState(false);
   const photos = (wo?.photos || []).filter((p) => p.label === 'water_off');
 
   const attach = async (getter) => {
     setBusy(true);
     try {
-      const photo = await getter({ category: 'pre_work', label: 'water_off' });
+      const photo = await getter({ category: 'pre_work', label: 'water_off' }, photoOptions);
       if (!photo) return;               // backed out — a normal outcome
       await attachPhoto(photo);
     } catch (err) {
@@ -50,7 +50,7 @@ export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, p
       </Section>
 
       <Section title="Photo" footer="Optional, but worth having whenever you closed it yourself.">
-        <PhotoThumbs wo={wo} photos={photos} photoUri={photoUri} onDelete={deletePhoto} empty="No photo attached." />
+        <PhotoThumbs wo={wo} photos={photos} photoUri={photoUri} onDelete={deletePhoto} onMarkup={markupPhoto} justTaken={justTaken} empty="No photo attached." />
       </Section>
 
       <View style={styles.actions}>
