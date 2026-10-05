@@ -42,6 +42,54 @@ function wasRemoved(wo, { n = null, clientUploadId = null } = {}) {
     || (n != null && r.n != null && Number(r.n) === Number(n)));
 }
 
+// ---- Markup (PJL-112) ---------------------------------------------------
+// A marked-up photo is a photo of its own, linked to the one it was drawn
+// on: `markupOf` (the original's number) and `markupOfUpload` (its upload
+// id, so a phone that has not heard the number yet still knows the pair).
+// The original is never changed. One live markup per original (D-B2): a
+// new one replaces the old.
+const isMarkupOf = (photo, original) => photo !== original && photo?.markupOf != null
+  && Number(photo.markupOf) === Number(original?.n);
+const markupsOf = (photos, original) => (photos || []).filter((p) => isMarkupOf(p, original));
+// The photo and everything that travels with it: an original and its
+// markups, or a markup and its original (and that original's markups).
+function linkedGroup(photos, photo) {
+  const list = photos || [];
+  const original = photo?.markupOf != null ? list.find((p) => Number(p.n) === Number(photo.markupOf)) || null : photo;
+  if (!original) return [photo];
+  return [original, ...markupsOf(list, original)];
+}
+
+// THE rule for which photos a CUSTOMER sees (D-B1): an original with a
+// live markup is shown as its markup, in the original's place; the
+// original stays on the work order for the office. Every customer-facing
+// reader goes through this: the report PDF, the findings copied to the
+// property (the portal shows their photos), the on-site quote's declined
+// items, the status-update strip.
+function customerPhotos(photos) {
+  const list = Array.isArray(photos) ? photos : [];
+  const out = [];
+  for (const p of list) {
+    if (p.markupOf != null && list.some((o) => Number(o.n) === Number(p.markupOf))) continue; // Shown in its original's place.
+    const marks = markupsOf(list, p);
+    out.push(marks.length ? marks.reduce((a, b) => (Number(b.n) > Number(a.n) ? b : a)) : p);
+  }
+  return out;
+}
+
+// Where a new markup upload belongs: { original } to link it, { dropped }
+// when its original was deleted (the markup is dropped with a tombstone,
+// so neither comes back), or { error }.
+function resolveMarkupOf(wo, ref) {
+  const r = ref && typeof ref === "object" ? ref : { n: ref };
+  const target = { n: r.n == null ? null : Number(r.n), clientUploadId: typeof r.clientUploadId === "string" ? r.clientUploadId : null };
+  if (target.n == null && !target.clientUploadId) return { error: "The photo this markup belongs to was not named." };
+  const found = findPhoto(wo, target);
+  if (found) return { original: found.markupOf != null ? (findPhoto(wo, { n: found.markupOf }) || found) : found };
+  if (wasRemoved(wo, target)) return { dropped: true };
+  return { error: "The photo this markup belongs to is not on this work order." };
+}
+
 // The highest photo number this work order has EVER used, removed ones
 // included. New photos are numbered after it.
 function nextBaseN(wo) {
@@ -83,15 +131,20 @@ function removePhoto(wo, ref, { at = new Date().toISOString(), by = "tech" } = {
   if (!photo) {
     const known = wasRemoved(wo, ref);
     const tombstone = !known && ref.clientUploadId ? [{ n: null, clientUploadId: ref.clientUploadId, removedAt: at, by }] : [];
-    return { photo: null, photos, removedPhotos: [...removedPhotos, ...tombstone], alreadyRemoved: true, note: null };
+    return { photo: null, removed: [], photos, removedPhotos: [...removedPhotos, ...tombstone], alreadyRemoved: true, note: null };
   }
   const zone = zoneOf(photo);
+  // Deleting a photo deletes its markups with it (PJL-112); deleting a
+  // markup leaves its original.
+  const gone = [photo, ...markupsOf(photos, photo)];
   return {
     photo,
-    photos: photos.filter((p) => p !== photo),
-    removedPhotos: [...removedPhotos, { n: Number(photo.n), clientUploadId: photo.clientUploadId || null, removedAt: at, by }],
+    removed: gone,
+    photos: photos.filter((p) => !gone.includes(p)),
+    removedPhotos: [...removedPhotos, ...gone.map((g) => ({ n: Number(g.n), clientUploadId: g.clientUploadId || null, removedAt: at, by }))],
     alreadyRemoved: false,
-    note: `Removed photo #${photo.n} (${whereLabel(zone)}, ${photo.category || "general"})`
+    note: `Removed ${photo.markupOf != null ? `the markup #${photo.n} of photo #${photo.markupOf}` : `photo #${photo.n}`} (${whereLabel(zone)}, ${photo.category || "general"})`
+      + (gone.length > 1 ? `, with its markup #${gone.slice(1).map((g) => g.n).join(", #")}` : "")
   };
 }
 
@@ -120,7 +173,18 @@ function movePhoto(wo, ref, zoneNumber) {
     else moved.label = `zone_${to}`;
   }
   if (detach) delete moved.issueId;
-  const photos = wo.photos.map((p) => (p === photo ? moved : p));
+  // A photo and its markup move together (PJL-112): the markup is that
+  // photo, drawn on.
+  const group = linkedGroup(wo.photos, photo);
+  const refile = (p) => {
+    if (p === photo) return moved;
+    const q = { ...p, zoneNumber: to };
+    if (to === null) delete q.zoneNumber;
+    if (ZONE_LABEL.test(String(p.label || ""))) { if (to === null) delete q.label; else q.label = `zone_${to}`; }
+    if (detach && p.issueId === detach.issue.id) delete q.issueId;
+    return q;
+  };
+  const photos = wo.photos.map((p) => (group.includes(p) ? refile(p) : p));
   const detached = detach ? { issueId: detach.issue.id, type: detach.issue.type || null, deferredId: detach.issue.deferredId || null } : null;
   return {
     photo: moved, photos, from, to, unchanged: false, detached,
@@ -137,4 +201,4 @@ function photoIdsWithout(entry, n) {
   return kept.length === ids.length ? null : kept;
 }
 
-module.exports = { findPhoto, wasRemoved, nextBaseN, visitZoneNumbers, removePhoto, movePhoto, photoIdsWithout };
+module.exports = { findPhoto, wasRemoved, nextBaseN, visitZoneNumbers, removePhoto, movePhoto, photoIdsWithout, customerPhotos, resolveMarkupOf, markupsOf, linkedGroup };

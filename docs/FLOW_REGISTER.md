@@ -8141,3 +8141,99 @@ on a test visit:
 1. A 12-zone closing on normal signal, noting the header's pending count after each zone.
 2. Finish in 15 s or less.
 3. Airplane mode for one zone, then off: the backlog drains with no tap.
+
+## 2026-10-05 — FIELD-PHOTO-MARKUP-01: mark up a work-order photo; shrink photos on the phone, separately switchable (PJL-112; no PASS flow touched)
+
+**What it is.** Tap a photo thumbnail and choose **Mark up**, or tap **Mark up this photo** right
+after taking one. The editor has pen, arrow, circle and text, in red, yellow or white, thin or thick,
+with undo and reset. All controls are 56 pt; Cancel and Done are always on screen. It is PJL's own
+editor, a WebView canvas like the signature pad, so it ships over the air; Apple's Markup would need
+native code.
+
+**Patrick's decisions (2026-10-04):**
+- **D-B1:** the customer's report shows the marked-up version only, and the original stays on the
+  work order.
+- **D-B2:** "Mark up again" starts from the original and replaces the previous markup.
+- **D-B3:** markup is offered as a button and never opens on its own.
+- **Extra requirement:** markup and shrinking are independently releasable and testable.
+
+**Data model** (`server/lib/wo-photo-edits.js`):
+- **The link.** A markup is a new photo with `markupOf` (the original's number) and
+  `markupOfUpload` (its upload id). The upload route resolves the link, by number or by upload id,
+  and files the markup where the **server's** copy of the original is: zone, finding, category,
+  label. The original is never changed.
+- **One live markup per original.** The old one is deleted like any photo: file, tombstone,
+  `photo_markup` history saying which it replaced.
+- **They travel together.** Moving the original moves its markup. Deleting the original deletes its
+  markup. Removing the markup keeps the original.
+- **A markup that outlives its original** (deleted meanwhile) is dropped with a tombstone. A markup
+  of a photo that was never there is refused.
+
+**The one rule for what a customer sees:** `customerPhotos`, an original with a live markup shown
+as its markup, in its place. It is used by:
+- the report PDF's customer audience (the office's internal report keeps both);
+- the findings copied to the property, which the portal shows;
+- both on-site quote declined-item sinks;
+- the status-update photo strip.
+
+**Deliberately left alone:**
+- The office's photo counts (daily record, project totals) count both files, which is true of
+  what is stored.
+- The completion-photo gate counts a markup too. That is harmless: a markup always has its
+  original, and a fall closing needs none.
+- Admin and tech web pages list both photos.
+
+**Phone** (`queue.mjs`):
+- `markup()` queues the copy like any photo. A markup waits in the photo lane for its original's
+  upload.
+- Marking up again drops a markup still waiting to upload.
+- Deleting a photo drops its pending markups.
+- A queued delete or move shows on the pair at once.
+- The thumbnails pair them (`photo-pairs.mjs`): the markup shows in the original's place, badged
+  "Marked up". The menu offers Mark up / Mark up again, Remove markup, Move to zone… and Delete
+  photo.
+- A server without `photoMarkup` is never sent a markup; the phone keeps it and says why.
+
+**Shrinking: separate, and OFF by default.**
+- **The switch:** the server's `fieldOffline.photoShrink`, on only with `FIELD_PHOTO_SHRINK=1`. It
+  turns on, and off, with no app update.
+- **Separate code:** its own page (`photo-canvas.mjs` SHRINK_HTML) and its own hidden component
+  (`PhotoShrinker.js`), mounted only while the switch is on. The editor does not touch either.
+- **With it on:** the camera takes the photo at 0.80, and the phone resizes it to 2400 px at JPEG
+  0.75 before it queues. Anything short of a smaller JPEG within 10 s sends the original
+  unchanged: the page not ready, a photo it can't decode, a result that would be bigger, or no
+  answer.
+- **0.75, not the planned 0.85** (D-C3). Measured on a real 4032×3024 iPhone photo: at 0.85 the
+  2400 px copy (0.80 MB) is no smaller than the full-size photo at the picker's 0.40 (0.75 MB).
+  At 0.75 it is 0.60 MB. The server re-encodes at 82 whatever arrives.
+- **Markup** saves at 0.85, so the drawing stays crisp.
+
+**Measured: the upload for a closing**, 12 copies of the real photo; backlog drained in real time at
+300 ms / 1.5 Mbps (`scripts/perf-field-sync.mjs --real`, `PERF_PHOTO_FILE`):
+
+| | Upload | Drain |
+|---|---|---|
+| main today (picker 0.55, full size; old queue) | 14.8 MB | 118.2 s |
+| #378 (picker 0.40, full size) | 11.9 MB | 64.9 s |
+| #378 + shrinking on (0.80 → 2400 px @ 0.75) | 9.6 MB | 52.5 s |
+
+The earlier "21 MB" was the harness's synthetic textured photo; real photos compress much better.
+**On real photos, shrinking saves a further ~19% of the bytes.** That is useful on a weak uplink,
+not transformative. Most of the gain from smaller uploads came from the picker quality change in
+#378.
+
+**Coverage:**
+- `scripts/test-photo-markup.mjs`: 30 checks, booted server, both switch states.
+- `scripts/test-photo-markup-offline.mjs`: 15 checks: the real queue against the real server rules,
+  the canvas drawing code, and source guards for D-B3 and for markup and shrinking staying apart.
+- Both are in build:check and fail on #378's code: 14 of 17 counted and 15 of 15.
+- `scripts/test-photo-canvas.mjs` (`npm run test:photo-canvas`): 25 checks; both pages in real
+  Chromium on the real photo. **Not in build:check**, because CI installs no browser. Run it on any
+  change to `photo-canvas.mjs`.
+
+**What still needs Patrick (device check, before shrinking is switched on):**
+1. **Markup:** open, draw and save five full-size photos in a row. Each tool should work with a
+   gloved thumb, with no crash and no freeze.
+2. **Shrinking**, separately and only with `FIELD_PHOTO_SHRINK=1`: take 20 photos in a row with
+   no freeze or memory warning. Then check a report's photos look the same as before.
+3. **If shrinking misbehaves,** unset `FIELD_PHOTO_SHRINK` on the server. Markup is unaffected.

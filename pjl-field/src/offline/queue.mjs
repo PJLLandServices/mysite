@@ -106,6 +106,18 @@ const photoRef = photo => ({
 });
 const isPhoto = (x, ref) => (!!ref.clientUploadId && x?.clientUploadId === ref.clientUploadId)
   || (ref.n != null && !x?.pending && Number(x?.n) === ref.n);
+// A marked-up photo's link to its original (PJL-112): `markupOf` is the
+// original's number on the server's copy ({ n, clientUploadId } on one still
+// queued here), with `markupOfUpload` its upload id.
+const linkOf = x => (x?.markupOf == null ? null : typeof x.markupOf === 'object'
+  ? { n: x.markupOf.n ?? null, clientUploadId: x.markupOf.clientUploadId || null }
+  : { n: Number(x.markupOf), clientUploadId: x.markupOfUpload || null });
+const isMarkupOf = (x, ref) => {
+  const l = linkOf(x);
+  return !!l && ((!!ref.clientUploadId && l.clientUploadId === ref.clientUploadId) || (ref.n != null && l.n != null && Number(l.n) === ref.n));
+};
+// A photo and its markups travel together: delete and move act on both.
+const inGroup = (x, ref) => isPhoto(x, ref) || isMarkupOf(x, ref);
 // The same re-filing the server does (server/lib/wo-photo-edits.js
 // movePhoto): the zone's own label follows the zone, and a photo leaves a
 // finding that is not in its new zone.
@@ -122,6 +134,9 @@ function refiled(record, photo, zoneNumber) {
   if (photo.issueId && findingZone(record, photo.issueId) !== zoneNumber) delete next.issueId;
   return next;
 }
+
+// For the screens: which photo a markup belongs to (PhotoThumbs pairs them).
+export { photoRef, linkOf, isMarkupOf };
 
 export function createQueue({ store, transport }) {
   let state = store.read() || { version: 1, sequence: 0, records: {}, pending: [], drafts: {}, errors: {} };
@@ -179,8 +194,8 @@ export function createQueue({ store, transport }) {
         value.photos = [...(value.photos || []), { ...p.preview, n: p.id, clientUploadId: p.id, pending: true }];
       }
       // A queued delete or move shows at once, before it reaches the server.
-      if (p.kind === 'photoDelete') value.photos = (value.photos || []).filter(x => !isPhoto(x, p.photo));
-      if (p.kind === 'photoMove') value.photos = (value.photos || []).map(x => (isPhoto(x, p.photo) ? refiled(value, x, p.zoneNumber) : x));
+      if (p.kind === 'photoDelete') value.photos = (value.photos || []).filter(x => !inGroup(x, p.photo));
+      if (p.kind === 'photoMove') value.photos = (value.photos || []).map(x => (inGroup(x, p.photo) ? refiled(value, x, p.zoneNumber) : x));
     }
     return value;
   };
@@ -239,12 +254,39 @@ export function createQueue({ store, transport }) {
     const ref = photoRef(photo);
     if (!ref.clientUploadId && ref.n == null) throw new Error('This photo cannot be found on the phone.');
     const upload = queuedUpload(key, ref);
+    // Its markups still waiting to upload go too (PJL-112). One that
+    // already landed goes with the photo on the server; one landing later
+    // finds its original deleted and is dropped there.
+    const markups = state.pending.filter(p => p.key === key && p.kind === 'photo' && isMarkupOf(p.preview, ref));
     commit(s => {
-      s.pending = s.pending.filter(p => !(p.key === key && ((upload && p.id === upload.id) || (p.kind === 'photoMove' && isPhoto(p.photo, ref)))));
+      s.pending = s.pending.filter(p => !(p.key === key && ((upload && p.id === upload.id)
+        || markups.some(m => m.id === p.id) || (p.kind === 'photoMove' && isPhoto(p.photo, ref)))));
       if (!upload || upload.sent !== false) s.pending.push({ id: `photo-delete-${++s.sequence}`, key, kind: 'photoDelete', photo: ref });
     });
-    if (upload) { try { store.deleteBlob(upload.id); } catch {} }
+    for (const id of [upload?.id, ...markups.map(m => m.id)].filter(Boolean)) { try { store.deleteBlob(id); } catch {} }
     return view(key);
+  };
+  // Save a marked-up copy of `original` (PJL-112). The original is never
+  // touched; the copy is a new photo naming it, queued like any photo. One
+  // markup per original (D-B2): a previous one still waiting here is
+  // dropped, and the server deletes a previous one it already has.
+  const markup = (key, original, payload) => {
+    requireRecord(key);
+    const ref = photoRef(original);
+    if (!ref.clientUploadId && ref.n == null) throw new Error('This photo cannot be found on the phone.');
+    const stale = state.pending.filter(p => p.key === key && p.kind === 'photo' && p.sent === false && isMarkupOf(p.preview, ref));
+    if (stale.length) {
+      commit(s => { s.pending = s.pending.filter(p => !stale.some(x => x.id === p.id)); });
+      for (const x of stale) { try { store.deleteBlob(x.id); } catch {} }
+    }
+    return photo(key, {
+      ...payload,
+      markupOf: ref,
+      category: original.category || 'general',
+      ...(original.zoneNumber != null ? { zoneNumber: original.zoneNumber } : {}),
+      ...(original.label ? { label: original.label } : {}),
+      ...(original.issueId ? { issueId: original.issueId } : {}),
+    });
   };
   // Re-file one photo under another zone of this visit, or the whole visit
   // (zoneNumber null) — same photo, no retake (PJL-111). A photo still
@@ -495,7 +537,10 @@ export function createQueue({ store, transport }) {
       };
       const photoLane = async () => {
         while (!down) {
-          const entry = state.pending.find(p => p.kind === 'photo' && !tried.has(p.id) && !inFlight.has(p.id));
+          const entry = state.pending.find(p => p.kind === 'photo' && !tried.has(p.id) && !inFlight.has(p.id)
+            // A markup waits for its original's upload: the server links it
+            // to a photo it already has (PJL-112).
+            && !(linkOf(p.preview)?.clientUploadId && uploadPending(linkOf(p.preview).clientUploadId)));
           if (!entry) return;
           tried.add(entry.id);
           if (entry.held) continue;
@@ -568,7 +613,7 @@ export function createQueue({ store, transport }) {
     });
   };
   return {
-    view, patch, photo, deletePhoto, movePhoto, status, progress, flush, nextDelay, resolveConflict,
+    view, patch, photo, markup, deletePhoto, movePhoto, status, progress, flush, nextDelay, resolveConflict,
     seed(key, remote) {
       const currentTime = Date.parse(state.records[key]?.updatedAt);
       const incomingTime = Date.parse(remote.updatedAt);

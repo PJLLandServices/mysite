@@ -136,6 +136,7 @@ export function createTransport({ request, account, view, AuthRequiredError = Er
     photo: async (key, payload) => {
       await guard();
       needs('photoRetry', 'The server needs the field photo update. Your photo is retained on this phone.');
+      if (payload.markupOf != null) needs('photoMarkup', 'The server needs the photo markup update. Your marked-up photo is kept on this phone.');
       const data = await request(`/api/work-orders/${encodeURIComponent(key.slice(3))}/photos`, { method: 'POST', body: { photos: [payload] }, timeout: 90000 });
       // A server without retry support must not silently acknowledge this
       // photo. A deleted photo's upload id is dropped by the server on

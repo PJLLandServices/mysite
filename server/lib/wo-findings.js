@@ -29,6 +29,7 @@ const { serialize } = require("./atomic-json");
 const workOrders = require("./work-orders");
 const properties = require("./properties");
 const issueRollup = require("./issue-rollup");
+const woPhotoEdits = require("./wo-photo-edits");
 
 let PRICING = null;
 function pricing() {
@@ -42,7 +43,9 @@ function pricing() {
 // The deferred entry for one finding (moved here unchanged from server.js
 // so the completion cascade builds exactly the same entry).
 function deferredPayloadFromIssue(wo, zoneNumber, issue, reason, pricingJson = pricing()) {
-  const photoIds = (wo.photos || [])
+  // The photos the customer sees (a markup in place of its original,
+  // PJL-112): the portal shows these.
+  const photoIds = woPhotoEdits.customerPhotos(wo.photos)
     .filter((p) => p.issueId === issue.id)
     .map((p) => Number(p.n))
     .filter(Number.isFinite);
