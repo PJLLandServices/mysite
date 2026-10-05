@@ -595,12 +595,65 @@ function commitmentsByListLine(purchaseOrders, listId, { excludePoId = null } = 
     if (!po || po.deletedAt || (excludePoId && po.id === excludePoId)) continue;
     for (const l of po.lineItems || []) {
       if (!l || l.sourceListId !== listId || !l.sourceLineId) continue;
-      const qty = Math.max(0, Number(l.qty) || 0);
-      const got = Math.min(qty, Math.max(0, Number(l.receivedQty) || 0));
-      const c = slot(l.sourceLineId);
-      if (po.status === "draft") { c.drafted += qty; continue; }
-      c.received += got;
-      if (po.status === "sent" || po.status === "partially_received") c.onOrder += qty - got;
+      const c = lineCommitment(po, l);
+      const s = slot(l.sourceLineId);
+      s.received += c.received;
+      s.onOrder += c.onOrder;
+      s.drafted += c.drafted;
+    }
+  }
+  return out;
+}
+
+// THE purchasing arithmetic for one PO line (2026-10-05) — every reader
+// (still-to-order above, the Materials tab and the Overview below) takes
+// its numbers from here, so they cannot disagree:
+//   received — what arrived (any PO but a draft; a cancelled PO's
+//              deliveries still count — goods don't go back);
+//   onOrder  — still outstanding on a sent or partly received PO;
+//   drafted  — on a draft (not ordered yet);
+//   ordered  — units actually ordered through purchase orders: received
+//              + onOrder. A sent / partly received / received PO counts
+//              its whole quantity; a cancelled PO only what arrived; a
+//              draft nothing.
+function lineCommitment(po, line) {
+  const qty = Math.max(0, Number(line && line.qty) || 0);
+  const got = Math.min(qty, Math.max(0, Number(line && line.receivedQty) || 0));
+  const status = (po && po.status) || "draft";
+  if (!po || po.deletedAt) return { received: 0, onOrder: 0, drafted: 0, ordered: 0 };
+  if (status === "draft") return { received: 0, onOrder: 0, drafted: qty, ordered: 0 };
+  const onOrder = status === "sent" || status === "partially_received" ? qty - got : 0;
+  return { received: got, onOrder, drafted: 0, ordered: got + onOrder };
+}
+
+// The purchase orders that belong to a set of material lists (a
+// project's): a PO whose own list links, or any of whose lines, name one
+// of them. Each PO once. Nothing is inferred for a PO with no link.
+function purchaseOrdersForLists(purchaseOrders, listIds) {
+  const ids = listIds instanceof Set ? listIds : new Set(listIds || []);
+  return (purchaseOrders || []).filter((po) => po && !po.deletedAt && (
+    (po.sourceMaterialListIds || []).some((id) => ids.has(id)) ||
+    (po.lineItems || []).some((l) => l && ids.has(l.sourceListId))));
+}
+
+// Units ordered, by SKU, across these purchase orders (lineCommitment's
+// `ordered`). Each PO line is one real order, so this adds up safely:
+// nothing is counted twice however many lists mention the part.
+function orderedBySku(purchaseOrders) {
+  const out = new Map();
+  for (const po of purchaseOrders || []) {
+    for (const line of (po && po.lineItems) || []) {
+      // A retired part number counts as the part it was merged into, as it
+      // does for received and used (lib/part-alias).
+      const sku = partAlias.canonical(String((line && line.sku) || "").trim());
+      if (!sku) continue;
+      const c = lineCommitment(po, line);
+      if (!c.ordered) continue;
+      const prev = out.get(sku) || { qty: 0, onOrder: 0, poIds: [] };
+      prev.qty += c.ordered;
+      prev.onOrder += c.onOrder;
+      if (!prev.poIds.includes(po.id)) prev.poIds.push(po.id);
+      out.set(sku, prev);
     }
   }
   return out;
@@ -871,6 +924,9 @@ module.exports = {
   planDraftsFromMaterialList,
   receivedByListLine,
   commitmentsByListLine,
+  lineCommitment,
+  purchaseOrdersForLists,
+  orderedBySku,
   stillToOrder,
   deriveReceiveStatus,
   softDelete: locked(softDelete),

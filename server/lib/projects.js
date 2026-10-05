@@ -1500,30 +1500,31 @@ async function computeProjectMetrics(projectId) {
     : 0;
 
   let photoCount = 0;
-  let daysLogged = 0;
-  let lastWorkDate = null;
-
   for (const wo of buildWos) {
-    const dl = wo.dailyLog || {};
-    const sessions = Array.isArray(dl.sessions) ? dl.sessions : [];
-    if (sessions.length) {
-      daysLogged += 1;
-      if (dl.workDate && (!lastWorkDate || dl.workDate > lastWorkDate)) {
-        lastWorkDate = dl.workDate;
-      }
-    }
     photoCount += Array.isArray(wo.photos) ? wo.photos.length : 0;
   }
+  // "Days logged" and "Last worked" — the shared rule the Daily Records
+  // tab reads too (session-hours loggedDays), never a loop of our own.
+  const { count: daysLogged, lastWorkDate } = sessionHours.loggedDays(buildWos);
   // Hours come from the shared calculation, not a loop of our own. The
   // ONE thing metrics does differently from billing is count a session
   // that is still running, so "hours so far" moves while the crew is on
   // site — that difference is this argument and nothing else.
-  totalPersonHours = sessionHours.sumPersonHours(buildWos, { openSessions: "toNow" });
+  // (Declared: until 2026-10-02 this was an undeclared assignment, a
+  // module-wide implicit global shared by every request.)
+  const totalPersonHours = sessionHours.sumPersonHours(buildWos, { openSessions: "toNow" });
 
   const pendingScopeChanges = openScopeChanges(proj).length;
 
+  // Archived tasks are off the list and out of every figure above, but the
+  // Tasks tab still lists them — the count is the server's, so the
+  // Overview never has to filter the list itself.
+  const archivedTasks = (Array.isArray(proj.tasks) ? proj.tasks : []).filter(taskIsArchived).length;
+
   return {
     totalTasks, doneTasks, percentComplete,
+    openTasks: totalTasks - doneTasks,
+    archivedTasks,
     daysLogged, totalPersonHours,
     photoCount, pendingScopeChanges,
     lastWorkDate,

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { projectsApi } from "../lib/api";
-import { money, relativeDay, taskProgress } from "../lib/format";
+import { OFFICE_ONLY, money, relativeDay, taskProgress } from "../lib/format";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Card, CardHeader, LoadingRows, Stat, StatusPill } from "../ui/primitives";
 import { PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES } from "../lib/format";
@@ -32,7 +32,13 @@ export function Dashboard() {
             { label: "Active jobs", value: String(active.length) },
             { label: "In planning", value: String(planning.length) },
             { label: "Work outstanding", value: `${openTasks} tasks` },
-            {
+            data?.totals === null ? {
+              // A technician: contract values are office-only (2026-10-02).
+              label: "Active contract value",
+              value: OFFICE_ONLY,
+              tone: "muted" as const,
+              hint: "contract values are office-only"
+            } : {
               label: "Active contract value",
               // No signed active job → say so; "$0.00" would read as signed work worth nothing.
               value: signedActive ? money(openValue) : "None signed",

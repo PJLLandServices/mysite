@@ -202,8 +202,9 @@ try {
   const rfqPlan = qr.planFromMaterialList({ id: "ML-RAW", lineItems: [{ id: "li_x", sku: B, qty: 2, status: "need" }] }, parts, {});
   ok("...and quotes as A", JSON.stringify(rfqPlan).includes(`"sku":"${A}"`) && !JSON.stringify(rfqPlan).includes(`"sku":"${B}"`), JSON.stringify(rfqPlan).slice(0, 200));
   const pm = require(path.join(ROOT, "server", "lib", "project-materials.js"));
-  const model = pm.describeProject({ lists: [{ id: "ML-1", name: "x", status: "draft", createdAt: "2026-10-01", lineItems: [{ sku: A, qty: 10, status: "need" }] }], purchaseOrders: [{ id: "PO-1", sourceMaterialListIds: ["ML-1"], lineItems: [{ sku: B, qty: 10, receivedQty: 10 }] }], buildWos: [{ id: "WO-1", dailyLog: { workDate: "2026-10-02", materialsConsumed: [{ partSku: B, qty: 4 }] } }], partsMap: { [A]: { name: "tee", priceCents: 410 } } });
+  const model = pm.describeProject({ lists: [{ id: "ML-1", name: "x", status: "draft", createdAt: "2026-10-01", lineItems: [{ sku: A, qty: 10, status: "need" }] }], purchaseOrders: [{ id: "PO-1", status: "received", sourceMaterialListIds: ["ML-1"], lineItems: [{ sku: B, qty: 10, receivedQty: 10 }] }], buildWos: [{ id: "WO-1", dailyLog: { workDate: "2026-10-02", materialsConsumed: [{ partSku: B, qty: 4 }] } }], partsMap: { [A]: { name: "tee", priceCents: 410 } } });
   ok("project materials: received and used under B count against A — one row, no split", model.stock.length === 1 && model.stock[0].sku === A && model.stock[0].received === 10 && model.stock[0].usedOnsite === 4, JSON.stringify(model.stock.map((s) => [s.sku, s.received, s.usedOnsite])));
+  ok("...and so does what was ORDERED under B (the shared purchasing calculation)", typeof po.orderedBySku !== "function" || (() => { const m = po.orderedBySku([{ id: "PO-9", status: "sent", lineItems: [{ sku: B, qty: 6, receivedQty: 0 }] }]); return m.has(A) && !m.has(B); })());
   const WO = fs.readFileSync(path.join(ROOT, "server", "lib", "work-orders.js"), "utf8");
   ok("work-order doors (packed, consumed, next-day) store the canonical part", (WO.match(/partAlias\.canonical\(/g) || []).length >= 3);
 

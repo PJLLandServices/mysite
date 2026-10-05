@@ -120,7 +120,9 @@ export interface Agreement {
     kind: none — nothing invoiced; owed — money owed on sent invoices;
     settled — nothing owed now, more still to invoice or send; paid. */
 export interface BillingSummary {
-  kind: "reconcile" | "none" | "owed" | "settled" | "paid";
+  /** attention / restricted: a technician's view — amounts are office-only
+      (2026-10-02); "attention" means the office has billing to deal with. */
+  kind: "reconcile" | "none" | "owed" | "settled" | "paid" | "attention" | "restricted";
   owed: number;
   received: number;
   /** Marked Paid with payments short: unresolved, never received or owed. */
@@ -276,7 +278,7 @@ export const projectsApi = {
   /* The Dashboard: the same list, plus the totals the SERVER added up
      (projects.contractTotals) — the browser never sums money. */
   listWithTotals: () =>
-    api.get<{ projects: ProjectSummary[]; totals: ContractTotals }>("/api/projects").then((d) => ({
+    api.get<{ projects: ProjectSummary[]; totals: ContractTotals | null }>("/api/projects").then((d) => ({
       projects: d.projects || [],
       totals: d.totals
     })),
@@ -294,6 +296,11 @@ export const projectsApi = {
       /** The header's Billing card (server: financials-view billingSummary)
           — the same model the Financials tab shows. */
       billing?: BillingSummary | null;
+      /** The header's Project progress — computeProjectMetrics, the
+          Tasks tab's own figures (2026-10-02). */
+      progress?: { doneTasks: number; totalTasks: number; percentComplete: number } | null;
+      /** canSeeMoney false = a technician: every amount above is null. */
+      viewer?: Viewer;
     }>(`/api/projects/${encodeURIComponent(id)}`)
 };
 
@@ -479,6 +486,12 @@ export interface StockRow {
   required: number | null;
   requiredAmbiguous: boolean;
   requiredByList: Array<{ listId: string; listName: string; qty: number; status: string; poId: string | null }>;
+  /* Units ordered through purchase orders (server purchase-orders
+     lineCommitment): sent / part-received / received POs count their
+     quantity, a cancelled PO only what arrived, a draft nothing. */
+  ordered: number;
+  onOrder: number;
+  orderedOnPoIds: string[];
   received: number;
   receivedFromPoIds: string[];
   usedOnsite: number;
@@ -497,12 +510,18 @@ export interface MaterialException {
   entries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
 }
 
+export type MaterialsRequired = { kind: "one_list" | "per_list" | "none"; units: number | null; listCount: number; listId: string | null; listName: string | null; display: string; hint: string };
+
 export interface ProjectMaterials {
   planning: MaterialListSummary[];
   stock: StockRow[];
   exceptions: MaterialException[];
   summary: {
     listCount: number; skuCount: number;
+    /* One active list: its units. Several: "per list", units null —
+       never a sum. The words to print are the server's (display, hint). */
+    required: MaterialsRequired;
+    orderedUnits: number; onOrderUnits: number;
     receivedUnits: number; usedUnits: number; balanceUnits: number; exceptionCount: number;
   };
 }
@@ -593,6 +612,7 @@ export interface ProjectChangeOrders {
   holds: Array<{ key: string; message: string }>;
   changes: ChangeOrder[];
   classicHref: string | null;
+  viewer?: Viewer;
 }
 
 export const changeOrdersApi = {
@@ -691,4 +711,113 @@ export interface ProjectFinancials {
 export const financialsApi = {
   get: (projectId: string) =>
     api.get<ProjectFinancials>(`/api/projects/${encodeURIComponent(projectId)}/financials`)
+};
+
+/* The Overview (2026-10-02, stage 6). Read-only. Every field is copied
+   on the server from the read model of the tab it summarises
+   (server/lib/project-overview.js) — the screen adds up nothing and
+   decides nothing. */
+/* Who is looking (2026-10-02): contract, invoice and payment amounts are
+   office-only. The server decides and sends a technician nulls; the
+   screen only says "Office only" where a figure would be. */
+export interface Viewer {
+  canSeeMoney: boolean;
+}
+
+export interface OverviewNextAction {
+  headline: string;
+  detail: string;
+  href?: string;
+  ctaLabel?: string;
+  tone: "act" | "waiting" | "done";
+}
+
+export interface ProjectOverview {
+  projectId: string;
+  status: {
+    stage: string;
+    stageLabel: string;
+    percentComplete: number;
+    hasTasks: boolean;
+    nextAction: OverviewNextAction;
+    blockers: Array<{ key: string; message: string; tab: string | null; href: string | null }>;
+  };
+  tasks: {
+    total: number;
+    done: number;
+    open: number;
+    archived: number;
+    percentComplete: number;
+    tracksDueDates: boolean;
+    href: string;
+  };
+  dailyRecords: {
+    daysLogged: number;
+    lastWorkDate: string | null;
+    totalPersonHours: number;
+    correctedDays: number;
+    latestDay: { woId: string; workDate: string | null; personHours: number; hoursCorrected: boolean; openSession: boolean; notes: string } | null;
+    openProblems: number;
+    problems: Array<{ id: string; title: string; status: ProblemStatus; discoveredWorkDate: string | null }>;
+    latestEntry: { ts: string; by: string | null; note: string } | null;
+    href: string;
+  };
+  materials: {
+    listCount: number;
+    required: MaterialsRequired;
+    orderedUnits: number;
+    onOrderUnits: number;
+    skuCount: number;
+    receivedUnits: number;
+    usedUnits: number;
+    balanceUnits: number;
+    exceptionCount: number;
+    exceptions: Array<{ kind: MaterialExceptionKind; sku: string | null; name: string | null; detail: string }>;
+    href: string;
+  };
+  changeOrders: {
+    total: number;
+    open: number;
+    awaitingOffice: number;
+    awaitingCustomer: number;
+    awaitingSignature: number;
+    signed: number;
+    agreement: {
+      governing: AgreementVersion | null;
+      pending: AgreementVersion | null;
+      netChangeTotal: number | null;
+    };
+    holds: Array<{ key: string; message: string }>;
+    billingBlocked: { key: string; message: string } | null;
+    href: string;
+  };
+  /** A technician gets the restricted shape: no amounts, only whether the
+      office has billing to deal with. */
+  financials: OverviewFinancials | OverviewFinancialsRestricted;
+  viewer?: Viewer;
+}
+
+export interface OverviewFinancialsRestricted {
+  restricted: true;
+  attention: boolean;
+  notice: string | null;
+}
+
+export interface OverviewFinancials {
+    restricted?: false;
+    billingMode: ProjectFinancials["billingMode"];
+    billingModeLabel: string;
+    contract: ProjectFinancials["contract"];
+    pendingRevision: ProjectFinancials["pendingRevision"];
+    totals: ProjectFinancials["totals"];
+    deposit: ProjectFinancials["deposit"];
+    reconciliation: ProjectFinancials["reconciliation"];
+    holds: ProjectFinancials["holds"];
+    billing: { kind: BillingSummary["kind"]; hint: string };
+    href: string;
+}
+
+export const overviewApi = {
+  get: (projectId: string) =>
+    api.get<ProjectOverview>(`/api/projects/${encodeURIComponent(projectId)}/overview`)
 };

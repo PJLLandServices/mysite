@@ -2,6 +2,72 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02 (Money is office-only in the project workspace — Patrick: "Financial amounts and the Financials tab must be office-only"):**
+`lib/money-visibility.js` holds the rule (`canSeeMoney`: role `admin`) and the redactions; the
+server applies them to every `/api/projects/*` read before it leaves — a technician's browser
+is never sent the figures.
+- **Refused (403 `office_only`):** `…/financials`, `…/billing-preview`.
+- **Redacted for a technician:** the list and Dashboard (contract values, totals), the project
+  header (`agreement`, `billing`, `invoiceSummary`, `linkedQuote`, the proposal snapshot's prices,
+  the locked labour rate), the Overview (Financials card → "Office billing attention required."
+  yes/no; money next actions and blockers → the notice), Change Orders (agreement amounts,
+  estimates, line prices), `…/scope-changes` and `…/completion-preflight` (amount sentences).
+  Everything that is not money (tasks, days, hours, problems, materials, change-order counts)
+  is unchanged and identical for both.
+- **Not covered, deliberately (decision for Patrick):** `/api/invoices` and the classic invoice
+  pages (the field app reads an invoice's amount to take payment on site), `/api/quotes` and
+  the classic quote pages, material-list costs, and free-text fields the office types amounts
+  into (description, notes — editable, so masking them would let an autosave overwrite them).
+Tests: `test-project-overview.mjs` signs in as both and reads every route; 15 of its checks fail
+on the previous commit (a technician read the Financials tab, every agreement and invoice
+amount). `test-change-orders-view.mjs` reads amounts as the office and checks the technician
+gets none.
+
+**2026-10-02 (Project Overview, read-only — stage 6 of the Project Workspace; FLOW-01/02 portal figure re-verified, unchanged):**
+The workspace's Overview tab becomes a read-only command centre over the five tabs.
+`GET /api/projects/:id/overview` (`lib/project-overview.js`) does no arithmetic: it copies
+fields out of the read model each tab's own route returns, built by the SAME builder functions
+(`server.js` `projectMaterialsModel` / `projectChangeOrdersModel` / `projectDailyRecordsModel` /
+`projectFinancialsModel`, which the tab routes now call too), plus `computeProjectMetrics` and the
+completion check.
+- **Next action moved to the server** (`lib/next-action.js`; `admin-app/src/lib/nextAction.ts`
+  deleted). It reads the Tasks tab's metrics, the Financials tab's action invoice and the
+  completion check's blockers. Fixed: a job with every task done used to read "Complete and
+  invoice" even when completion would be refused (unsigned revision, unpaid deposit…); it now
+  reads "Clear what's holding completion" and names the blocker.
+- **"Days logged" / "Last worked" — one rule** (`session-hours.loggedDays`: a visit counts when
+  someone clocked on it). Live defect fixed: the Tasks tab counted clocked visits, the Daily
+  Records tab counted every build visit, so one job could show two different "Days logged".
+  `computeProjectMetrics`' rule is unchanged (it moved, not changed) — so the portal's "N days on
+  site" (FLOW-01/02, PASS) is the same number; the Daily Records tab's now matches it.
+- **`computeProjectMetrics` declared `totalPersonHours`** — it was an undeclared (implicit
+  global) assignment shared by every request. Values were right only because nothing awaited
+  between the write and the read.
+- Metrics gain `openTasks` and `archivedTasks`; the header's Project progress reads them from
+  the server (`GET /api/projects/:id` `progress`) instead of re-deriving it in the browser.
+- **Not shown because not recorded:** tasks carry no due date or "blocked" state (no overdue
+  figure).
+- **Materials Required and Ordered (2026-10-05, after #367).** Both the Materials tab and the
+  Overview show them from the tab's own read model (`project-materials describeProject`):
+  - **Required:** one active (non-archived) list → that list's required units; several →
+    "Per list — N lists" and no total (a later list may repeat an earlier one's BOM; nothing in
+    the records says whether it replaces or adds); per-part required unchanged (one list's
+    figure, or each list's figure side by side). The words are the server's (`display`, `hint`).
+  - **Ordered:** units actually ordered through purchase orders, from ONE calculation shared
+    with still-to-order — `purchase-orders.lineCommitment`: sent / partly received / received
+    POs count their quantity, a cancelled PO only what arrived, a draft nothing. Each PO line
+    once; a PO belongs to the job when its own list link or any of its lines names one of the
+    job's lists (`purchaseOrdersForLists`). Re-orders count (they keep their link, #367).
+    Received now comes from the same function.
+  Test: `scripts/test-materials-required-ordered.mjs` (61 checks through the real routes; fails at
+  once on the previous code, which had neither field).
+Tests: `scripts/test-project-overview.mjs` (in `build:check`; `--screen` for desktop + phone)
+compares every Overview field with its tab's route on new / unsigned / active / held /
+part-then-fully-paid / archived projects, including THE reconciliation case. On the pre-change
+code it fails 10 checks before crashing on the missing route, including "Tasks 1, Daily Records
+2" days logged and the implicit global. `scripts/test-next-action.mjs` now tests the server rule
+and joins `build:check`.
+
 **2026-10-04 (The Not-on-the-plan tray kept customers who had already found a home, or were
 already done):** Patrick, on the Season Plan's tray of 17: *"Fortunately some have found homes,
 and some have been completed. Can you take a look at why 'not on the plan' isn't being

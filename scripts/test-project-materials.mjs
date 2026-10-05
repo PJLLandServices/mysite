@@ -70,7 +70,7 @@ const ok = (name, cond, detail = "") => {
     { id: "ML-2", name: "Design v2", status: "draft", createdAt: "2026-09-10",
       lineItems: [{ sku: "PVC100", qty: 12, status: "need" }] }
   ];
-  const pos = [{ id: "PO-1", sourceMaterialListIds: ["ML-1"],
+  const pos = [{ id: "PO-1", status: "partially_received", sourceMaterialListIds: ["ML-1"],
     lineItems: [{ sku: "PVC100", qty: 10, receivedQty: 10 }, { sku: "HEAD5", qty: 4, receivedQty: 2 }] }];
   const wos = [
     { id: "WO-A", dailyLog: { workDate: "2026-09-20", materialsConsumed: [

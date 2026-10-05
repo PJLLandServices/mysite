@@ -86,6 +86,9 @@ let get;
 try {
   fs.writeFileSync(path.join(DATA, "users.json"), "[]\n");
   await users.create({ email: "tech@local.test", name: "Tobias Vantol", role: "tech", password: "tech-probe-12345" });
+  // Amounts are office-only (2026-10-02): the figures below are read as the
+  // office; the technician's view is checked separately for having none.
+  await users.create({ email: "office@local.test", name: "Odile Office", role: "admin", password: "office-probe-12345" });
   child = spawn("node", [path.join(ROOT, "server", "server.js")], {
     cwd: ROOT, env: { PATH: process.env.PATH, TZ: "America/Toronto", PORT: String(PORT), HOST: "127.0.0.1" }, stdio: ["ignore", "pipe", "pipe"]
   });
@@ -94,9 +97,11 @@ try {
   for (let i = 0; i < 75 && !up; i++) { await new Promise((r) => setTimeout(r, 200)); try { await fetch(`${BASE}/api/booking/services`); up = true; } catch {} }
   if (!up) throw new Error("server never came up:\n" + logs.slice(-800));
   const login = await fetch(`${BASE}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "tech@local.test", password: "tech-probe-12345" }) });
-  const cookie = (login.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "";
-  get = async (projId, withCookie = true) => {
-    const r = await fetch(`${BASE}/api/projects/${encodeURIComponent(projId)}/change-orders`, { headers: withCookie ? { cookie } : {}, redirect: "manual" });
+  const techCookie = (login.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "";
+  const officeLogin = await fetch(`${BASE}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "office@local.test", password: "office-probe-12345" }) });
+  const cookie = (officeLogin.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "";
+  get = async (projId, withCookie = true, asCookie = cookie) => {
+    const r = await fetch(`${BASE}/api/projects/${encodeURIComponent(projId)}/change-orders`, { headers: withCookie ? { cookie: asCookie } : {}, redirect: "manual" });
     return { status: r.status, data: await r.json().catch(() => ({})) };
   };
 
@@ -142,7 +147,13 @@ try {
     await projects.resolveScopeChangeRequest(proj.id, withdrawn.id, { resolution: "withdrawn" }, { by: OFFICE });
 
     const r = await get(proj.id);
-    ok("a technician can read the tab", r.status === 200 && r.data.ok, String(r.status));
+    const rt = await get(proj.id, true, techCookie);
+    ok("a technician can read the tab", rt.status === 200 && rt.data.ok, String(rt.status));
+    ok("...but sees no amount on it — no agreement total, no estimate, no line price (office-only, 2026-10-02)",
+      rt.data.agreement?.governing?.total == null && rt.data.agreement?.netChangeTotal == null &&
+      (rt.data.changes || []).every((c) => c.estimatedTotal == null && (c.lineItems || []).every((li) => li.price == null && li.lineTotal == null)) &&
+      !/\$\s?\d/.test(JSON.stringify(rt.data)), JSON.stringify(rt.data.agreement?.governing));
+    ok("...while the office sees the same changes with their amounts", r.status === 200 && rt.data.changes.length === r.data.changes.length && r.data.agreement?.governing?.total != null);
     const v = r.data;
     ok("draft → Draft, waiting on the office", phaseOf(v, draft.id)?.phase === "in_review" && phaseOf(v, draft.id)?.phaseLabel === "Draft");
     const ns = phaseOf(v, notSent.id);

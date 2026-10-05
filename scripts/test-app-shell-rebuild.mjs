@@ -65,7 +65,8 @@ function chromiumLaunchOpts() {
 }
 
 fs.mkdirSync(DATA, { recursive: true });
-const TOUCHED = ["projects.json", "users.json"];
+// Every store this test writes is put back exactly as it was.
+const TOUCHED = ["projects.json", "users.json", "quotes.json", "invoices.json", "customers.json", "properties.json"];
 const backups = new Map();
 for (const f of TOUCHED) {
   const p = path.join(DATA, f);
@@ -227,37 +228,40 @@ try {
     const quotesLib = require(path.join(ROOT, "server", "lib", "quotes.js"));
     const invoicesLib = require(path.join(ROOT, "server", "lib", "invoices.js"));
 
-    const q = await quotesLib.create({
-      type: "project_proposal", customerEmail: "deposit-probe@example.com", branch: "direct_residential",
-      lineItems: [{ id: "li_1", label: "Install", qty: 1, unitPrice: 20000 }],
-      subtotal: 20000, hst: 2600, total: 22600
+    // A properly SIGNED job (since the signed-agreement rule, 2026-09-28, a
+    // proposal snapshot alone no longer makes a contract): the proposal is
+    // sent and signed, the project made from it, a deposit invoiced and
+    // paid in full through the payment ledger.
+    const customersLib = require(path.join(ROOT, "server", "lib", "customers.js"));
+    const cust = await customersLib.create({ name: "Deposit Co", email: `deposit-probe.${Date.now()}@example.com`, phone: "9055550199" });
+    let q = await quotesLib.create({
+      type: "project_proposal", status: "draft", customerId: cust.id, customerEmail: cust.email,
+      branch: "direct_residential", billingMode: "fixed_price",
+      lineItems: [{ label: "Install", qty: 1, price: 20000, lineTotal: 20000 }], subtotal: 20000, hst: 2600, total: 22600
     });
-    const dep = await projectsLib.create({ name: "Rebuild probe — deposit paid", customerName: "Deposit Co", sourceQuoteId: q.id });
+    q = await quotesLib.markSent(q.id, { channels: ["email"], toEmail: cust.email });
+    q = await quotesLib.recordPortalSignAcceptance(q.id, { customerName: "Deposit Co", imageData: "data:image/png;base64,iVBORw0KGgo=", ip: "203.0.113.9", userAgent: "test" });
+    const dep = await projectsLib.createFromProposal(q, { customerName: cust.name, customerEmail: cust.email });
+    await projectsLib.update(dep.id, { status: "active", name: "Rebuild probe — deposit settled", customerId: cust.id });
     const inv = await invoicesLib.createDraft({
-      quoteId: q.id, projectId: dep.id, invoiceRole: "deposit",
-      customerEmail: "deposit-probe@example.com", lineItems: [{ label: "Deposit", qty: 1, price: 9000, lineTotal: 9000 }]
+      quoteId: q.id, customerId: cust.id, customerEmail: cust.email, customerName: cust.name, invoiceRole: "deposit",
+      lineItems: [{ label: "Deposit", qty: 1, price: 8000, lineTotal: 8000 }]
     });
     // Settle it in full through the real payment ledger.
     const invTotal = (await invoicesLib.get(inv.id)).total;
     const paid = await invoicesLib.addPayment(inv.id, { amount: invTotal, method: "cash", by: "test" });
     ok("the deposit probe's payment was recorded", paid?.ok !== false, JSON.stringify(paid?.errors || paid));
 
-    const storePath = path.join(DATA, "projects.json");
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    for (const rec of store) {
-      if (rec.id !== dep.id) continue;
-      rec.status = "active";
-      rec.proposalSnapshot = { quoteId: q.id, version: 1, total: 22600, acceptedAt: "2026-09-10T12:00:00Z", proposalSections: [] };
-      rec.systemDesign = { areas: [{ aid: "a1" }], version: 1 };
-    }
-    fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
-
     await page.goto(`${BASE}/app/projects/${encodeURIComponent(dep.id)}`, { waitUntil: "networkidle" });
     await page.waitForSelector("text=Contract value", { timeout: 10000 });
     await page.waitForTimeout(250);
     const depText = await page.locator("main").innerText();
-    ok("a paid deposit reads as 'Deposit paid', not 'Paid'", /deposit paid/i.test(depText), depText.slice(0, 500));
-    ok("and it says the balance is still to come", /balance not invoiced yet/i.test(depText), depText.slice(0, 500));
+    // The header's Billing card is the server's billing summary (2026-09-28):
+    // a settled deposit with the balance still to raise reads "None owed"
+    // and says how much is not invoiced yet — never "Paid".
+    const billingCard = (depText.match(/billing\s+([^\n]+)\n([^\n]+)/i) || []).slice(1).join(" | ");
+    ok("a paid deposit reads as 'None owed', not 'Paid'", /^none owed/i.test(billingCard), billingCard || depText.slice(0, 500));
+    ok("and it says the balance is still to come", /received · \$[\d,]+\.\d\d not invoiced yet/i.test(billingCard), billingCard || depText.slice(0, 500));
     ok("a paid deposit does not end the job", !/nothing outstanding/i.test(depText), depText.slice(0, 500));
   }
 
@@ -328,11 +332,13 @@ try {
   await page.goBack();
   await page.waitForTimeout(200);
 
-  // Empty activity state does the asking, with the action in it.
+  // An empty job says what is missing rather than showing zeros. The
+  // Overview (stage 6, 2026-10-02) replaced the old "Recent activity" card:
+  // the Daily Records card now says nobody has clocked in yet.
   const overviewText = await page.locator("main").innerText();
   ok(
-    "empty activity state invites the first entry",
-    /no project updates have been recorded/i.test(overviewText),
+    "an empty job's Overview says what is missing",
+    /no days logged yet/i.test(overviewText),
     overviewText.slice(0, 600)
   );
 
@@ -340,15 +346,50 @@ try {
   // consistently... I'd use Proposal."
   ok("the document is called a proposal, not a quote", !/\bquote\b/i.test(overviewText), overviewText.slice(0, 800));
 
-  // A tab switch is client-side: the URL changes, the shell does not
-  // reload, and the pending tabs are honest rather than dead.
-  // (Financials — Change Orders was the example until it was built,
-  // 2026-09-27.)
+  // A tab switch is client-side: the URL changes and the shell does not
+  // reload. Every workspace tab is built now (Financials last, 2026-09-28):
+  // it shows the server's figures, not a "use the classic CRM" placeholder.
   await page.click('a:has-text("Financials")');
   await page.waitForTimeout(200);
   ok("a tab switch is client-side routing", page.url().endsWith("/financials"));
+  await page.waitForSelector("text=Invoices", { timeout: 10000 });
   const tabText = await page.locator("main").innerText();
-  ok("an unbuilt tab names its workflow and offers the classic screen", /Financials/i.test(tabText) && /classic CRM/i.test(tabText));
+  ok("the Financials tab is built: the office sees its invoices and payments, not a placeholder",
+    /invoices/i.test(tabText) && /payments received/i.test(tabText) && !/classic CRM/i.test(tabText), tabText.slice(0, 600));
+
+  // ---- 7. money is office-only (2026-10-02) -------------------------
+  // A technician signs in to the same workspace: no Financials tab, the
+  // Financials address refused, and no dollar amount on the job.
+  await users.create({ email: "app-shell-tech@local.test", name: "App Shell Tech", role: "tech", password: "app-shell-tech-12345" });
+  const techLogin = await fetch(`${BASE}/api/login`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "app-shell-tech@local.test", password: "app-shell-tech-12345" }) });
+  const techRaw = (techLogin.headers.getSetCookie?.() || [techLogin.headers.get("set-cookie") || ""])
+    .map((c) => c.split(";")[0].trim()).find((c) => c.startsWith("pjl_crm_session=")) || "";
+  ok("a technician can sign in to the workspace", techLogin.status === 200 && !!techRaw, String(techLogin.status));
+  const techCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await techCtx.addCookies([{ name: "pjl_crm_session", value: techRaw.slice("pjl_crm_session=".length), domain: "127.0.0.1", path: "/" }]);
+  const techPage = await techCtx.newPage();
+  const techErrors = [];
+  techPage.on("pageerror", (e) => techErrors.push(String(e && e.message || e)));
+  const depId = (await projects.list({})).find((p) => p.name === "Rebuild probe — deposit settled")?.id;
+  await techPage.goto(`${BASE}/app/projects/${encodeURIComponent(depId)}`, { waitUntil: "networkidle" });
+  await techPage.waitForSelector("text=Contract value", { timeout: 10000 });
+  await techPage.waitForTimeout(250);
+  const techText = await techPage.locator("main").innerText();
+  const techTabs = await techPage.locator("nav a").allInnerTexts();
+  ok("the technician's job has no Financials tab", !techTabs.some((t) => /financials/i.test(t)) && techTabs.some((t) => /materials/i.test(t)), techTabs.join(" | "));
+  ok("the technician sees no dollar amount anywhere on the job", !/\$\s?\d/.test(techText), (techText.match(/.{0,40}\$\s?\d.{0,20}/g) || []).slice(0, 3).join(" | "));
+  ok("…the money figures read 'Office only'", /office only/i.test(techText), techText.slice(0, 600));
+  const techFin = await fetch(`${BASE}/api/projects/${encodeURIComponent(depId)}/financials`, { headers: { cookie: techRaw } });
+  ok("the Financials figures are refused to a technician (403 office_only)", techFin.status === 403 && (await techFin.json()).code === "office_only", String(techFin.status));
+  const officeFin = await fetch(`${BASE}/api/projects/${encodeURIComponent(depId)}/financials`, { headers: { cookie: rawCookie } });
+  ok("…and served to the office", officeFin.status === 200);
+  await techPage.goto(`${BASE}/app/projects/${encodeURIComponent(depId)}/financials`, { waitUntil: "networkidle" });
+  await techPage.waitForTimeout(400);
+  const techFinText = await techPage.locator("main").innerText();
+  ok("typing the Financials address shows the office-only refusal, no figures", /office-only/i.test(techFinText) && !/\$\s?\d/.test(techFinText), techFinText.slice(0, 400));
+  ok("no page errors for the technician", techErrors.length === 0, techErrors.join(" | "));
+  await techCtx.close();
 
   ok("no page errors in the rebuilt app", pageErrors.length === 0, pageErrors.join(" | "));
 
