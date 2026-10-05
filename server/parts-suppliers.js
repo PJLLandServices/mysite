@@ -285,6 +285,22 @@
     return Array.isArray(part.supplierIds) ? part.supplierIds : [];
   }
 
+  // Choosing a supplier on this page sets the DEFAULT. It reorders the
+  // part's suppliers and never drops an alternate (the server holds the
+  // same rule, lib/part-suppliers.withPrimary, and is the authority). A
+  // part with alternates can't have its default cleared — null says so.
+  function withPrimary(ids, supplierId) {
+    const current = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (!supplierId) return current.length > 1 ? null : [];
+    return [supplierId, ...current.filter((id) => id !== supplierId)];
+  }
+  // What every writer on this page sends: { sku: defaultSupplierId | "" }.
+  function primaryPayload(entries) {
+    const primary = {};
+    for (const [sku, ids] of entries) primary[sku] = (ids && ids[0]) || "";
+    return primary;
+  }
+
   function applyFilters(parts) {
     const q = els.search.value.trim().toLowerCase();
     const cat = els.categoryFilter.value;
@@ -556,13 +572,12 @@
     state.saving = true;
     state.pendingError = null;
     setSaveState("saving");
-    const updates = {};
-    for (const [sku, ids] of state.pending.entries()) updates[sku] = ids;
+    const sent = [...state.pending.entries()];
     try {
       const r = await fetch("/api/part-suppliers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates })
+        body: JSON.stringify({ primary: primaryPayload(sent) })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -570,8 +585,9 @@
         setSaveState("error");
         return;
       }
-      for (const [sku, ids] of state.pending.entries()) {
-        if (state.catalog.parts[sku]) state.catalog.parts[sku].supplierIds = ids.slice();
+      // The server's list is the truth (it kept the alternates).
+      for (const [sku] of sent) {
+        if (state.catalog.parts[sku]) state.catalog.parts[sku].supplierIds = ((data.partSuppliers || {})[sku] || []).slice();
       }
       state.pending.clear();
       setSaveState("saved", new Date().toISOString());
@@ -612,7 +628,18 @@
     if (!sel) return;
     const sku = sel.dataset.sku;
     const value = sel.value;
-    state.pending.set(sku, value ? [value] : []);
+    const part = state.catalog.parts[sku];
+    const before = part ? effectiveSupplierIds(part) : [];
+    const next = withPrimary(before, value);
+    if (next === null) {
+      // Clearing the default on a part with alternates: put the dropdown
+      // back and say why, rather than silently dropping a supplier.
+      sel.value = before[0] || "";
+      state.pendingError = `${sku} has ${before.length} suppliers. Pick which one is the default instead of clearing it.`;
+      setSaveState("error");
+      return;
+    }
+    state.pending.set(sku, next);
     const row = sel.closest("tr");
     if (row) row.classList.toggle("is-missing", !value);
     sel.classList.toggle("is-missing", !value);
@@ -757,15 +784,17 @@
     const supId = state.reassignTargetId;
     const skus = [...state.selected].filter((s) => state.catalog.parts[s]);
     if (!supId || !skus.length) { closeReassignModal(); return; }
-    const updates = {};
-    for (const sku of skus) updates[sku] = [supId];
+    // Bulk reassign sets the DEFAULT on each selected part; their other
+    // suppliers stay.
+    const primary = {};
+    for (const sku of skus) primary[sku] = supId;
     els.reassignConfirm.disabled = true;
     els.reassignError.hidden = true;
     try {
       const r = await fetch("/api/part-suppliers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates })
+        body: JSON.stringify({ primary })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Reassign failed (${r.status})`);
@@ -773,7 +802,7 @@
       // local state and drop any pending per-row edits so the debounced
       // single-SKU save can't clobber the batch.
       for (const sku of skus) {
-        if (state.catalog.parts[sku]) state.catalog.parts[sku].supplierIds = [supId];
+        if (state.catalog.parts[sku]) state.catalog.parts[sku].supplierIds = ((data.partSuppliers || {})[sku] || [supId]).slice();
         state.pending.delete(sku);
       }
       const n = skus.length;
@@ -1551,13 +1580,11 @@
   // ===== Beforeunload (unsaved supplier edits) =======================
   window.addEventListener("beforeunload", () => {
     if (state.pending.size === 0) return;
-    const updates = {};
-    for (const [sku, ids] of state.pending.entries()) updates[sku] = ids;
     try {
       fetch("/api/part-suppliers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates }),
+        body: JSON.stringify({ primary: primaryPayload(state.pending.entries()) }),
         keepalive: true
       });
     } catch {}

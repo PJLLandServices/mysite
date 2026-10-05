@@ -16853,12 +16853,22 @@ async function handleApi(req, res, pathname) {
   }
 
   // PATCH /api/part-suppliers — bulk update many SKUs in one round-trip.
-  // Body: { updates: { "<sku>": ["SUP-001","SUP-002"], ... } }. Pass an
-  // empty array to clear a SKU's assignment.
+  //   { primary: { "<sku>": "SUP-001" | "" } }  set the DEFAULT supplier.
+  //       Reorders; never drops an alternate (lib/part-suppliers
+  //       .withPrimary). This is what the Suppliers page sends.
+  //   { updates: { "<sku>": ["SUP-001","SUP-002"] } }  replace the whole
+  //       list. For callers that mean exactly that; no screen uses it.
   if (req.method === "PATCH" && pathname === "/api/part-suppliers") {
     try {
       const payload = await parseRequestBody(req);
-      const map = await partSuppliers.bulkSet(payload.updates || {});
+      let map;
+      if (payload.primary && typeof payload.primary === "object") {
+        map = await partSuppliers.setPrimaryBulk(payload.primary, {
+          currentFor: (sku) => (PARTS && PARTS.parts && PARTS.parts[sku] && PARTS.parts[sku].supplierIds) || []
+        });
+      } else {
+        map = await partSuppliers.bulkSet(payload.updates || {});
+      }
       // Refresh the in-memory PARTS catalog so the next /api/parts call
       // returns the updated supplierIds (and any concurrent catalog
       // overrides) without a server restart. Goes through the full
