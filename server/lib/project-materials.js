@@ -35,6 +35,7 @@
 // server/material-list.js, with different field names.
 
 const materialLists = require("./material-lists");
+const partAlias = require("./part-alias");
 
 // ---- Physical stock ------------------------------------------------
 
@@ -52,7 +53,7 @@ function receivedBySku(purchaseOrders) {
   for (const po of purchaseOrders || []) {
     if (po?.deletedAt) continue;
     for (const line of po?.lineItems || []) {
-      const sku = String(line?.sku || "").trim();
+      const sku = partAlias.canonical(String(line?.sku || "").trim());
       if (!sku) continue;
       const got = Math.max(0, Math.floor(Number(line?.receivedQty) || 0));
       if (!got) continue;
@@ -76,7 +77,7 @@ function consumedBySku(buildWos) {
   for (const wo of buildWos || []) {
     const dl = wo?.dailyLog || {};
     for (const used of dl.materialsConsumed || []) {
-      const sku = String(used?.partSku || "").trim();
+      const sku = partAlias.canonical(String(used?.partSku || "").trim());
       if (!sku) continue;
       const qty = Number(used?.qty) || 0;
       if (qty <= 0) continue;
@@ -106,7 +107,7 @@ function requiredBySku(lists) {
   for (const list of lists || []) {
     if (list?.status === "archived") continue;
     for (const line of list?.lineItems || []) {
-      const sku = String(line?.sku || "").trim();
+      const sku = partAlias.canonical(String(line?.sku || "").trim());
       if (!sku) continue;
       const prev = out.get(sku) || [];
       prev.push({

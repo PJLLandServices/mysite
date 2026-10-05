@@ -1490,9 +1490,16 @@
     const addedCount = Object.keys(diff.added).length;
     const editedCount = Object.keys(diff.edited).length;
     const deletedCount = (diff.deleted || []).length;
-    const total = addedCount + editedCount + deletedCount;
+    // Rows whose number was merged into another part: never re-added;
+    // each updates that supplier's offer on the part it was merged into.
+    const aliased = Object.entries(diff.aliased || {});
+    const aliasedCount = aliased.length;
+    const total = addedCount + editedCount + deletedCount + aliasedCount;
+    const aliasNote = aliasedCount
+      ? ` ${aliasedCount} row${aliasedCount === 1 ? " is a supplier part number" : "s are supplier part numbers"} of merged parts (${aliased.slice(0, 4).map(([sku, r]) => `${sku} → ${r.into}`).join(", ")}${aliasedCount > 4 ? ", …" : ""}) — the price updates that supplier's offer; no part is added.`
+      : "";
     els.importSummary.textContent = total
-      ? `${total} change${total === 1 ? "" : "s"} found: ${addedCount} added · ${editedCount} edited · ${deletedCount} missing from file · ${diff.unchanged || 0} unchanged.`
+      ? `${total} change${total === 1 ? "" : "s"} found: ${addedCount} added · ${editedCount} edited · ${deletedCount} missing from file · ${diff.unchanged || 0} unchanged.${aliasNote}`
       : `No changes — file matches the current catalog.`;
     els.importApply.disabled = total === 0;
     els.importApply.textContent = total === 0 ? "No changes to apply" : `Apply ${total} change${total === 1 ? "" : "s"}`;
