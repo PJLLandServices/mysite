@@ -131,6 +131,9 @@ export async function bootServer({ port, env = {}, seedData = null, preload = []
     },
     writeData: (name, value) => fs.writeFileSync(path.join(DATA, `${name}.json`), JSON.stringify(value, null, 2)),
     outbox: () => fs.readFileSync(OUTBOX, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)),
+    // The signed-in session's cookie, for a client the test drives itself
+    // (scripts/perf-field-sync.mjs runs the app's own transport).
+    cookie: () => cookie,
     async login({ role = "admin" } = {}) {
       const users = srv.lib("users.js");
       const email = `${role}-${Date.now()}@pjl.test`;

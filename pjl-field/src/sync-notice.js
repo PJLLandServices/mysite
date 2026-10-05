@@ -18,3 +18,15 @@ export function syncNoticeFor(state) {
   if (state.pending > 0 && state.error) return 'pending';
   return null;
 }
+
+// Finish's button while it sends what is left (PJL-113): what, and how
+// much, counting down as it goes — never a bare spinner. `p` is
+// queue.progress (offline/field.js fieldProgress).
+const mbText = bytes => (bytes >= 100000 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1000))} KB`);
+export function finishProgressText(p) {
+  if (!p || (!p.photos && !p.changes)) return 'Finishing…';
+  const parts = [];
+  if (p.photos) parts.push(`Uploading ${p.photos} photo${p.photos === 1 ? '' : 's'}${p.bytes ? ` · ${mbText(p.bytes)} left` : ''}`);
+  if (p.changes) parts.push(`${p.photos ? '' : 'Sending '}${p.changes} change${p.changes === 1 ? '' : 's'}`);
+  return `${parts.join(' · ')}…`;
+}
