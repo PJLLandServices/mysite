@@ -45,7 +45,7 @@ fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // session-hours.js joined when work-orders.js gained audited office
 // corrections to session times and labourer counts.
-for (const f of ["work-orders.js", "invoices.js", "properties.js", "customers.js",
+for (const f of ["work-orders.js", "part-alias.js", "invoices.js", "properties.js", "customers.js",
   "billing-parties.js", "atomic-json.js", "session-hours.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }

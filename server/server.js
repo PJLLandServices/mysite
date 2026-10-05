@@ -42,6 +42,9 @@ const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+// [mem] log lines — so an out-of-memory restart can be traced to a climb
+// or to a request. Measures only; see lib/memory-log.js.
+const memoryLog = require("./lib/memory-log").createMemoryLog();
 const woPhotoEdits = require("./lib/wo-photo-edits");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
@@ -183,6 +186,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
+const partAlias = require("./lib/part-alias");
 const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
 // Send / receive / cancel: the PO and its list lines in one commit.
@@ -565,6 +569,12 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   }
   // Merge catalog overrides onto baseline → assigns to PARTS.parts.
   PARTS.parts = partsLib.mergeOverrides(BASELINE_PARTS, catalogOverrides);
+  // Retired duplicates: { retiredSku: canonicalSku }. Published to
+  // lib/part-alias so every door that takes a part number (Material List
+  // saves, work-order materials, PO/RFQ planning, project materials)
+  // resolves it the same way.
+  PARTS.merged = partsLib.aliasMap(catalogOverrides);
+  partAlias.publish(PARTS.merged);
   // Layer supplier assignments on top. mergeIntoCatalog mutates in place
   // and also normalises missing supplierIds to [].
   partSuppliers.mergeIntoCatalog(PARTS.parts, supplierOverrides);
@@ -597,6 +607,35 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
     for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
   }
   if (!initial) CATALOG_VERSION++;
+}
+
+// Every stored record that names a part number, by store. Used before a
+// duplicate part is retired: a number that a Material List, purchase order,
+// RFQ, project design, work order or invoice still points at is history
+// and must keep meaning what it meant. Reads the JSON stores directly and
+// matches the number as a whole quoted value, so "405-007" never matches
+// "1405-0071".
+function findPartReferences(sku) {
+  const needle = JSON.stringify(String(sku));
+  const stores = { materialLists: "material-lists.json", purchaseOrders: "purchase-orders.json", quoteRequests: "quote-requests.json", projects: "projects.json", workOrders: "work-orders.json", invoices: "invoices.json" };
+  const out = { total: 0 };
+  for (const [name, file] of Object.entries(stores)) {
+    let ids = [];
+    try {
+      const p = path.join(__dirname, "data", file);
+      if (fsSync.existsSync(p)) {
+        const records = JSON.parse(fsSync.readFileSync(p, "utf8") || "[]");
+        ids = (Array.isArray(records) ? records : []).filter((r) => JSON.stringify(r).includes(needle)).map((r) => r && r.id).filter(Boolean);
+      }
+    } catch (err) {
+      // An unreadable store can't prove the number is unreferenced.
+      throw new Error(`Couldn't read ${file} to check references (${err.message}).`);
+    }
+    out[name] = ids;
+    out.total += ids.length;
+  }
+  out.summary = Object.entries(out).filter(([k, v]) => Array.isArray(v) && v.length).map(([k, v]) => `${v.length} in ${k}`).join(", ") || "none";
+  return out;
 }
 
 // One-time seed of per-supplier prices from quote requests that were
@@ -14139,7 +14178,10 @@ async function handleApi(req, res, pathname) {
       categories: PARTS.categories || [],
       manufacturers: PARTS.manufacturers || [],
       parts: PARTS.parts || {},
-      service_materials: PARTS.service_materials || {}
+      service_materials: PARTS.service_materials || {},
+      // { retiredSku: canonicalSku } — numbers merged into another part.
+      // They are not in `parts`; clients resolve a stored number here.
+      merged: PARTS.merged || {}
     };
     if (wantAdminMeta) {
       // Read the override file fresh so the response always reflects
@@ -14156,7 +14198,9 @@ async function handleApi(req, res, pathname) {
           // Per-SKU edit payload so the UI can show "original price"
           // tooltips on the modified indicator (and "Restore baseline"
           // affordance for individual fields).
-          edited: overrides.edited || {}
+          edited: overrides.edited || {},
+          // The full markers (into, at, by, supplierId, the retired record).
+          merged: overrides.merged || {}
         };
         // Baseline snapshot for the modified-indicator hover ("price
         // changed from $X.XX"). Only the editable fields, only the
@@ -14318,6 +14362,44 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/parts/:sku/merge-into { into, supplierId }  (admin)
+  //   Retire :sku as a duplicate of `into` — reversible (lib/parts.js
+  //   mergeInto). Writes only the marker: the supplier offer, the supplier
+  //   assignment and the photo are separate, explicit steps. Refused while
+  //   anything still references :sku (a list, PO, RFQ, project design, work
+  //   order or invoice): history is never rewritten to make a merge fit.
+  // POST /api/parts/:sku/unmerge  (admin) — put the retired part back.
+  const partMergeMatch = pathname.match(/^\/api\/parts\/([^/]+)\/(merge-into|unmerge)$/);
+  if (partMergeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const sku = decodeURIComponent(partMergeMatch[1]);
+      const by = await actorLabel(req);
+      if (partMergeMatch[2] === "unmerge") {
+        const result = await partsLib.unmerge(sku);
+        rebuildCatalogFromOverrides();
+        await settings.recordAudit({ who: by, action: "catalog.unmerge", note: `Un-merged ${sku} (was merged into ${result.into})`, after: result });
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const into = String(payload.into || "").trim();
+      const references = findPartReferences(sku);
+      if (references.total > 0) {
+        return sendJson(res, 409, { ok: false, code: "sku_referenced", references,
+          errors: [`${sku} is still referenced (${references.summary}). A part that records point at can't be retired.`] });
+      }
+      const supplierId = payload.supplierId ? String(payload.supplierId) : ((PARTS.parts[sku] && PARTS.parts[sku].supplierIds && PARTS.parts[sku].supplierIds[0]) || null);
+      const result = await partsLib.mergeInto(BASELINE_PARTS, sku, into, { by, supplierId });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "catalog.merge", note: `Merged ${sku} into ${into} (retired, reversible)`, after: { alias: result.alias, into: result.into, supplierId: result.supplierId, origin: result.origin } });
+      return sendJson(res, 200, { ok: true, alias: result.alias, into: result.into, supplierId: result.supplierId, origin: result.origin, at: result.at });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, code: err.code || undefined, errors: [err.message || "Couldn't merge the part."] });
+    }
+  }
+
   // ---------- Part photos (P-PJL-35, FLOW-47) ----------------------------
   // One verified photo per real-world fitting, shown only in the parts
   // picker. lib/part-photos.js owns the one rule (photoStateFor) for
@@ -14385,7 +14467,7 @@ async function handleApi(req, res, pathname) {
     const session = await requireAdmin(req);
     if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
-    const sku = decodeURIComponent(partPhotoSkuMatch[1]);
+    const sku = partAlias.canonical(decodeURIComponent(partPhotoSkuMatch[1]));   // a retired number answers for the part it was merged into
     const action = partPhotoSkuMatch[2];
     const part = PARTS.parts[sku];
     if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
@@ -14663,7 +14745,7 @@ async function handleApi(req, res, pathname) {
     const session = await requireAdmin(req);
     if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
-    const sku = decodeURIComponent(photoReviewSkuMatch[1]);
+    const sku = partAlias.canonical(decodeURIComponent(photoReviewSkuMatch[1]));
     const part = PARTS.parts[sku];
     if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
     const by = await actorLabel(req);
@@ -14764,13 +14846,17 @@ async function handleApi(req, res, pathname) {
       if (rows.length === 0) {
         return sendJson(res, 400, { ok: false, errors: ["No rows in the uploaded file."] });
       }
-      const diff = partsLib.computeImportDiff(PARTS.parts || {}, rows, { includeDeletions });
+      // Rows whose number was merged into another part come back as
+      // diff.aliased: they update that supplier's offer on the canonical
+      // part and are never re-added as parts.
+      const mergedMarkers = (await partsLib.readOverrides()).merged || {};
+      const diff = partsLib.computeImportDiff(PARTS.parts || {}, rows, { includeDeletions, merged: mergedMarkers });
       const importId = "imp_" + Math.random().toString(36).slice(2, 12);
       // Stage for 15 min. Cleanup runs on next request via the timestamp
       // check below.
       importStaging.set(importId, {
         ts: Date.now(),
-        staged: { added: diff.added, edited: diff.edited, deleted: diff.deleted }
+        staged: { added: diff.added, edited: diff.edited, deleted: diff.deleted, aliased: diff.aliased || {} }
       });
       cleanupImportStaging();
       return sendJson(res, 200, { ok: true, importId, diff });
@@ -14796,12 +14882,32 @@ async function handleApi(req, res, pathname) {
         payload.selections || {},
         { allowedCategories: categoriesAllowedSet() }
       );
+      // Rows that named a retired part number: record the price as that
+      // supplier's offer on the canonical part (the retired number is the
+      // supplier's part number there). Applied unless the client unticked
+      // it; a row with no price or no known supplier is reported, not guessed.
+      counts.offersUpdated = 0;
+      counts.aliasedSkipped = [];
+      const aliasedRows = entry.staged.aliased || {};
+      const wantAliased = Array.isArray(payload.selections && payload.selections.aliased)
+        ? new Set(payload.selections.aliased) : new Set(Object.keys(aliasedRows));
+      const bySupplier = new Map();
+      for (const [alias, row] of Object.entries(aliasedRows)) {
+        if (!wantAliased.has(alias)) continue;
+        if (!row.supplierId || row.priceCents == null) { counts.aliasedSkipped.push({ sku: alias, into: row.into, reason: !row.supplierId ? "no supplier on the merge record" : "no price in the file" }); continue; }
+        if (!bySupplier.has(row.supplierId)) bySupplier.set(row.supplierId, {});
+        bySupplier.get(row.supplierId)[row.into] = { priceCents: row.priceCents, supplierSku: alias };
+      }
+      for (const [supplierId, prices] of bySupplier.entries()) {
+        const { recorded } = await partSupplierPrices.recordSupplierPrices(supplierId, prices, { source: "import" });
+        counts.offersUpdated += Object.keys(recorded || {}).length;
+      }
       importStaging.delete(payload.importId);
       rebuildCatalogFromOverrides();
       await settings.recordAudit({
         who: "admin",
         action: "catalog.import",
-        note: `Imported xlsx: ${counts.added} added, ${counts.edited} edited, ${counts.deleted} deleted`,
+        note: `Imported xlsx: ${counts.added} added, ${counts.edited} edited, ${counts.deleted} deleted${counts.offersUpdated ? `, ${counts.offersUpdated} supplier offer(s) updated on merged parts` : ""}`,
         after: counts
       });
       return sendJson(res, 200, { ok: true, counts });
@@ -16853,12 +16959,22 @@ async function handleApi(req, res, pathname) {
   }
 
   // PATCH /api/part-suppliers — bulk update many SKUs in one round-trip.
-  // Body: { updates: { "<sku>": ["SUP-001","SUP-002"], ... } }. Pass an
-  // empty array to clear a SKU's assignment.
+  //   { primary: { "<sku>": "SUP-001" | "" } }  set the DEFAULT supplier.
+  //       Reorders; never drops an alternate (lib/part-suppliers
+  //       .withPrimary). This is what the Suppliers page sends.
+  //   { updates: { "<sku>": ["SUP-001","SUP-002"] } }  replace the whole
+  //       list. For callers that mean exactly that; no screen uses it.
   if (req.method === "PATCH" && pathname === "/api/part-suppliers") {
     try {
       const payload = await parseRequestBody(req);
-      const map = await partSuppliers.bulkSet(payload.updates || {});
+      let map;
+      if (payload.primary && typeof payload.primary === "object") {
+        map = await partSuppliers.setPrimaryBulk(payload.primary, {
+          currentFor: (sku) => (PARTS && PARTS.parts && PARTS.parts[sku] && PARTS.parts[sku].supplierIds) || []
+        });
+      } else {
+        map = await partSuppliers.bulkSet(payload.updates || {});
+      }
       // Refresh the in-memory PARTS catalog so the next /api/parts call
       // returns the updated supplierIds (and any concurrent catalog
       // overrides) without a server restart. Goes through the full
@@ -30165,6 +30281,8 @@ function seasonAndYearFor(date) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // "close" fires however the response ends (finished, aborted, errored).
+  res.on("close", memoryLog.requestStarted(req.method, url.pathname));
   // Normalize the pathname before route matching. If the URL came in with
   // consecutive slashes ("//book.html") — which can happen when a proxy
   // redirect chain mangles a relative path, or when a manual paste
@@ -30656,6 +30774,7 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+  memoryLog.start();
 
   // The geography filter's key, checked ONCE at boot where nobody can
   // miss it. Without it every address is placed by town name only

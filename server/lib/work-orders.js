@@ -37,6 +37,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const partAlias = require("./part-alias");
 const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
@@ -1938,12 +1939,14 @@ async function update(id, patch, { ifMatch = null, systemWrite = false, photoBoo
   // the tech from removing a SKU by stepping it back to 0.
   if (Object.prototype.hasOwnProperty.call(patch, "materialsPacked") && patch.materialsPacked && typeof patch.materialsPacked === "object") {
     const cleaned = {};
-    for (const [sku, val] of Object.entries(patch.materialsPacked)) {
-      if (!sku || typeof sku !== "string") continue;
+    for (const [rawSku, val] of Object.entries(patch.materialsPacked)) {
+      if (!rawSku || typeof rawSku !== "string") continue;
+      // A retired part number is stored as the part it was merged into
+      // (lib/part-alias); two keys for one part add up.
+      const sku = partAlias.canonical(rawSku);
       // Coerce legacy bool true → 1; drop false/null/0.
-      if (val === true) { cleaned[sku] = 1; continue; }
-      const n = Math.max(0, Math.floor(Number(val) || 0));
-      if (n > 0) cleaned[sku] = n;
+      const n = val === true ? 1 : Math.max(0, Math.floor(Number(val) || 0));
+      if (n > 0) cleaned[sku] = (cleaned[sku] || 0) + n;
     }
     next.materialsPacked = cleaned;
   }
@@ -2643,7 +2646,7 @@ async function recordMaterialConsumed(woId, items, { by = "admin" } = {}) {
   const incoming = Array.isArray(items) ? items : [items];
   const cleaned = [];
   for (const raw of incoming) {
-    const partSku = String(raw?.partSku || "").trim();
+    const partSku = partAlias.canonical(String(raw?.partSku || "").trim());
     const qty = Number(raw?.qty);
     if (!partSku || !Number.isFinite(qty) || qty <= 0) continue;
     cleaned.push({
@@ -2697,7 +2700,7 @@ async function setNextDayPlan(woId, { nextDayMaterials, nextDayTasks }, { by = "
   const ts = new Date().toISOString();
   if (Array.isArray(nextDayMaterials)) {
     dl.nextDayMaterials = nextDayMaterials.map((m) => ({
-      partSku: String(m?.partSku || ""),
+      partSku: partAlias.canonical(String(m?.partSku || "")),
       qty: Number(m?.qty) || 1,
       addedAt: ts,
       note: typeof m?.note === "string" ? m.note.slice(0, 400) : ""

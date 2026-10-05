@@ -71,6 +71,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const partAlias = require("./part-alias");
 const crypto = require("node:crypto");
 const { resolveLineDescription } = require("./format");
 
@@ -370,10 +371,12 @@ function planFromMaterialList(list, partsMap, opts = {}) {
     ? require("./purchase-orders").stillToOrder(line, opts.committed, { includeDrafts: false })
     : Math.max(1, Math.floor(Number(line.qty) || 1));
   const lineFor = (line) => {
-    const part = partsMap && partsMap[line.sku];
+    // A retired part number is quoted as the part it was merged into.
+    const sku = partAlias.canonical(line.sku);
+    const part = partsMap && partsMap[sku];
     return {
-      sku: line.sku,
-      description: resolveLineDescription(line, partsMap),
+      sku,
+      description: resolveLineDescription({ ...line, sku }, partsMap),
       quantity: ask(line),
       unit: (part && typeof part.unit === "string" && part.unit.trim()) ? part.unit.trim() : "each",
       quotedPriceCents: null
@@ -408,11 +411,12 @@ function planFromMaterialList(list, partsMap, opts = {}) {
   const missingSupplierLines = [];
   for (const line of list.lineItems) {
     if (line.status !== "need" || ask(line) <= 0) continue;
-    const part = partsMap && partsMap[line.sku];
+    const sku = partAlias.canonical(line.sku);
+    const part = partsMap && partsMap[sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!supplierIds.length) {
-      missingSupplier.add(line.sku);
-      missingSupplierLines.push({ sku: line.sku, qty: line.qty, lineId: line.id });
+      missingSupplier.add(sku);
+      missingSupplierLines.push({ sku, qty: line.qty, lineId: line.id });
       continue;
     }
     const primary = supplierIds[0];

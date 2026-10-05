@@ -131,6 +131,8 @@
     const hay = [];
     for (const p of row.members) {
       hay.push(p.sku, p.partNumber, p.description, p.category, p.subcategory, p.size, p.manufacturer);
+      // Numbers that were merged into this part (lib/parts.js "merged").
+      for (const a of Array.isArray(p.aliases) ? p.aliases : []) hay.push(a);
       for (const v of Object.values(p.supplierPrices || {})) hay.push(v && v.supplierSku);
     }
     const text = norm(hay.filter(Boolean).join(" "));
