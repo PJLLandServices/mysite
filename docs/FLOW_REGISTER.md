@@ -8538,3 +8538,29 @@ second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing
    - No freeze or memory warning while taking the photos.
 3. **Then** set `FIELD_PHOTO_SHRINK=1` only if check 2 passes. If it misbehaves later, unset it:
    markup is unaffected.
+
+---
+
+## 2026-10-05 — INV-SEND-01 · INV-LINK-01 · TTP-COLLECT-01 · SETTLE-PIF-01: invoice delivery, Tap to Pay, Paid in Full — **UNMAPPED → documented, BROKEN at named hops, nothing implemented** (P-PJL-22: PJL-126…130)
+
+Patrick, 2026-10-05, from two houses in the field: the customer's invoice PDF said DRAFT, and Tap to
+Pay would not come up until the invoice had been emailed. His requirements A–E are mapped hop by hop
+in **`docs/INVOICE_DELIVERY_TTP.md`**. That document holds the proposed state model and wording,
+and Patrick approves it before any implementation.
+
+| Flow | Broken hop (main `9d36363f`) | Suite (fails today) |
+|---|---|---|
+| INV-SEND-01 | `/send` renders the PDF from the draft, so the customer copy says **DRAFT**. Sent copies say **OVERDUE** (there is no due date). Part paid says **DRAFT**. The project-completion email loses its invoice PDF (`generateInvoicePdf` used as a stream). | `test-invoice-first-send.mjs` |
+| INV-LINK-01 | The PDF promises "the secure payment link below" and has never drawn one. | `test-invoice-pdf-pay-link.mjs` |
+| TTP-COLLECT-01 | "Paid on site" / "Bill later" reads as "already paid" / "not paid yet". Bill later hides Tap to Pay until the invoice is sent, and only an emailed send unlocks it. | `test-collect-payment-now.mjs` |
+| SETTLE-PIF-01 | A prepaid visit has no state. It gets an invoice for money already paid, or a $0 price that makes it No Charge. | `test-paid-in-full.mjs` |
+
+**PASS flows touched by the proposal, and how each is re-verified:**
+- **FLOW-23** gains a new way *in* to the same pay page (the PDF link), plus one admin route that
+  opens a Bill-later draft for on-site payment through the existing `openForOnSitePayment`
+  guards.
+  - `payBlockReason`, the charge path, finalize and the ledger are untouched.
+  - Re-verified by the pinned B2–B4 / C2–C5 checks, and one walked payment through a PDF link.
+- **No Charge** (FLOW-31 #8) is pinned unchanged by D6.
+
+Run `npm run test:invoice-delivery`. Each suite joins `build:check` in the PR that makes it pass.
