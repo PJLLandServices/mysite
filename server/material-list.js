@@ -9,6 +9,7 @@
   const els = {
     loading: document.getElementById("mlbLoading"),
     error: document.getElementById("mlbError"),
+    recoveryHold: document.getElementById("mlbRecoveryHold"),
     page: document.getElementById("mlbPage"),
     id: document.getElementById("mlbId"),
     status: document.getElementById("mlbStatus"),
@@ -254,6 +255,12 @@
 
   // ---- Render --------------------------------------------------------
   function renderAll() {
+    // A recovery hold: the server couldn't prove this list agrees with its
+    // purchase orders after an interrupted save. Shown at the top; every
+    // save is refused by the server until the office releases it.
+    const hold = state.list && state.list.recoveryHold;
+    els.recoveryHold.hidden = !hold;
+    els.recoveryHold.textContent = hold ? hold.message : "";
     renderHeader();
     renderLines();
     renderCatalogTree();
@@ -877,14 +884,24 @@
     }
   }
 
+  // A line a purchase order owns: on order, or carrying a PO or a frozen
+  // purchase price. The same test as the server's isPurchasingProtected
+  // (lib/material-lists.js) — its quantity, part and status are changed by
+  // the purchase order, not here. A hand-marked Have line is not one.
+  function isPurchased(line) {
+    return !!line && (line.status === "ordered" || !!line.poId || line.frozenPriceCents != null);
+  }
+
   // ---- Mutation helpers (only mutate state.list, then scheduleSave) -
   function addOrIncrementLine(sku) {
     if (!state.catalog.parts[sku]) return; // silent ignore — unknown sku
     const lines = state.list.lineItems = Array.isArray(state.list.lineItems) ? state.list.lineItems : [];
-    const existing = lines.find((l) => l.sku === sku && l.status !== "ordered");
-    // If a line for this SKU exists AND isn't already locked-on-PO, bump
-    // qty rather than create a duplicate. If the only line is "ordered",
-    // create a new "need" line so the user can plan additional purchase.
+    const existing = lines.find((l) => l.sku === sku && !isPurchased(l));
+    // If a line for this SKU exists AND isn't purchased, bump qty rather
+    // than create a duplicate. If the only line is on a PO or was received
+    // through one, create a new "need" line so the user can plan an
+    // additional purchase — the purchased line's quantity belongs to its
+    // purchase order and the server refuses to change it.
     if (existing) {
       existing.qty = Math.min((Number(existing.qty) || 0) + 1, 9999);
     } else {
