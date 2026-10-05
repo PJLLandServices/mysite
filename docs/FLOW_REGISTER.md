@@ -8298,13 +8298,32 @@ on a test visit:
 | One 500 on the first zone save | 25 pending and 0 photos on the server until Finish | all synced on the next ordinary pass |
 | Wait before resuming after a long signal drop | 15 s (fixed timer) | ≤ 29 s backoff, no tap |
 
-**Gaps, with reasons:**
-- **Request target.** The PRD's "≤ 20 requests" for the walking case cannot be met without
-  delaying sync: there are 25 separate changes, each sent as it is made. 26 is one per change plus
-  one account check. The backlog case is 14.
-- **Upload size.** Photo bytes are the remaining cost of a slow uplink. The quality step is a
-  proxy measurement only, because the iPhone's encoder differs. The real size reduction needs
-  resizing on the phone (PJL-112's canvas, then a device check).
+**Acceptance (PJL-113).** The request rule was approved by Patrick on 2026-10-05 (Option A; no
+delay added to zone saves). Every other criterion is unchanged.
+
+**How it was measured.** `scripts/perf-field-sync.mjs`: the real queue, transport and server; 300 ms
+round trip; one shared 1.5 Mbps uplink; the 12-zone / 12-photo reference visit. Photo bytes and times
+use the harness's synthetic photo, or where marked, the one benchmark photograph from the website's
+files uploaded 12 times (described in FIELD-PHOTO-MARKUP-01). These are not real captures from the
+phone.
+
+| Criterion | Measured (#378) | Status |
+|---|---|---|
+| Connected reference visit: **≤ 30 total requests**, with no redundant session or full work-order rereads, and no more than one save per meaningful change *(approved rule)* | **26** = 1 account check + 13 saves + 12 photos, for 25 changes. 0 rereads (baseline 113, with 63 session and 25 record reads) | **Met** |
+| No-signal catch-up: **≤ 20 requests** | **14** | **Met** |
+| Queue **≤ 2 pending** 30 s after any action, normal signal | max **1** in the harness | Met in the harness; **real phone pending** |
+| Temporary 5xx and network errors **recover automatically** | one 500 mid-visit: synced on the next ordinary pass. Signal drop: resumed after ≤ 29 s of backoff, no tap | **Met** |
+| Finish when caught up: **0–2 requests**, and completes in **≤ 15 s on the real phone** | **0** requests | Requests met; **15 s on the real phone pending** |
+| Finish shows exactly what remains, never a bare spinner | "Uploading N photos · X MB left · N changes…" | **Met** (test) |
+| Bytes uploaded **≤ 40% of baseline** (shrinking ships over the air, behind its switch) | benchmark photo: 14.8 MB → 11.9 MB (**80%**); with shrinking (PJL-112, off by default) 9.6 MB (**65%**) | **Not met**, open |
+| Total sync time **≤ 40% of baseline** | backlog, real time: synthetic photo 177.8 → 113.3 s (**64%**); benchmark photo 118.2 → 64.9 s (**55%**), with shrinking 52.5 s (**44%**) | **Not met**, open |
+
+**Why the two open rows remain open.** On a 1.5 Mbps uplink, photo bytes are almost all of the
+remaining time.
+- Reaching 40% needs about 0.37 MB per photo, for example 2400 px at a lower JPEG quality than the
+  0.75 approved for testing. That is a quality decision for Patrick, made after the device check
+  compares real captures.
+- Not weakened here.
 
 **Lifecycle walk (CLAUDE.md):**
 - **Nothing about what is recorded changes.** Sign-off gates, prices and the completion cascade
