@@ -1770,7 +1770,7 @@
         best: stuck ? "address not pinpointed — place from the CRM"
           : top ? `best ${top.label || prettyDate(top.date)} · +${top.addedDriveMinutes} min` : "no routed day near them yet",
         stuck,
-        hint: stuck ? "" : "drag onto a day — books their afternoon and sends the confirmation"
+        hint: stuck ? "" : "drag onto a day (afternoon) or onto a half-day — books it and sends the confirmation"
       }));
     }
     el("trayStandbyCount").textContent = String(lastStandby.length);
@@ -1809,7 +1809,6 @@
     const day = ((current && current.days) || []).find((d) => d.date === date);
     if (drag.kind === "standby") {
       if (drag.row && !drag.row.resolved) return "Their address isn't pinpointed — place them from the CRM.";
-      if (bucket === "morning") return "Open-bucket pickups ride the afternoon — drop on the afternoon, or on the day.";
     }
     if (drag.kind === "unplanned" && day && day.bookedOnly) return "That's a booked-only day — drop on a route day.";
     return "";
@@ -1824,7 +1823,11 @@
       return;
     }
     if (!drag.row) { showToast("That customer is no longer waiting.", "bad"); loadStandby(); return; }
-    await bookStandby(drag.row, date);
+    // A drop on the day (no half named) rides the afternoon — "on our
+    // way home"; a drop on a half-day block takes that half. The service
+    // is the same band in this page's season (the drawer's default).
+    const services = await probeServices();
+    await bookStandby(drag.row, date, bucket || "afternoon", sameBandThisSeason(drag.row.serviceKey, services) || drag.row.serviceKey);
   }
 
   // ---- Day preview: the day as it would be, with this stop on it -------
@@ -3212,9 +3215,11 @@
         return;
       }
       standbyNote.textContent = `${data.rows.length} customer${data.rows.length === 1 ? "" : "s"} waiting. `
-        + "Best days use the same added-drive math as the booking filter — placing one books them, "
-        + "sends their confirmation, and takes them off this list.";
-      for (const row of data.rows) standbyList.appendChild(standbyRow(row));
+        + "Best days use the same added-drive math as the booking filter, but any day and either half is yours "
+        + "to pick — placing one books them, sends their confirmation, and takes them off this list. "
+        + "The only refusal is a half-day the crew is already physically booked through.";
+      const services = await probeServices();
+      for (const row of data.rows) standbyList.appendChild(standbyRow(row, services));
       lastStandby = data.rows || [];
       renderTray();
     } catch (error) {
@@ -3244,40 +3249,39 @@
     return data;
   }
 
-  async function bookStandby(row, date) {
+  async function bookStandby(row, date, bucket, serviceKey) {
     try {
-      // Ask the engine where this customer actually fits.
-      //
-      // This used to hard-code 13:00 as the anchor minute, which
-      // collided with whatever already sat at 13:00 and came back 409
-      // physical_conflict — on exactly the days this panel had just
-      // recommended. The geographic re-stamp made that worse, not
-      // better: the afternoon fills from 12:00 in half-hour steps, so
-      // 13:00 is precisely where the third afternoon booking lands.
-      //
-      // The resolver returns an afternoon slot that is actually free and
-      // passes the day's capacity and corridor checks, or refuses with a
-      // reason. The customer is still told the 12–5 window and never a
-      // minute.
+      // Ask the engine where this customer actually fits — and when the
+      // engine has no slot in the half Patrick chose, the server places
+      // them anyway, at the first half-hour the crew is not already
+      // standing in. The open bucket holds the customers the public
+      // calendar could not seat; the placement is his call, not the
+      // corridor's. The customer is still told the half-day window and
+      // never a minute. The service is the drawer's pick (the standby's
+      // own by default); the server refuses a seasonal service on a date
+      // outside its season and names the band to use instead.
       const slotRes = await fetch("/api/admin/open-bucket/slot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: row.leadId, date })
+        body: JSON.stringify({ leadId: row.leadId, date, bucket: bucket || "afternoon", serviceKey: serviceKey || row.serviceKey })
       });
       const slotData = await slotRes.json().catch(() => ({}));
       if (!slotRes.ok || !slotData.ok) {
-        throw new Error((slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
+        throw new Error(slotData.message || (slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
       }
       const slotStart = slotData.slotStart;
       await reserveBooking({
         leadId: row.leadId,
-        serviceKey: row.serviceKey,
+        serviceKey: slotData.serviceKey || serviceKey || row.serviceKey,
         slotStart,
         source: "admin_custom",
         zoneCount: row.zoneCount || null,
         contact: { address: row.address }
       });
-      showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} — confirmation sent.`);
+      const half = slotData.bucketKey === "morning" ? "morning" : "afternoon";
+      showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} ${half}`
+        + `${slotData.serviceLabel ? ` as ${slotData.serviceLabel}` : ""}`
+        + `${slotData.forced ? " (past the route filter — your call)" : ""} — confirmation sent.`);
       loadStandby();
       await load();
       selectDay(date);
@@ -3288,7 +3292,24 @@
     }
   }
 
-  function standbyRow(row) {
+  // The season this plan page is showing, as the family its services wear.
+  function pageFamily() {
+    return seasonSelect.value === "spring" ? "spring_opening" : "fall_closing";
+  }
+
+  // The same band in this page's season: spring_open_6z on the fall plan
+  // is fall_close_6z. Null when the key isn't a seasonal band.
+  function sameBandThisSeason(serviceKey, services) {
+    const family = services[serviceKey]?.family;
+    if (family !== "spring_opening" && family !== "fall_closing") return null;
+    if (family === pageFamily()) return serviceKey;
+    const from = family === "spring_opening" ? "spring_open_" : "fall_close_";
+    const to = family === "spring_opening" ? "fall_close_" : "spring_open_";
+    const candidate = serviceKey.startsWith(from) ? to + serviceKey.slice(from.length) : null;
+    return candidate && services[candidate] ? candidate : null;
+  }
+
+  function standbyRow(row, services = {}) {
     const li = document.createElement("div");
     li.className = "sp-standby-row";
     const who = document.createElement("div");
@@ -3307,30 +3328,103 @@
       warn.className = "sp-tag is-warn";
       warn.textContent = "address not pinpointed — place by hand from the CRM";
       act.appendChild(warn);
-    } else if (!row.bestDays.length) {
-      const none = document.createElement("span");
-      none.className = "sp-standby-meta";
-      none.textContent = "No routed day near them yet.";
-      act.appendChild(none);
     } else {
+      // Every day, not just the three cheapest: the best days first with
+      // their cost, then every other day on the plan, then any date at
+      // all. Where this customer goes is Patrick's decision; the costs
+      // are there to inform it, not to make it.
       const select = document.createElement("select");
       select.setAttribute("aria-label", `Day for ${row.name || row.leadId}`);
-      for (const d of row.bestDays) {
+      const listed = new Set();
+      const bestGroup = document.createElement("optgroup");
+      bestGroup.label = "Best days";
+      for (const d of row.bestDays || []) {
         const opt = document.createElement("option");
         opt.value = d.date;
         opt.textContent = `${d.label || (d.bookingsOnly ? "Booked day" : d.date)} · ${prettyDate(d.date)} · +${d.addedDriveMinutes} min`;
-        select.appendChild(opt);
+        bestGroup.appendChild(opt);
+        listed.add(d.date);
       }
+      if (bestGroup.children.length) select.appendChild(bestGroup);
+      const restGroup = document.createElement("optgroup");
+      restGroup.label = "Other route days";
+      for (const day of ((current && current.days) || [])) {
+        if (listed.has(day.date) || day.date < todayKey()) continue;
+        const opt = document.createElement("option");
+        opt.value = day.date;
+        opt.textContent = `${day.bookedOnly ? "Booked day" : (day.label || "—")} · ${prettyDate(day.date)}`;
+        restGroup.appendChild(opt);
+        listed.add(day.date);
+      }
+      if (restGroup.children.length) select.appendChild(restGroup);
+      const other = document.createElement("option");
+      other.value = "__other";
+      other.textContent = "Any other date…";
+      select.appendChild(other);
+      const dateInput = document.createElement("input");
+      dateInput.type = "date";
+      dateInput.min = todayKey();
+      dateInput.hidden = true;
+      dateInput.setAttribute("aria-label", `Any date for ${row.name || row.leadId}`);
+      select.addEventListener("change", () => { dateInput.hidden = select.value !== "__other"; });
+      if (!listed.size) { select.value = "__other"; dateInput.hidden = false; }
+
+      const half = document.createElement("select");
+      half.setAttribute("aria-label", `Half-day for ${row.name || row.leadId}`);
+      for (const [v, t] of [["afternoon", "Afternoon"], ["morning", "Morning"]]) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = t;
+        half.appendChild(opt);
+      }
+
+      // The service that gets booked. The standby's own — unless it is
+      // the other season's: a customer who joined in spring for a
+      // "Spring opening" and is being placed on the fall plan is booked
+      // as the same band of fall closing, and the row says so, because
+      // "Spring opening on October 10" went out in an email once
+      // (2026-10-02). Patrick can still pick anything from the list.
+      const svc = document.createElement("select");
+      svc.setAttribute("aria-label", `Service for ${row.name || row.leadId}`);
+      const entries = Object.entries(services).filter(([, s]) => s.bookable);
+      const groups = [
+        ["This season", entries.filter(([, s]) => s.family === pageFamily())],
+        ["Other services", entries.filter(([, s]) => s.family !== pageFamily())]
+      ];
+      for (const [label, items] of groups) {
+        if (!items.length) continue;
+        const og = document.createElement("optgroup");
+        og.label = label;
+        for (const [key, s] of items) {
+          const opt = document.createElement("option");
+          opt.value = key;
+          opt.textContent = s.label || key;
+          og.appendChild(opt);
+        }
+        svc.appendChild(og);
+      }
+      const swapped = sameBandThisSeason(row.serviceKey, services);
+      const defaultKey = (swapped && swapped !== row.serviceKey) ? swapped : row.serviceKey;
+      if (defaultKey && services[defaultKey]) svc.value = defaultKey;
+      if (swapped && swapped !== row.serviceKey) {
+        const warn = document.createElement("span");
+        warn.className = "sp-tag is-warn";
+        warn.textContent = `joined for ${row.serviceLabel || row.serviceKey} — booking as ${services[swapped].label}`;
+        act.appendChild(warn);
+      }
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "pjl-btn pjl-btn-primary sp-standby-book";
       btn.textContent = "Book + notify";
       btn.addEventListener("click", async () => {
+        const date = select.value === "__other" ? dateInput.value : select.value;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showToast("Pick a date first.", "bad"); return; }
         btn.disabled = true;
-        const booked = await bookStandby(row, select.value);
+        const booked = await bookStandby(row, date, half.value, svc.value);
         if (!booked) btn.disabled = false;
       });
-      act.append(select, btn);
+      act.append(svc, select, dateInput, half, btn);
     }
     li.appendChild(act);
     return li;

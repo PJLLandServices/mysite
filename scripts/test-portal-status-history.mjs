@@ -114,6 +114,25 @@ const fallClosingScheduledFor = (fallWindowStart && Date.now() > fallWindowStart
   ? new Date(Math.min(Date.now() - 86400000, fallWindowEnd.getTime())).toISOString()
   : null;
 
+// Peter Ross's REAL shape, live 2026-10-01: a season-plan booking row
+// that NEVER gets its own status flipped to "completed" (the normal
+// field-app completion path creates the Work Order against the
+// property, not the booking — no bookingId field exists anywhere on a
+// WO — and the completion cascade never writes back to bookings.json),
+// while a genuine completed, invoiced Work Order and property service
+// record exist for the same visit. The portal's header stayed stuck on
+// "your service is scheduled" even though Service History (sourced
+// from workOrders.json) already showed the same visit "Completed,"
+// invoiced, and paid — two disjoint systems of record nothing
+// reconciled. A SEPARATE property/lead/token again.
+const CUSTOMER_ID_3 = "cust-portal-probe-wo";
+const PROPERTY_ID_3 = "prop-portal-probe-wo";
+const LEAD_ID_3 = "lead-portal-probe-wo";
+const PORTAL_TOKEN_3 = "portal-probe-token-wo";
+const BOOKING_ID_3 = "BK-PORTAL-PROBE-WO";
+const WO_ID_3 = "WO-PORTAL-PROBE-WO";
+const INVOICE_ID_3 = "I-PORTAL-PROBE-WO-0001";
+
 function writeFixtures() {
   const props = [{
     id: PROPERTY_ID,
@@ -188,11 +207,7 @@ function writeFixtures() {
     });
   }
 
-  fs.writeFileSync(path.join(DATA, "properties.json"), JSON.stringify(props, null, 2));
-  fs.writeFileSync(path.join(DATA, "leads.json"), JSON.stringify(leads, null, 2));
-  fs.writeFileSync(path.join(DATA, "bookings.json"), JSON.stringify(bookings, null, 2));
-
-  fs.writeFileSync(path.join(DATA, "work-orders.json"), JSON.stringify([{
+  const workOrders = [{
     id: PAST_WO_ID,
     type: "service_visit",
     status: "completed",
@@ -206,12 +221,95 @@ function writeFixtures() {
     // code too. Without this, old code's derived.state would already
     // read "request_open" rather than the real-world "service_complete"
     // Patrick actually saw; this fixture reproduces his exact scenario.
-  }], null, 2));
+  }];
+  const invoices3 = [];
+  if (fallClosingScheduledFor) {
+    props.push({
+      id: PROPERTY_ID_3,
+      customerId: CUSTOMER_ID_3,
+      address: "3 Probe Lane, Newmarket, ON",
+      system: { zones: [{ name: "Zone 1" }] },
+      // The actual signal deriveBookingState's isSeasonWorkCompleted()
+      // reads — written once per completion by the real cascade
+      // (properties.addServiceRecord), independent of any booking link.
+      serviceRecords: [{
+        id: "SR-PORTAL-PROBE-WO",
+        woId: WO_ID_3,
+        projectId: null,
+        woType: "fall_closing",
+        completedAt: fallClosingScheduledFor,
+        techNotes: "",
+        summary: "Fall closing completed",
+        lineItems: [],
+        subtotal: 186, hst: 0, total: 186,
+        warrantyMonths: 12,
+        warrantyExpiresAt: "2027-10-01T15:00:00.000Z",
+        invoiceId: INVOICE_ID_3,
+        promotedPhotoIds: []
+      }]
+    });
+    leads.push({
+      id: LEAD_ID_3,
+      customerId: CUSTOMER_ID_3,
+      propertyId: PROPERTY_ID_3,
+      createdAt: "2025-01-01T12:00:00Z",
+      status: "won",
+      contact: {
+        firstName: "Probe3", lastName: "Customer",
+        email: "portal-probe-wo@example.test", phone: "+19995550102",
+        address: "3 Probe Lane, Newmarket, ON"
+      },
+      portal: { token: PORTAL_TOKEN_3 }
+    });
+    // The booking row NEVER gets touched — status stays "confirmed"
+    // forever, exactly like production. This is the whole point: the
+    // fix must not depend on this row ever changing.
+    bookings.push({
+      id: BOOKING_ID_3,
+      leadId: null,
+      propertyId: PROPERTY_ID_3,
+      scheduledFor: fallClosingScheduledFor,
+      serviceKey: `${outreach.SEASONAL_SERVICE_PREFIXES.fall}4z`,
+      serviceLabel: "Fall closing probe visit (WO path)",
+      status: "confirmed",
+      source: "assignment",
+      assignment: { bucket: "morning" }
+    });
+    workOrders.push({
+      id: WO_ID_3,
+      type: "fall_closing",
+      status: "completed",
+      customerId: CUSTOMER_ID_3,
+      leadId: null,
+      propertyId: PROPERTY_ID_3,
+      completedAt: fallClosingScheduledFor,
+      scheduledFor: fallClosingScheduledFor,
+      createdAt: fallClosingScheduledFor
+    });
+    invoices3.push({
+      id: INVOICE_ID_3,
+      customerId: CUSTOMER_ID_3,
+      customerEmail: "portal-probe-wo@example.test",
+      customerPhone: "+19995550102",
+      woId: WO_ID_3,
+      projectId: null,
+      status: "paid",
+      total: 186,
+      amountPaid: 186,
+      balanceDue: 0,
+      createdAt: fallClosingScheduledFor
+    });
+  }
+
+  fs.writeFileSync(path.join(DATA, "properties.json"), JSON.stringify(props, null, 2));
+  fs.writeFileSync(path.join(DATA, "leads.json"), JSON.stringify(leads, null, 2));
+  fs.writeFileSync(path.join(DATA, "bookings.json"), JSON.stringify(bookings, null, 2));
+  fs.writeFileSync(path.join(DATA, "work-orders.json"), JSON.stringify(workOrders, null, 2));
 
   // PJL-21: an invoice for completed work with NO woId — a normal,
   // supported creation path that used to leave the invoice invisible
   // everywhere on the portal.
-  fs.writeFileSync(path.join(DATA, "invoices.json"), JSON.stringify([{
+  const invoices = [{
     id: ORPHAN_INVOICE_ID,
     customerId: CUSTOMER_ID,
     customerEmail: "portal-probe@example.test",
@@ -223,7 +321,8 @@ function writeFixtures() {
     amountPaid: 2243,
     balanceDue: 0,
     createdAt: "2026-08-20T15:00:00.000Z"
-  }], null, 2));
+  }, ...invoices3];
+  fs.writeFileSync(path.join(DATA, "invoices.json"), JSON.stringify(invoices, null, 2));
 }
 
 writeFixtures();
@@ -338,8 +437,34 @@ try {
       Array.isArray(portal2.bookableProperties)
         && !portal2.bookableProperties.some((p) => p.propertyId === PROPERTY_ID_2 && p.alreadyBooked === true),
       JSON.stringify(portal2.bookableProperties));
+
+    // ---- The real-world shape (Peter Ross, live 2026-10-01): the
+    // booking row NEVER flips to "completed" — only a real Work Order
+    // + property service record prove the visit happened. Before this
+    // fix, deriveBookingState only ever checked the booking's own
+    // status, so this customer's header stayed on "your service is
+    // scheduled" forever while Service History (right below it, same
+    // page) already showed the same visit "Completed," invoiced, and
+    // paid — two disjoint systems of record nothing reconciled.
+    const res3 = await fetch(`http://127.0.0.1:${PORT}/api/portal/${PORTAL_TOKEN_3}`, { cache: "no-store" });
+    const data3 = await res3.json().catch(() => ({}));
+    ok("WO-completed-probe portal fetch succeeds", res3.ok && data3.ok, `${res3.status} ${JSON.stringify(data3).slice(0, 200)}`);
+    const portal3 = data3.portal || {};
+    ok("a completed WO closes the season even though the booking row never changed",
+      portal3.derived?.upcomingBooking === false,
+      JSON.stringify(portal3.derived));
+    ok("derived state is 'season_complete' (WO-path), not stuck on 'service_scheduled'",
+      portal3.derived?.state === "season_complete",
+      JSON.stringify(portal3.derived));
+    ok("the Next Visit card hides (WO-path)",
+      portal3.nextVisit === null || portal3.nextVisit === undefined,
+      JSON.stringify(portal3.nextVisit));
+    const history3 = Array.isArray(portal3.serviceHistory) ? portal3.serviceHistory : [];
+    ok("...and Service History still shows the same completed, invoiced visit (nothing regressed)",
+      history3.some((h) => h.id === WO_ID_3 && h.status === "completed"),
+      JSON.stringify(history3).slice(0, 300));
   } else {
-    console.log("• test-portal-status-history: no past date in the fall window yet this year — skipping the PJL-31 completed-fall-closing scenario.");
+    console.log("• test-portal-status-history: no past date in the fall window yet this year — skipping the PJL-31/PJL-107 completed-fall-closing scenarios.");
   }
 } finally {
   child.kill("SIGKILL");

@@ -21,6 +21,18 @@
 // qty / unit. Two suppliers receiving the same shopped list cannot tell
 // from it that anyone else was asked.
 //
+// QUANTITY RULE (2026-10-02). An RFQ asks for what is still to BUY when it
+// is raised: the line's quantity less what already arrived and what is
+// already on order (purchase-orders stillToOrder, drafts NOT counted — a
+// draft PO's parts may be exactly what the office wants priced). A line
+// fully covered is not asked about. The quantity on an RFQ is a question
+// for the supplier and nothing else: no RFQ quantity ever becomes a PO
+// quantity. Comparing quotes ranks unit prices; applying the cheapest
+// writes unit prices into the catalog; a PO is only ever generated from
+// the material list, with the quantity recalculated by stillToOrder at
+// that moment. So an RFQ raised for 10, answered after 6 arrived, still
+// leads to an order for 4.
+//
 // CORE DESIGN RULE: generating / sending / cancelling an RFQ NEVER
 // changes material-list line status. Lines stay "need" the whole time —
 // an RFQ is a question, not a commitment. Only a PO (purchase-orders.js)
@@ -353,12 +365,16 @@ function planFromMaterialList(list, partsMap, opts = {}) {
     : [];
   const shop = shopIds.length > 0;
 
+  // opts.committed — purchase-orders commitmentsByListLine() for this list.
+  const ask = (line) => opts.committed
+    ? require("./purchase-orders").stillToOrder(line, opts.committed, { includeDrafts: false })
+    : Math.max(1, Math.floor(Number(line.qty) || 1));
   const lineFor = (line) => {
     const part = partsMap && partsMap[line.sku];
     return {
       sku: line.sku,
       description: resolveLineDescription(line, partsMap),
-      quantity: Math.max(1, Math.floor(Number(line.qty) || 1)),
+      quantity: ask(line),
       unit: (part && typeof part.unit === "string" && part.unit.trim()) ? part.unit.trim() : "each",
       quotedPriceCents: null
     };
@@ -372,7 +388,7 @@ function planFromMaterialList(list, partsMap, opts = {}) {
     const seen = new Set();
     const lines = [];
     for (const line of list.lineItems) {
-      if (line.status !== "need") continue;
+      if (line.status !== "need" || ask(line) <= 0) continue;
       lines.push(lineFor(line));
       seen.add(line.sku);
     }
@@ -391,7 +407,7 @@ function planFromMaterialList(list, partsMap, opts = {}) {
   const missingSupplier = new Set();
   const missingSupplierLines = [];
   for (const line of list.lineItems) {
-    if (line.status !== "need") continue;
+    if (line.status !== "need" || ask(line) <= 0) continue;
     const part = partsMap && partsMap[line.sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!supplierIds.length) {

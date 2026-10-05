@@ -1999,6 +1999,7 @@ async function auditMissingCustomerName() {
 }
 
 module.exports = {
+  normalizeAddress,
   removeZone: withStoreLock(removeZone),
   ZONE_REMOVAL_REASONS,
   attachLead: withStoreLock(attachLead),

@@ -302,5 +302,15 @@ process.exit(fail ? 1 : 0);
   assert.equal((SRC.match(/photoQuality\.apply\(/g) || []).length, 1, 'exactly one apply call site');
   assert.match(SRC, /photoQuality\.apply\(\{ by, hashes: Array\.isArray\(payload && payload\.hashes\)/, 'apply passes only the confirmed list');
   assert.equal((SRC.match(/photoQuality\.buildPlan\(/g) || []).length, 1, 'the plan is built only from its admin route');
+  // Held row confirmed by eye (Oct 2 2026): one call site, inside the
+  // admin-gated review route, and it passes the hash the card showed.
+  assert.equal((SRC.match(/photoQuality\.restoreHeld\(/g) || []).length, 1, 'exactly one restoreHeld call site');
+  {
+    const at = SRC.indexOf('const qualityReviewMatch = pathname.match');
+    const body = SRC.slice(at, SRC.indexOf('photoQuality.restoreHeld(', at));
+    assert.ok(at > 0 && body.length < 1500, 'restoreHeld lives in the quality review route');
+    assert.match(body, /requireAdmin\(req\)/, 'restore-held requires admin');
+    assert.match(SRC, /photoQuality\.restoreHeld\(groupId, \{ by, hash: String\(payload\.hash \|\| ""\) \}\)/, 'restore-held passes the confirmed hash');
+  }
   passed++;
 }
