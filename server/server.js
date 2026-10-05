@@ -42,6 +42,7 @@ const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+const woPhotoEdits = require("./lib/wo-photo-edits");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendPaymentExceptionAlert, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
@@ -1719,7 +1720,19 @@ async function handleAuth(req, res, pathname) {
     } else if (session.role === "customer") {
       me = { id: session.uid, role: "customer" };
     }
-    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1 } });
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: {
+      photoRetry: 1, photoEdit: 1, ownerCheck: 1, photoMarkup: 1,
+      // Shrinking photos on the phone before upload (PJL-112) has its own
+      // switch, OFF unless FIELD_PHOTO_SHRINK is set on the server: it is
+      // turned on after the device check on Patrick's phone, and off again
+      // with no app update if it misbehaves. Markup does not depend on it.
+      //   1        shrink every photo before it queues
+      //   compare  the device check: each shot uploads BOTH its untouched
+      //            original and the shrunk copy (labelled "Shrink test"),
+      //            so the two can be compared and their real sizes read off
+      //            the work order. Use on a test visit only.
+      photoShrink: process.env.FIELD_PHOTO_SHRINK === "1" ? 1 : process.env.FIELD_PHOTO_SHRINK === "compare" ? 2 : 0
+    } });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -2902,8 +2915,28 @@ async function readWorkOrderPhotoFile(woId, n) {
   return null;
 }
 
+// Photos that left a work order also leave the findings it copied to the
+// property, which list their photos by number (PJL-110/112).
+async function dropFromDeferred(propertyId, woId, ns) {
+  try {
+    for (const d of await properties.listDeferred(propertyId)) {
+      if (d.fromWoId !== woId) continue;
+      let ids = d.photoIds;
+      for (const n of ns) ids = woPhotoEdits.photoIdsWithout({ photoIds: ids }, n) || ids;
+      if (ids.length !== (d.photoIds || []).length) await properties.updateDeferredIssue(propertyId, d.id, { photoIds: ids });
+    }
+  } catch (err) { console.warn("[wo-photo] deferred photo cleanup failed:", err?.message); }
+}
+
 async function deleteWorkOrderPhotoFile(woId, n) {
   const dir = path.join(WO_PHOTOS_DIR, woId);
+  // The report's downscaled copies (<n>@<edge>.jpeg, lib/wo-report-pdf.js)
+  // go with the original: a deleted photo is deleted (PJL-110).
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith(`${n}@`)) await fs.unlink(path.join(dir, name)).catch(() => {});
+    }
+  } catch {}
   for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
     const file = path.join(dir, `${n}.${ext}`);
     try { await fs.unlink(file); return true; } catch {}
@@ -18047,13 +18080,13 @@ async function handleApi(req, res, pathname) {
                 if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
               } catch (_) {}
             }
-            const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+            const baseN = woPhotoEdits.nextBaseN(fresh);
             const now = new Date().toISOString();
             const newMeta = await savePhotosForWorkOrder(woId, validated, now, baseN, {
               propertyCode,
               woCode: wo.id
             });
-            await workOrders.update(woId, { photos: [...existing, ...newMeta] });
+            await workOrders.update(woId, { photos: [...existing, ...newMeta] }, { photoOnly: true });
             photoMetas.push(...newMeta);
           } catch (photoErr) {
             console.warn("[tasks-done photos] upload failed:", photoErr?.message);
@@ -22055,7 +22088,9 @@ async function handleApi(req, res, pathname) {
         return Boolean(payload.signature && payload.status === "completed" && keys.every((k) => SIGN_AND_COMPLETE.has(k)));
       })();
       const versionCheck = ifMatch && !versionExempt ? ifMatch : null;
-      if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
+      // workOrders.versionMatches: the one If-Match rule (PJL-113) — a photo
+      // or history write since the client's read is not a clash.
+      if (!workOrders.versionMatches(existing, ifMatch, payload)) {
         const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
         const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
         // Merged "Sign, lock & generate invoice" tap (Phase 2 cascade
@@ -22675,9 +22710,29 @@ async function handleApi(req, res, pathname) {
       // field uploads can be straight-from-camera HEIC or customer PDFs.
       const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
-      const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+      let freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing, wo.removedPhotos);
+      // A marked-up photo names its original (PJL-112, lib/wo-photo-edits.js
+      // resolveMarkupOf). Its original deleted meanwhile: the markup is
+      // dropped with a tombstone, so neither comes back.
+      const links = [];
+      const droppedMarkups = [];
+      if (Array.isArray(freshPhotos)) {
+        const keep = [];
+        for (const p of freshPhotos) {
+          if (p?.markupOf == null) { keep.push(p); links.push(null); continue; }
+          const link = woPhotoEdits.resolveMarkupOf(wo, p.markupOf);
+          if (link.error) return sendJson(res, 422, { ok: false, error: "markup_original_missing", errors: [link.error] });
+          if (link.dropped) { droppedMarkups.push(p.clientUploadId || null); continue; }
+          keep.push(p); links.push(link.original);
+        }
+        freshPhotos = keep;
+      }
       if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
-        return sendJson(res, 200, { ok: true, workOrder: wo, added: [] });
+        const tombstones = droppedMarkups.filter(Boolean).map((cid) => ({ n: null, clientUploadId: cid, removedAt: new Date().toISOString(), by: "tech" }));
+        const after = tombstones.length
+          ? await workOrders.update(id, { removedPhotos: [...(wo.removedPhotos || []), ...tombstones] }, { photoBookkeeping: true, photoOnly: true })
+          : wo;
+        return sendJson(res, 200, { ok: true, workOrder: after, added: [] });
       }
       const remaining = MAX_PHOTOS_PER_WO - existing.length;
       if (remaining <= 0) {
@@ -22686,6 +22741,20 @@ async function handleApi(req, res, pathname) {
       let validated;
       try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
+      // A markup is filed where its original is: same zone, finding,
+      // category and label, taken from the server's copy, not the phone's.
+      validated.forEach((v, i) => {
+        const original = links[i];
+        if (!original) return;
+        Object.assign(v.meta, {
+          markupOf: Number(original.n),
+          markupOfUpload: original.clientUploadId || null,
+          zoneNumber: original.zoneNumber ?? null,
+          issueId: original.issueId || null,
+          category: original.category || v.meta.category,
+          label: original.label || ""
+        });
+      });
 
       // Resolve the property code for the descriptive filename slug. When
       // the WO has a linked property, we use its P-YYYY-NNNN; otherwise
@@ -22698,13 +22767,38 @@ async function handleApi(req, res, pathname) {
         } catch (_err) {}
       }
 
-      const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+      // Never a deleted photo's number (PJL-110): signed links and the
+      // report's cached derivative are keyed by it.
+      const baseN = woPhotoEdits.nextBaseN(wo);
       const now = new Date().toISOString();
       const newMeta = await savePhotosForWorkOrder(id, validated, now, baseN, {
         propertyCode,
         woCode: wo.id
       });
-      const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
+      let photosNow = [...existing, ...newMeta];
+      let removedNow = wo.removedPhotos || [];
+      // One live markup per original (D-B2): a new one replaces the old,
+      // which is deleted like any photo (file, tombstone, history).
+      const replaced = [];
+      for (const m of newMeta.filter((x) => x.markupOf != null)) {
+        const original = photosNow.find((p) => Number(p.n) === Number(m.markupOf));
+        for (const old of woPhotoEdits.markupsOf(photosNow, original).filter((x) => x !== m && !newMeta.includes(x))) {
+          await deleteWorkOrderPhotoFile(id, Number(old.n));
+          photosNow = photosNow.filter((p) => p !== old);
+          removedNow = [...removedNow, { n: Number(old.n), clientUploadId: old.clientUploadId || null, removedAt: now, by: "tech" }];
+          replaced.push({ old: old.n, by: m.n, of: m.markupOf });
+        }
+      }
+      const updated = await workOrders.update(id, { photos: photosNow, ...(replaced.length ? { removedPhotos: removedNow } : {}) },
+        { photoOnly: true, photoBookkeeping: replaced.length > 0 });
+      if (replaced.length && wo.propertyId) await dropFromDeferred(wo.propertyId, id, replaced.map((r) => Number(r.old)));
+      for (const m of newMeta.filter((x) => x.markupOf != null)) {
+        const r = replaced.filter((x) => x.by === m.n).map((x) => `#${x.old}`);
+        try {
+          await workOrders.appendHistory(id, { action: "photo_markup", by: "tech",
+            note: `Marked up photo #${m.markupOf} as #${m.n}${r.length ? `, replacing markup ${r.join(", ")}` : ""}` });
+        } catch (err) { console.warn("[wo-history] photo markup entry failed:", err?.message); }
+      }
       // Audit trail per Brief A — one entry per upload batch (not per file)
       // so a 5-photo upload doesn't spam the history viewer. Photos are
       // not scope-protected so this entry stands even on locked WOs.
@@ -22723,35 +22817,76 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // DELETE /api/work-orders/:id/photos/:n — remove a single photo by n.
-  const woPhotoDeleteMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos\/(\d+)$/);
-  if (woPhotoDeleteMatch && req.method === "DELETE") {
+  // DELETE /api/work-orders/:id/photos/:n — delete one photo, for good.
+  // PATCH  /api/work-orders/:id/photos/:n — re-file it: { zoneNumber }
+  //        (a zone on this visit, or null for the whole visit).
+  // Both also answer at /photos/upload/:clientUploadId, for the phone: it
+  // may not know `n` yet when the upload's response was lost (PJL-110/111).
+  //
+  // Under the same per-WO photo lock as uploads: a delete racing an upload
+  // used to write back a photo list read before the other's write —
+  // resurrecting the deleted photo (fall-closing #1 round 2).
+  //
+  // The rules live in lib/wo-photo-edits.js. Allowed at any point in the
+  // visit, before or after Finish (Patrick, D-A2, 2026-10-04). Idempotent:
+  // a photo that is already gone answers 200 { alreadyRemoved: true }, so
+  // the phone's queued retry acknowledges instead of stalling.
+  const woPhotoEditMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos\/(?:(\d+)|upload\/(field-[a-zA-Z0-9-]{1,100}))$/);
+  if (woPhotoEditMatch && (req.method === "DELETE" || req.method === "PATCH")) {
     try {
-      const id = decodeURIComponent(woPhotoDeleteMatch[1]);
-      const n = Number(woPhotoDeleteMatch[2]);
-      // Under the same per-WO photo lock as uploads: a delete racing an
-      // upload used to write back a photo list read before the other's
-      // write — resurrecting the deleted photo (fall-closing #1 round 2).
+      const id = decodeURIComponent(woPhotoEditMatch[1]);
+      const ref = woPhotoEditMatch[2] != null ? { n: Number(woPhotoEditMatch[2]) } : { clientUploadId: woPhotoEditMatch[3] };
+      const payload = req.method === "PATCH" ? await parseRequestBody(req) : null;
+      const by = await actorLabel(req);
       return await fieldPhotoUploads.run(id, async () => {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      const existing = Array.isArray(wo.photos) ? wo.photos : [];
-      const photoMeta = existing.find((p) => Number(p.n) === n);
-      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
-      await deleteWorkOrderPhotoFile(id, n);
-      const nextPhotos = existing.filter((p) => Number(p.n) !== n);
-      const updated = await workOrders.update(id, { photos: nextPhotos });
+
+      if (req.method === "DELETE") {
+        const r = woPhotoEdits.removePhoto(wo, ref, { by });
+        if (!r.photo) {
+          // Nothing to delete. A tombstone for an upload that never landed
+          // is still written, so it cannot land afterwards.
+          const updated = r.removedPhotos.length !== (wo.removedPhotos || []).length
+            ? await workOrders.update(id, { removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true })
+            : wo;
+          return sendJson(res, 200, { ok: true, workOrder: updated, alreadyRemoved: true });
+        }
+        const n = Number(r.photo.n);
+        // The photo, and its markups with it (PJL-112).
+        for (const g of r.removed) await deleteWorkOrderPhotoFile(id, Number(g.n));
+        const updated = await workOrders.update(id, { photos: r.photos, removedPhotos: r.removedPhotos }, { photoBookkeeping: true, photoOnly: true });
+        // A finding copied to the property lists its photos by number; the
+        // property must not keep pointing at a photo that no longer exists.
+        if (wo.propertyId) await dropFromDeferred(wo.propertyId, id, r.removed.map((g) => Number(g.n)));
+        try {
+          await workOrders.appendHistory(id, { action: "photo_delete", by, note: r.note });
+        } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
+        return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+      }
+
+      if (!payload || !Object.prototype.hasOwnProperty.call(payload, "zoneNumber")) {
+        return sendJson(res, 422, { ok: false, error: "zone_required", errors: ["Say which zone to move the photo to."] });
+      }
+      const m = woPhotoEdits.movePhoto(wo, ref, payload.zoneNumber);
+      if (m.alreadyRemoved) return sendJson(res, 200, { ok: true, workOrder: wo, alreadyRemoved: true });
+      if (m.error) return sendJson(res, m.error === "photo_not_found" ? 404 : 422, { ok: false, error: m.error, errors: [m.message] });
+      if (m.unchanged) return sendJson(res, 200, { ok: true, workOrder: wo, moved: { n: Number(m.photo.n), from: m.from, to: m.to }, unchanged: true });
+      const updated = await workOrders.update(id, { photos: m.photos }, { photoOnly: true });
+      if (m.detached?.deferredId && wo.propertyId) {
+        try {
+          const entry = (await properties.listDeferred(wo.propertyId)).find((d) => d.id === m.detached.deferredId);
+          const kept = woPhotoEdits.photoIdsWithout(entry, m.photo.n);
+          if (kept) await properties.updateDeferredIssue(wo.propertyId, entry.id, { photoIds: kept });
+        } catch (err) { console.warn("[wo-photo] deferred photo detach failed:", err?.message); }
+      }
       try {
-        await workOrders.appendHistory(id, {
-          action: "photo_delete",
-          by: await actorLabel(req),
-          note: `Removed photo #${n} (${photoMeta.category || "general"})`
-        });
-      } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
-      return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+        await workOrders.appendHistory(id, { action: "photo_move", by, note: m.note });
+      } catch (err) { console.warn("[wo-history] photo move entry failed:", err?.message); }
+      return sendJson(res, 200, { ok: true, workOrder: updated, moved: { n: Number(m.photo.n), from: m.from, to: m.to }, detached: m.detached });
       });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't change the photo."] });
     }
   }
 
@@ -23662,7 +23797,8 @@ async function handleApi(req, res, pathname) {
             }
             // Photos attached to this issue ride into the deferred entry
             // by reference (the WO is still the photo source-of-truth).
-            const photoIds = (wo.photos || [])
+            // The photos the customer sees (PJL-112 customerPhotos).
+            const photoIds = woPhotoEdits.customerPhotos(wo.photos)
               .filter((p) => issueId && p.issueId === issueId)
               .map((p) => Number(p.n))
               .filter(Number.isFinite);
@@ -23865,7 +24001,8 @@ async function handleApi(req, res, pathname) {
                 if (found) { originalType = found.type; originalNotes = found.notes || originalNotes; break; }
               }
             }
-            const photoIds = (wo.photos || [])
+            // The photos the customer sees (PJL-112 customerPhotos).
+            const photoIds = woPhotoEdits.customerPhotos(wo.photos)
               .filter((p) => issueId && p.issueId === issueId)
               .map((p) => Number(p.n))
               .filter(Number.isFinite);
@@ -30229,6 +30366,16 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
         }
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      // A field phone names the account its queued work was recorded under
+      // (x-pjl-field-owner, pjl-field/src/offline/transport.mjs). A session
+      // that is another account must not take that work: it would land
+      // under the wrong tech. Checked here, on the request itself, so the
+      // phone no longer reads /api/session before every change (PJL-113).
+      const fieldOwner = req.headers["x-pjl-field-owner"];
+      if (fieldOwner && String(fieldOwner) !== String(session.uid)) {
+        return sendJson(res, 403, { ok: false, error: "owner_mismatch", errors: ["Sign in with the account that recorded this work."] });
       }
 
       // Admin action log. This gate is the ONE place every guarded request

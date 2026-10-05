@@ -1,41 +1,32 @@
 import { AppState } from 'react-native';
 import { HOST, AuthRequiredError, withClientVersion } from '../api';
 import { createQueue } from './queue.mjs';
+import { classify, createRequest, createTransport } from './transport.mjs';
 import { readLocal, writeLocal, storeForOwner } from './storage';
 
 const queues = new Map();
 const woKey = id => `wo:${id}`;
-const recordPath = key => key.startsWith('prop:')
-  ? `/api/properties/${encodeURIComponent(key.slice(5))}`
-  : `/api/work-orders/${encodeURIComponent(key.slice(3))}`;
-async function request(path, { method = 'GET', body, version, timeout = 15000 } = {}) {
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeout);
-  try {
-    const response = await fetch(HOST + path, {
-      method, credentials: 'include', cache: 'no-store', signal: abort.signal,
-      headers: withClientVersion({ accept: 'application/json', 'content-type': 'application/json', ...(version ? { 'if-match': version } : {}) }),
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    if (response.status === 401 || response.status === 403) throw Object.assign(new AuthRequiredError(), { code: 'auth' });
-    const text = await response.text();
-    let data;
-    try { data = JSON.parse(text); } catch { throw Object.assign(new AuthRequiredError(), { code: 'auth' }); }
-    if (!response.ok || data.ok === false) throw Object.assign(new Error(data.errors?.[0] || 'The server refused this change.'), {
-      status: response.status, code: data.error || data.code || 'server', gateFailures: data.gateFailures,
-    });
-    return data;
-  } catch (error) {
-    if (error.name === 'AbortError') throw Object.assign(new Error('Waiting for a connection. Your recorded work stays on this phone.'), { code: 'network' });
-    throw error;
-  } finally { clearTimeout(timer); }
-}
+// The app's requests: offline/transport.mjs, with this app's host, header
+// and sign-in error. A queue's own requests also name its account.
+const requestFor = owner => createRequest({
+  host: HOST, fetchImpl: (...args) => fetch(...args), headers: withClientVersion, AuthRequiredError, owner: () => owner,
+});
+const request = requestFor(null);
 async function sessionOwner() {
   const s = await request('/api/session');
   if (!s.authenticated || !s.user?.id || !['admin', 'tech'].includes(s.role)) {
     throw Object.assign(new AuthRequiredError(), { code: 'auth' });
   }
+  // What the server supports and has switched on, kept for offline use
+  // (fieldFeatures).
+  try { writeLocal('field-features', s.fieldOffline || {}); } catch {}
   return s.user.id;
+}
+// The server's switches as last heard (PJL-112): `photoShrink` turns on
+// shrinking photos on the phone, `photoMarkup` says markups can be
+// uploaded. Off when never heard.
+export function fieldFeatures() {
+  try { return readLocal('field-features') || {}; } catch { return {}; }
 }
 async function owner() {
   try {
@@ -43,9 +34,9 @@ async function owner() {
     writeLocal('last-owner', id);
     return id;
   } catch (error) {
-    if (error.code || error.status) {
-      if (error.code !== 'network') throw error;
-    }
+    // Only a sign-in answer is final; no signal, or a server restarting,
+    // falls back to the account this phone last recorded work under.
+    if (classify(error) === 'auth') throw error;
     const last = readLocal('last-owner');
     if (last) return last;
     throw error;
@@ -53,34 +44,7 @@ async function owner() {
 }
 function forOwner(id) {
   if (!queues.has(id)) {
-    const transport = {
-      verifyOwner: async () => (await sessionOwner()) === id,
-      read: async key => {
-        const data = await request(recordPath(key));
-        if (key.startsWith('prop:')) return data.property;
-        return { ...data.workOrder, property: data.property || null, lead: data.lead || null };
-      },
-      patch: async (key, patch, version) => {
-        if ((await sessionOwner()) !== id) throw Object.assign(new AuthRequiredError(), { code: 'auth' });
-        const data = await request(recordPath(key), { method: 'PATCH', body: patch, version });
-        if (key.startsWith('prop:')) return data.property;
-        const prior = queues.get(id).view(key);
-        return { ...data.workOrder, property: prior?.property || null, lead: prior?.lead || null };
-      },
-      photo: async (key, payload) => {
-        const session = await request('/api/session');
-        if (!session.authenticated || session.user?.id !== id) throw Object.assign(new AuthRequiredError(), { code: 'auth' });
-        if (session.fieldOffline?.photoRetry !== 1) throw Object.assign(new Error('The server needs the field photo update. Your photo is retained on this phone.'), { code: 'server_update' });
-        const data = await request(`/api/work-orders/${encodeURIComponent(key.slice(3))}/photos`, { method: 'POST', body: { photos: [payload] }, timeout: 90000 });
-        // A server without retry support must not silently acknowledge this
-        // photo. Deploy the server change before installing the new app.
-        if (!data.workOrder?.photos?.some(p => p.clientUploadId === payload.clientUploadId)) {
-          throw Object.assign(new Error('The server needs the field photo update. Your photo is retained on this phone.'), { code: 'server_update' });
-        }
-        const prior = queues.get(id).view(key);
-        return { ...data.workOrder, property: prior?.property || null, lead: prior?.lead || null };
-      },
-    };
+    const transport = createTransport({ request: requestFor(id), account: id, view: key => queues.get(id).view(key), AuthRequiredError });
     queues.set(id, createQueue({ store: storeForOwner(id), transport }));
   }
   return queues.get(id);
@@ -94,7 +58,8 @@ export async function openFieldWorkOrder(id) {
     if (data.property?.id) queue.seed(`prop:${data.property.id}`, data.property);
     queue.seed(key, { ...data.workOrder, property: data.property || null, lead: data.lead || null });
   } catch (error) {
-    if (error.code === 'auth' || error.status || !queue.view(key)) throw error;
+    // No signal or a server restart opens the phone's own copy.
+    if (classify(error) !== 'transient' || !queue.view(key)) throw error;
   }
   queue.draft('device', 'openWorkOrder', { id });
   return { queue, key, account, workOrder: queue.view(key) };
@@ -119,16 +84,30 @@ export async function fieldDay(date) {
     return data;
   } catch (error) {
     const cached = readLocal(key);
-    if (error.code === 'auth' || error.status || !cached) throw error;
+    if (classify(error) !== 'transient' || !cached) throw error;
     return { ...cached, offline: true };
   }
 }
+// Keeps the queue sending while the app is open. After a failed pass the
+// queue's own backoff decides the next try (2 s rising to 28 s), so a lost
+// signal or a server restart recovers within 30 s of coming back, with no
+// tap and no Finish (PJL-113). With nothing to send it looks again every
+// 15 s; a pass with nothing pending sends no request at all.
 export function watchFieldQueue(queue) {
-  const retry = () => { if (AppState.currentState === 'active') queue.flush().catch(() => {}); };
-  const timer = setInterval(retry, 15000);
+  let timer = null, stopped = false;
+  const schedule = () => {
+    clearTimeout(timer);
+    if (stopped) return;
+    const delay = queue.nextDelay ? queue.nextDelay() : null;
+    timer = setTimeout(retry, delay == null ? 15000 : delay);
+  };
+  const retry = () => {
+    if (AppState.currentState !== 'active') { schedule(); return; }
+    queue.flush().catch(() => {}).finally(schedule);
+  };
   const subscription = AppState.addEventListener('change', state => { if (state === 'active') retry(); });
   retry();
-  return () => { clearInterval(timer); subscription.remove(); };
+  return () => { stopped = true; clearTimeout(timer); subscription.remove(); };
 }
 export function startFieldSync() {
   let cancelled = false, stop;
@@ -178,7 +157,15 @@ export async function removeZoneFromProperty(queue, key, { number, reason = '', 
       : `Zone ${number} is off this visit. The property record couldn't be updated from here — it's noted on the work order for the office.` };
   }
 }
-export async function flushBeforeFinish(queue, key) {
+// What is left to send for this visit and its property, for Finish's
+// progress line (sync-notice.js finishProgressText).
+export function fieldProgress(queue, key) {
+  const propertyId = queue.view(key)?.property?.id;
+  return queue.progress ? queue.progress(key, ...(propertyId ? [`prop:${propertyId}`] : [])) : null;
+}
+// `onProgress` hears what is left as it drains, so Finish never shows a
+// bare spinner (PJL-113).
+export async function flushBeforeFinish(queue, key, onProgress) {
   if (queue.status(key).drafts) throw new Error('There are zone drafts on this phone. Open those zones and record their assessment before signing off.');
   // A draft on a zone that has left the visit (the office removed it) can
   // never be opened again: its text goes to the office, and it stops
@@ -187,7 +174,10 @@ export async function flushBeforeFinish(queue, key) {
   appendTechNote(queue, key, stale.map(name =>
     `• Zone ${name.slice(5)} is no longer on this visit, so its unrecorded draft was not applied: ${draftText(queue.getDraft(key, name))}.`),
   { clearDrafts: stale });
-  await queue.flush({ retry: true });
+  const report = () => { if (onProgress) { try { onProgress(fieldProgress(queue, key)); } catch {} } };
+  const unsubscribe = queue.subscribe(report);
+  report();
+  try { await queue.flush({ retry: true }); } finally { unsubscribe(); }
   const state = queue.status(key);
   // The code travels with the message so Finish can offer the way out of a
   // conflict (keep mine / use office's) instead of a dead end.
@@ -221,6 +211,26 @@ export function fieldStatus(queue, key) {
   const id = queue.view(key)?.property?.id;
   const property = id ? queue.status(`prop:${id}`) : null;
   return { ...visit, pending: visit.pending + (property?.pending || 0), error: visit.error || property?.error || null };
+}
+// A photo as a data URL, for the markup editor (PJL-112): the bytes still
+// on the phone, or the server's copy (which needs signal).
+export async function photoDataUrl(queue, woId, photo) {
+  if (photo.pending) {
+    const payload = queue.photoPayload(photo.clientUploadId);
+    if (!payload) throw new Error('The photo on this phone cannot be read.');
+    return `data:${payload.mediaType};base64,${payload.data}`;
+  }
+  const response = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(woId)}/photo/${encodeURIComponent(photo.n)}`, {
+    credentials: 'include', headers: withClientVersion({}),
+  }).catch(() => null);
+  if (!response?.ok) throw new Error('Connect to load this photo for marking up.');
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('The photo could not be read.'));
+    reader.readAsDataURL(blob);
+  });
 }
 export function pendingPhotoUri(queue, photo) {
   if (!photo.pending) return null;

@@ -26,8 +26,11 @@ import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
-import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts, removeZoneFromProperty } from '../offline/field';
+import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts, removeZoneFromProperty, fieldFeatures, photoDataUrl } from '../offline/field';
+import PhotoShrinker from '../PhotoShrinker';
+import PhotoMarkup from './closing/PhotoMarkup';
 import { syncNoticeFor } from '../sync-notice';
+import { finishProgressText } from '../sync-notice';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -63,6 +66,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     try {
       const context = await openFieldWorkOrder(workOrderId);
       field.current = context;
+      setFeatures(fieldFeatures());
       setFieldContext(context);
       setWo(context.workOrder);
       setState('ready');
@@ -120,12 +124,78 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   }, []);
   const getDraft = useCallback(name => field.current?.queue.getDraft(field.current.key, name), []);
   const clearDraft = useCallback(name => field.current.queue.clearDraft(field.current.key, name), []);
+  // Shrinking on the phone, only while the server's photoShrink switch is
+  // on (PJL-112): PhotoShrinker hands up its function once its page is
+  // ready. Anything short of a smaller photo, and the original goes up.
+  const [features, setFeatures] = useState({});
+  const shrinkRef = useRef(null);
+  const onShrinkerReady = useCallback(fn => { shrinkRef.current = fn; }, []);
+  const shrinkOn = features.photoShrink === 1 || features.photoShrink === 2;
+  // The device check (FIELD_PHOTO_SHRINK=compare): the original AND the
+  // shrunk copy both go up, so they can be compared side by side.
+  const shrinkCompare = features.photoShrink === 2;
+  const photoOptions = { shrink: shrinkOn };
+  // The photo just taken, for its "Mark up this photo" button (D-B3).
+  const [justTaken, setJustTaken] = useState(null);
   const attachPhoto = useCallback(async photo => {
     const { queue, key } = field.current;
-    queue.photo(key, photo);
+    const ready = shrinkOn && shrinkRef.current ? await shrinkRef.current(photo) : photo;
+    const before = new Set((queue.view(key)?.photos || []).map(p => p.clientUploadId));
+    // The original is never changed: in the device check it goes up as
+    // taken, and the shrunk copy goes up beside it as its own photo.
+    queue.photo(key, shrinkCompare ? photo : ready);
+    const added = (queue.view(key)?.photos || []).find(p => p.pending && !before.has(p.clientUploadId));
+    if (shrinkCompare && ready !== photo) {
+      queue.photo(key, { ...ready, label: `Shrink test${photo.label ? ` (${photo.label})` : ''}` });
+    }
+    setJustTaken(added?.clientUploadId || null);
     queue.flush().catch(() => {});
-  }, []);
+  }, [shrinkOn, shrinkCompare]);
+  // Marking up (PJL-112): the editor opens on the original, and Done
+  // queues the marked-up copy, linked to it. Nothing changes until Done.
+  const [markupFor, setMarkupFor] = useState(null);
+  const [markupSource, setMarkupSource] = useState(null);
+  const markupPhoto = useCallback(original => {
+    const { queue, key } = field.current;
+    setMarkupSource(null);
+    setMarkupFor(original);
+    photoDataUrl(queue, queue.view(key)?.id || workOrderId, original)
+      .then(setMarkupSource)
+      .catch(err => { setMarkupFor(null); Alert.alert("Couldn't open the photo", err?.message || 'Try again.'); });
+  }, [workOrderId]);
+  const saveMarkup = useCallback(base64 => {
+    try {
+      const { queue, key } = field.current;
+      queue.markup(key, markupFor, { data: base64, mediaType: 'image/jpeg' });
+      setJustTaken(null);
+      queue.flush().catch(() => {});
+    } catch (err) {
+      Alert.alert("Couldn't save the markup", err?.message || 'Try again.');
+    } finally {
+      setMarkupFor(null);
+    }
+  }, [markupFor]);
   const photoUri = photo => pendingPhotoUri(field.current.queue, photo);
+  // Delete or re-file a photo (PJL-110/111): recorded on the phone first,
+  // like every field action, then synced.
+  const deletePhoto = useCallback(photo => {
+    try {
+      const { queue, key } = field.current;
+      queue.deletePhoto(key, photo);
+      queue.flush().catch(() => {});
+    } catch (err) {
+      Alert.alert("Couldn't delete the photo", err?.message || 'Try again.');
+    }
+  }, []);
+  const movePhoto = useCallback((photo, zoneNumber) => {
+    try {
+      const { queue, key } = field.current;
+      queue.movePhoto(key, photo, zoneNumber);
+      queue.flush().catch(() => {});
+    } catch (err) {
+      Alert.alert("Couldn't move the photo", err?.message || 'Try again.');
+    }
+  }, []);
 
   // The system facts on the arrival screen belong to the PROPERTY, not to
   // this visit — which is why correcting one on a driveway in October is
@@ -232,12 +302,14 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   // completed from the desk; the reverse would leave a completed visit
   // with no record of how it was accepted.
   const [finishing, setFinishing] = useState(false);
+  const [finishText, setFinishText] = useState(null);
   const finishSignOff = useCallback(async (result) => {
     setFinishing(true);
     try {
       const { queue, key } = field.current;
       queue.draft(key, 'signoff', result);
-      await flushBeforeFinish(queue, key);
+      await flushBeforeFinish(queue, key, p => setFinishText(finishProgressText(p)));
+      setFinishText('Finishing…');
       // The server's copy decides where this Finish picks up. A previous
       // tap may have completed the job and lost only its response
       // (fall-closing fix #4): then the job is done, and re-sending the
@@ -324,6 +396,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       }
     } finally {
       setFinishing(false);
+      setFinishText(null);
     }
   }, [workOrderId, wo, onFinished, findings, resolveConflicts]);
 
@@ -390,7 +463,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   // The property half of Remove zone (PJL-98): the visit is already saved.
   const removeZoneOnProperty = (number, why) =>
     removeZoneFromProperty(field.current.queue, field.current.key, { number, ...why }, removePropertyZone);
-  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty };
+  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, markupPhoto, justTaken, photoOptions, removeZoneOnProperty };
   // Only a failed upload or a conflict, never the second a tap spends uploading.
   const notice = syncNoticeFor(syncState);
 
@@ -476,9 +549,11 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         ) : stage === 'closeout' ? (
           <CloseOutStage {...shared} blockers={blockers} onFinish={toSignOff} />
         ) : (
-          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} onStrokeChange={setSigning} />
+          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} busyLabel={finishText} onStrokeChange={setSigning} />
         )}
       </ScrollView>
+      <PhotoMarkup visible={!!markupFor} source={markupSource} onSave={saveMarkup} onCancel={() => setMarkupFor(null)} />
+      {shrinkOn ? <PhotoShrinker onReady={onShrinkerReady} /> : null}
     </View>
   );
 }

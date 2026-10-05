@@ -138,7 +138,7 @@ check('the write goes to the property record, not the work order', () => {
   assert.match(block, /const key = `prop:\$\{propertyId\}`;/,
     'the facts are written onto the visit, and die with it');
   assert.match(block, /queue\.patch\(key, \{ system:/);
-  assert.match(read('pjl-field/src/offline/field.js'), /\/api\/properties\/\$\{encodeURIComponent\(key\.slice\(5\)\)\}/);
+  assert.match(read('pjl-field/src/offline/transport.mjs'), /\/api\/properties\/\$\{encodeURIComponent\(key\.slice\(5\)\)\}/);
   assert.ok(!/patchWorkOrder/.test(block), 'the arrival facts are being written onto the work order');
   assert.match(API, /export const patchProperty/, 'the app cannot patch a property');
 
@@ -159,7 +159,8 @@ check('the screen still reads the property the GET attached', () => {
     'the arrival facts no longer come off the property');
   // The decoration has to survive a work-order save, or the screen works
   // once and then quietly empties — which it did, once, already.
-  const field = read('pjl-field/src/offline/field.js');
+  // The queue's requests live in offline/transport.mjs since PJL-113.
+  const field = read('pjl-field/src/offline/field.js') + read('pjl-field/src/offline/transport.mjs');
   assert.match(field, /property: prior\?\.property \|\| null/);
   assert.match(CLOSING, /setWo\(queue\.view\(key\)\)/);
 });

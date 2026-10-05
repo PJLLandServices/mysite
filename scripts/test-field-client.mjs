@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { createQueue } from '../pjl-field/src/offline/queue.mjs';
+import { classify, createRequest, createTransport } from '../pjl-field/src/offline/transport.mjs';
 const src = fs.readFileSync('pjl-field/src/offline/field.js', 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/\bexport /g, '');
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
 function fixture() {
@@ -34,7 +35,7 @@ function fixture() {
     return { ok: true, status: 200, text: async () => JSON.stringify(data) };
   };
   function load() {
-    const context = { createQueue, readLocal, writeLocal, storeForOwner, HOST: 'https://field.local',
+    const context = { createQueue, classify, createRequest, createTransport, readLocal, writeLocal, storeForOwner, HOST: 'https://field.local',
       AuthRequiredError: class AuthRequiredError extends Error {}, withClientVersion: (headers) => headers, fetch, AbortController, setTimeout, clearTimeout,
       AppState: { currentState: 'active' } };
     return vm.runInNewContext(src + '\n({ openFieldWorkOrder, flushBeforeFinish, restoreFieldWorkOrder, fieldStatus });', context);

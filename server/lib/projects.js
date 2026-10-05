@@ -1393,7 +1393,9 @@ async function listRecentProjectPhotos(projectId, { limit = 6 } = {}) {
   const buildWos = await workOrders.listBuildWosForProject(projectId);
   const photos = [];
   for (const wo of buildWos) {
-    for (const p of (wo.photos || [])) {
+    // The customer's view of the photos: a markup in place of its original
+    // (PJL-112, lib/wo-photo-edits.js customerPhotos).
+    for (const p of require("./wo-photo-edits").customerPhotos(wo.photos)) {
       // Skip PDFs — strip is for image attachments only.
       if (p.mediaType && p.mediaType.startsWith("image/")) {
         photos.push({

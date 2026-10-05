@@ -8234,3 +8234,307 @@ One owner per concern:
 received and cancelled through `purchasing.js`) and adds the combined checks (68 checks).
 
 All seven suites run in `build:check`.
+
+## 2026-10-04 — FIELD-PHOTO-EDIT-01: delete or move a work-order photo from the phone (PJL-110, PJL-111; no PASS flow touched)
+
+**What it is.** On the closing screens, tapping a photo thumbnail now offers **Move to zone…** (zone
+photos) and **Delete photo** (zone and water-off photos). Both are recorded on the phone first and
+synced through the offline queue, like every other field action. Patrick's decisions (2026-10-04):
+delete is **for good** (D-A1), allowed **at any time** from the phone, before or after Finish (D-A2),
+and a finding's photo moved to another zone **comes off the finding, and the app says so** (D-A3).
+
+**Hop chain.** Thumbnail → action sheet → `queue.deletePhoto` / `queue.movePhoto`
+(`pjl-field/src/offline/queue.mjs`) → `transport.photoEdit` (`offline/field.js`) →
+`DELETE` / `PATCH /api/work-orders/:id/photos/:n` or `…/photos/upload/:clientUploadId`, under the
+per-work-order photo lock → `server/lib/wo-photo-edits.js` → `wo.photos`, `wo.removedPhotos`,
+the property's deferred `photoIds`, history.
+
+**The one rule.** `wo-photo-edits.js` decides which photo is meant (`findPhoto`), what a delete
+leaves (`removePhoto`) and what a move does (`movePhoto`). The phone's queue applies the same
+re-filing (`refiled`) so the screen and the server agree.
+
+**Delete is for good, and stays true afterwards.** The file goes, the report's cached copy
+(`<n>@1400.jpeg`) goes, and the photo leaves `wo.photos`. A tombstone with no bytes is kept in
+`wo.removedPhotos`, and it does two things:
+- **A photo number is never reused** (`nextBaseN`). Before this, deleting the highest-numbered
+  photo handed its number to the next upload. An old signed email link then showed a different
+  photo, and the report's cached copy of the deleted photo stood in for the new one.
+- **A late upload cannot bring a photo back** (`field-photo-uploads.newPhotos`). This matters when
+  the phone deletes a photo whose upload is still on its way.
+
+Both routes are idempotent: a photo that is already gone answers 200 `alreadyRemoved`, so a retried
+queue entry acknowledges instead of stalling.
+
+**Offline cases** (`scripts/test-photo-delete-offline.mjs`, real queue + real server rules):
+- A photo that never left the phone is dropped with its bytes and never uploads.
+- A photo that may have reached the server gets a queued server delete. That covers an uploaded
+  photo, an attempted upload, an upload in flight, and an entry left by the previous app version.
+- A move re-files a queued upload's own bytes, plus a server move when needed.
+- A move the server refuses outright (the zone left the visit) is dropped rather than holding the
+  visit's sync.
+- A session advertises `fieldOffline.photoEdit: 1`. A phone on a server without it keeps the change
+  and says the server needs the update.
+
+**Lifecycle walk (CLAUDE.md):**
+- **Customer:** the next report render, the status-update email strip, the portal and signed photo
+  links no longer show a deleted photo. A moved photo shows under its new zone.
+- **Patrick / the office:** work-order history keeps `photo_delete` (photo number, zone, category,
+  who) and `photo_move` (from → to, who, and any finding it came off).
+- **Linked records:** the property's deferred findings drop a deleted photo, and drop a moved photo
+  that came off its finding. Later copies (`wo-findings`) read `wo.photos`, so they never list it.
+- **Capacity, invoice, season plan:** untouched; a photo is not billable.
+- **Deliberately left alone:**
+  - A report **already frozen and sent** (`wo.reportSnapshots`) keeps the photo. It is the legal
+    record of what the customer received.
+  - An email already sent keeps its link, which now answers "Photo not found".
+  - Build-mode task-log and scope-change photo references are not cleaned. The field app's delete
+    and move are on closing visits only.
+
+**Coverage.**
+- `scripts/test-photo-delete-move.mjs`: 33 checks, booted server, temp data. 23 fail on the old
+  code, including number reuse.
+- `scripts/test-photo-delete-offline.mjs`: 13 checks; all 13 fail on the old queue. Mutation
+  checks: dropping the in-flight delete fails 3; dropping the `sent` stamp fails 2.
+- The existing offline and photo suites stay green, and the iOS bundle exports.
+
+**What still needs Patrick:** after the server deploys and the update reaches the phone,
+on a test visit:
+1. Delete a zone photo while offline, then reconnect, and confirm it is gone from the web work
+   order.
+2. Move a photo from one zone to another and confirm the work order shows it under the new zone.
+3. Delete the water-off photo.
+
+## 2026-10-04 — FIELD-SYNC-01: the field app syncs as it goes, so Finish no longer waits minutes (PJL-113; no PASS flow touched)
+
+**The defect.** Finish took 5–8 minutes on every closing. Three causes, all fixed here:
+- one server error held the whole visit's sync until Finish;
+- every change cost 3–4 round trips;
+- a server restart read as "signed out".
+
+**What changed on the phone.**
+- **Error classes.** `classify()` in `pjl-field/src/offline/transport.mjs` is the one rule:
+  - **transient** (no signal, a timeout, any 5xx including Render's HTML 502, 429, a version
+    clash) retries on its own with backoff of 2, 4, 8, 16 then 28 s, and never holds anything;
+  - **permanent** (a conflict to choose, a closed visit, a validation 4xx) holds that one entry
+    until a tap or Finish;
+  - **auth** is 401/403 only.
+- **Two lanes** (`queue.mjs` flush):
+  - **Changes, one at a time:** saves with If-Match and the three-way merge, plus photo deletes
+    and moves. A failed save holds only the later saves on that record.
+  - **Photos, two at a time:** a photo never waits for a save, and a save never waits for a photo.
+    An answer that arrives late never replaces a newer copy of the record.
+- **Fewer round trips.**
+  - The account is checked once per pass. The server's owner check below covers each request,
+    and the check is skipped for 5 minutes when the server enforces it.
+  - A save goes against the phone's last server copy. It re-reads once only on a 409, and is
+    merged and resent in the same pass.
+  - A photo goes straight up; the server dedupes by upload id.
+  - Adjacent saves to one record go as one request when nothing on the server moved.
+  - A pass with nothing to send makes no request at all.
+- **The watcher** (`offline/field.js` `watchFieldQueue`) follows the queue's own backoff
+  (`nextDelay`). A phone back in signal resumes within 30 s, with no tap.
+- **Finish** says what is left, counting down (`sync-notice.js` `finishProgressText`), for
+  example "Uploading 3 photos · 4.1 MB left · 1 change…".
+- **Picker quality** is 0.40 (was 0.55). Resizing on the phone needs the WebView canvas and comes
+  with photo markup (PJL-112).
+
+**What changed on the server.**
+- **Owner check.** A request carrying `x-pjl-field-owner` under any other session is refused with
+  403 `owner_mismatch`, at the auth gate. The session advertises `fieldOffline.ownerCheck`. A
+  phone talking to an older server keeps the old session read before every change.
+- **One If-Match rule:** `workOrders.versionMatches`, used by the PATCH route and by `update()`.
+  - A version the phone read still matches after writes that touched only photos, deleted-photo
+    tombstones or history. Those are `versionChain` steps, valid only while their head is the
+    record's version.
+  - A PATCH carrying `photos` gets no allowance.
+  - Without this rule, every photo upload made the next zone save a 409 and a re-read.
+
+**Measured** (`scripts/perf-field-sync.mjs`):
+- **Setup:** the real queue and transport against the real server; 300 ms round trip; one shared
+  1.5 MB/s uplink. The visit is 12 zones and 12 photos, with a 1.58 MB test photo at quality
+  0.55.
+- **Baseline:** main's queue and transport. **After:** this branch.
+
+| | Baseline | After |
+|---|---|---|
+| Requests, walking the visit and syncing as it goes | 113 | 26 (1 account check + 13 saves + 12 photos) |
+| Requests at Finish once caught up | 1 | 0 |
+| Requests to drain a no-signal visit | 101 | 14 |
+| Time to drain a no-signal visit, real time (`--real`, `PERF_ONLY=backlog`) | 177.8 s | 113.3 s — the uplink floor: 21 MB at 1.5 MB/s is 112 s |
+| One 500 on the first zone save | 25 pending and 0 photos on the server until Finish | all synced on the next ordinary pass |
+| Wait before resuming after a long signal drop | 15 s (fixed timer) | ≤ 29 s backoff, no tap |
+
+**Acceptance (PJL-113).** The request rule was approved by Patrick on 2026-10-05 (Option A; no
+delay added to zone saves). Every other criterion is unchanged.
+
+**How it was measured.** `scripts/perf-field-sync.mjs`: the real queue, transport and server; 300 ms
+round trip; one shared 1.5 Mbps uplink; the 12-zone / 12-photo reference visit. Photo bytes and times
+use the harness's synthetic photo, or where marked, the one benchmark photograph from the website's
+files uploaded 12 times (described in FIELD-PHOTO-MARKUP-01). These are not real captures from the
+phone.
+
+| Criterion | Measured (#378) | Status |
+|---|---|---|
+| Connected reference visit: **≤ 30 total requests**, with no redundant session or full work-order rereads, and no more than one save per meaningful change *(approved rule)* | **26** = 1 account check + 13 saves + 12 photos, for 25 changes. 0 rereads (baseline 113, with 63 session and 25 record reads) | **Met** |
+| No-signal catch-up: **≤ 20 requests** | **14** | **Met** |
+| Queue **≤ 2 pending** 30 s after any action, normal signal | max **1** in the harness | Met in the harness; **real phone pending** |
+| Temporary 5xx and network errors **recover automatically** | one 500 mid-visit: synced on the next ordinary pass. Signal drop: resumed after ≤ 29 s of backoff, no tap | **Met** |
+| Finish when caught up: **0–2 requests**, and completes in **≤ 15 s on the real phone** | **0** requests | Requests met; **15 s on the real phone pending** |
+| Finish shows exactly what remains, never a bare spinner | "Uploading N photos · X MB left · N changes…" | **Met** (test) |
+| Bytes uploaded **≤ 40% of baseline** (shrinking ships over the air, behind its switch) | benchmark photo: 14.8 MB → 11.9 MB (**80%**); with shrinking (PJL-112, off by default) 9.6 MB (**65%**) | **Not met**, open |
+| Total sync time **≤ 40% of baseline** | backlog, real time: synthetic photo 177.8 → 113.3 s (**64%**); benchmark photo 118.2 → 64.9 s (**55%**), with shrinking 52.5 s (**44%**) | **Not met**, open |
+
+**Why the two open rows remain open.** On a 1.5 Mbps uplink, photo bytes are almost all of the
+remaining time.
+- Reaching 40% needs about 0.37 MB per photo, for example 2400 px at a lower JPEG quality than the
+  0.75 approved for testing. That is a quality decision for Patrick, made after the device check
+  compares real captures.
+- Not weakened here.
+
+**Lifecycle walk (CLAUDE.md):**
+- **Nothing about what is recorded changes.** Sign-off gates, prices and the completion cascade
+  are untouched.
+- **Finish still requires everything uploaded** (D-C1: not now).
+- **Background upload while the phone is locked** is not attempted (D-C2: investigate later).
+- **Version check outside the phone:** the office's web pages use the same PATCH route. They gain
+  the same allowance: a photo added by the tech no longer makes the office's save a clash.
+
+**Coverage:**
+- `scripts/test-field-sync.mjs`: 13 checks; 8 fail on main's queue, and the transport checks
+  fail on main because the module does not exist there.
+- `scripts/test-field-sync-server.mjs`: 13 checks; 7 fail on the server before this change.
+- `scripts/perf-field-sync.mjs`: 11 assertions, in CI at a 40× time scale.
+- Existing suites:
+  - The merge suites are unchanged in substance and green.
+  - Mechanical updates only: three suites now pass the new module into the field.js sandbox, and
+    two source guards point at the moved code.
+  - `test-field-offline`'s fake server now answers a stale If-Match with 409, as the real server
+    does; it used to crash the test instead.
+  - `test-field-offline`'s "closed visit" fake now bumps the version when it closes the visit, as
+    the real server does.
+  - `test-field-conflicts` round 2 now expects the 409 to clear in the same pass. It used to
+    clear only on the next pass.
+
+**What still needs Patrick (real phone):**
+1. A 12-zone closing on normal signal, noting the header's pending count after each zone.
+2. Finish in 15 s or less.
+3. Airplane mode for one zone, then off: the backlog drains with no tap.
+
+## 2026-10-05 — FIELD-PHOTO-MARKUP-01: mark up a work-order photo; shrink photos on the phone, separately switchable (PJL-112; no PASS flow touched)
+
+**What it is.** Tap a photo thumbnail and choose **Mark up**, or tap **Mark up this photo** right
+after taking one. The editor has pen, arrow, circle and text, in red, yellow or white, thin or thick,
+with undo and reset. All controls are 56 pt; Cancel and Done are always on screen. It is PJL's own
+editor, a WebView canvas like the signature pad, so it ships over the air; Apple's Markup would need
+native code.
+
+**Patrick's decisions (2026-10-04):**
+- **D-B1:** the customer's report shows the marked-up version only, and the original stays on the
+  work order.
+- **D-B2:** "Mark up again" starts from the original and replaces the previous markup.
+- **D-B3:** markup is offered as a button and never opens on its own.
+- **Extra requirement:** markup and shrinking are independently releasable and testable.
+
+**Data model** (`server/lib/wo-photo-edits.js`):
+- **The link.** A markup is a new photo with `markupOf` (the original's number) and
+  `markupOfUpload` (its upload id). The upload route resolves the link, by number or by upload id,
+  and files the markup where the **server's** copy of the original is: zone, finding, category,
+  label. The original is never changed.
+- **One live markup per original.** The old one is deleted like any photo: file, tombstone,
+  `photo_markup` history saying which it replaced.
+- **They travel together.** Moving the original moves its markup. Deleting the original deletes its
+  markup. Removing the markup keeps the original.
+- **A markup that outlives its original** (deleted meanwhile) is dropped with a tombstone. A markup
+  of a photo that was never there is refused.
+
+**The one rule for what a customer sees:** `customerPhotos`, an original with a live markup shown
+as its markup, in its place. It is used by:
+- the report PDF's customer audience (the office's internal report keeps both);
+- the findings copied to the property, which the portal shows;
+- both on-site quote declined-item sinks;
+- the status-update photo strip.
+
+**Deliberately left alone:**
+- The office's photo counts (daily record, project totals) count both files, which is true of
+  what is stored.
+- The completion-photo gate counts a markup too. That is harmless: a markup always has its
+  original, and a fall closing needs none.
+- Admin and tech web pages list both photos.
+
+**Phone** (`queue.mjs`):
+- `markup()` queues the copy like any photo. A markup waits in the photo lane for its original's
+  upload.
+- Marking up again drops a markup still waiting to upload.
+- Deleting a photo drops its pending markups.
+- A queued delete or move shows on the pair at once.
+- The thumbnails pair them (`photo-pairs.mjs`): the markup shows in the original's place, badged
+  "Marked up". The menu offers Mark up / Mark up again, Remove markup, Move to zone… and Delete
+  photo.
+- A server without `photoMarkup` is never sent a markup; the phone keeps it and says why.
+
+**Shrinking: separate, and OFF by default.**
+- **The switch:** the server's `fieldOffline.photoShrink`, on only with `FIELD_PHOTO_SHRINK=1`. It
+  turns on, and off, with no app update.
+- **Separate code:** its own page (`photo-canvas.mjs` SHRINK_HTML) and its own hidden component
+  (`PhotoShrinker.js`), mounted only while the switch is on. The editor does not touch either.
+- **With it on:** the camera takes the photo at 0.80, and the phone resizes it to 2400 px at JPEG
+  0.75 before it queues. Anything short of a smaller JPEG within 10 s sends the original
+  unchanged: the page not ready, a photo it can't decode, a result that would be bigger, or no
+  answer.
+- **0.75, not the planned 0.85** (D-C3). Measured on the benchmark photo (below): at 0.85 the
+  2400 px copy (0.80 MB) is no smaller than the full-size photo at the picker's 0.40 (0.75 MB).
+  At 0.75 it is 0.60 MB. The server re-encodes at 82 whatever arrives.
+- **Markup** saves at 0.85, so the drawing stays crisp.
+
+**Measured: the upload for a closing.** The benchmark photo is **one** 4032×3024 JPEG from the
+website's own files (`landscape-lighting-hero.jpg`):
+- it is iPhone-sized, but it carries no camera data, so it is not proven to be an iPhone photo;
+- it is **not** from Patrick's phone;
+- it was re-encoded at each picker quality and **uploaded 12 times**. These are not 12 separate
+  captures.
+
+The backlog was drained in real time at 300 ms / 1.5 Mbps (`scripts/perf-field-sync.mjs --real`,
+`PERF_PHOTO_FILE`). Real captures from the device are measured by the device check below.
+
+| | Upload | Drain |
+|---|---|---|
+| main today (picker 0.55, full size; old queue) | 14.8 MB | 118.2 s |
+| #378 (picker 0.40, full size) | 11.9 MB | 64.9 s |
+| #378 + shrinking on (0.80 → 2400 px @ 0.75) | 9.6 MB | 52.5 s |
+
+The earlier "21 MB" was the harness's synthetic textured image; a real photograph compresses much
+better. **On this benchmark photo, shrinking saves a further ~19% of the bytes.** That is useful on a weak uplink,
+not transformative. Most of the gain from smaller uploads came from the picker quality change in
+#378.
+
+**Coverage:**
+- `scripts/test-photo-markup.mjs`: 32 checks, booted server, all three switch states (off, `1`, `compare`).
+- `scripts/test-photo-markup-offline.mjs`: 15 checks: the real queue against the real server rules,
+  the canvas drawing code, and source guards for D-B3 and for markup and shrinking staying apart.
+- Both are in build:check and fail on #378's code: 14 of 17 counted and 15 of 15.
+- `scripts/test-photo-canvas.mjs` (`npm run test:photo-canvas`): 25 checks; both pages in real
+  Chromium on the benchmark photo. **Not in build:check**, because CI installs no browser. Run it on any
+  change to `photo-canvas.mjs`.
+
+**What still needs Patrick: two device checks, each its own gate.** Shrinking stays OFF until the
+second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing only.
+
+1. **Markup, with shrinking off** (it ships this way):
+   - open, draw and save about five full-size photos in a row, using every tool;
+   - the editor does not freeze or run out of memory;
+   - the saved markup is crisp on the work order and on the customer's report;
+   - the original is still on the work order for the office.
+2. **Shrinking, on a test visit, with `FIELD_PHOTO_SHRINK=compare`.** Each shot then uploads its
+   untouched original **and** the shrunk copy beside it (labelled "Shrink test"), so both come from
+   the same capture.
+   - Take about five current iPhone camera photos: a sprinkler head or nozzle up close, a valve or
+     valve box, piping or a leak, and a wider zone or property shot.
+   - Compare each original with its shrunk copy for readability, on the office's work-order page.
+   - Record the real before and after bytes: open
+     `https://www.pjllandservices.com/api/work-orders/<WO id>` in the signed-in browser. Each
+     photo's uploaded size is `originalBytes` when the server re-compressed it, otherwise `bytes`.
+     The office page does not show sizes.
+   - Mark up a shrunk photo and confirm the markup stays crisp.
+   - No freeze or memory warning while taking the photos.
+3. **Then** set `FIELD_PHOTO_SHRINK=1` only if check 2 passes. If it misbehaves later, unset it:
+   markup is unaffected.

@@ -37,6 +37,7 @@ const PDFDocument = require("pdfkit");
 // drift apart without anyone noticing.
 const { checklistKeysForWorkOrder } = require("./work-orders");
 const { documentFilename } = require("./format");
+const woPhotoEdits = require("./wo-photo-edits");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -433,8 +434,12 @@ function renderPhotoRow(doc, wo, photos, opts = {}) {
 
 // ---- Renderer entry point --------------------------------------------
 
-function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience = "internal" }) {
-  if (!wo || !wo.id) throw new Error("generateWoReportPdf requires a work order with an id.");
+function generateWoReportPdf({ wo: record, property = {}, customer = {}, mode, audience = "internal" }) {
+  if (!record || !record.id) throw new Error("generateWoReportPdf requires a work order with an id.");
+  // A customer sees a marked-up photo in place of its original (PJL-112,
+  // D-B1: lib/wo-photo-edits.js customerPhotos, the one rule). The
+  // office's internal report keeps both.
+  const wo = audience === "customer" ? { ...record, photos: woPhotoEdits.customerPhotos(record.photos) } : record;
   if (mode !== "inspection_report" && mode !== "service_report") {
     throw new Error(`generateWoReportPdf: unknown mode "${mode}".`);
   }
