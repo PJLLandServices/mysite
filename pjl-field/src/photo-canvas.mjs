@@ -17,8 +17,9 @@
 export const MAX_EDGE = 2400;
 // A marked-up photo is saved at 0.85: the drawing has to stay crisp.
 export const MARKUP_QUALITY = 0.85;
-// A shrunk photo is saved at 0.75. Measured on a real 4032×3024 iPhone
-// photo (scripts/test-photo-canvas.mjs): at 0.85 the 2400 px copy (0.80
+// A shrunk photo is saved at 0.75. Measured (scripts/test-photo-canvas.mjs)
+// on one 4032×3024 JPEG from the website's files — iPhone-sized, no camera
+// data, not from Patrick's phone: at 0.85 the 2400 px copy (0.80
 // MB) is no smaller than the full-size photo at the picker's 0.40 (0.75
 // MB), so shrinking at the planned 0.85 (D-C3) saves nothing; at 0.75 it
 // is 0.60 MB. The server re-encodes at 82 whatever arrives.

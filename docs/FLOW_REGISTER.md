@@ -8396,13 +8396,20 @@ as its markup, in its place. It is used by:
   0.75 before it queues. Anything short of a smaller JPEG within 10 s sends the original
   unchanged: the page not ready, a photo it can't decode, a result that would be bigger, or no
   answer.
-- **0.75, not the planned 0.85** (D-C3). Measured on a real 4032×3024 iPhone photo: at 0.85 the
+- **0.75, not the planned 0.85** (D-C3). Measured on the benchmark photo (below): at 0.85 the
   2400 px copy (0.80 MB) is no smaller than the full-size photo at the picker's 0.40 (0.75 MB).
   At 0.75 it is 0.60 MB. The server re-encodes at 82 whatever arrives.
 - **Markup** saves at 0.85, so the drawing stays crisp.
 
-**Measured: the upload for a closing**, 12 copies of the real photo; backlog drained in real time at
-300 ms / 1.5 Mbps (`scripts/perf-field-sync.mjs --real`, `PERF_PHOTO_FILE`):
+**Measured: the upload for a closing.** The benchmark photo is **one** 4032×3024 JPEG from the
+website's own files (`landscape-lighting-hero.jpg`):
+- it is iPhone-sized, but it carries no camera data, so it is not proven to be an iPhone photo;
+- it is **not** from Patrick's phone;
+- it was re-encoded at each picker quality and **uploaded 12 times**. These are not 12 separate
+  captures.
+
+The backlog was drained in real time at 300 ms / 1.5 Mbps (`scripts/perf-field-sync.mjs --real`,
+`PERF_PHOTO_FILE`). Real captures from the device are measured by the device check below.
 
 | | Upload | Drain |
 |---|---|---|
@@ -8410,18 +8417,18 @@ as its markup, in its place. It is used by:
 | #378 (picker 0.40, full size) | 11.9 MB | 64.9 s |
 | #378 + shrinking on (0.80 → 2400 px @ 0.75) | 9.6 MB | 52.5 s |
 
-The earlier "21 MB" was the harness's synthetic textured photo; real photos compress much better.
-**On real photos, shrinking saves a further ~19% of the bytes.** That is useful on a weak uplink,
+The earlier "21 MB" was the harness's synthetic textured image; a real photograph compresses much
+better. **On this benchmark photo, shrinking saves a further ~19% of the bytes.** That is useful on a weak uplink,
 not transformative. Most of the gain from smaller uploads came from the picker quality change in
 #378.
 
 **Coverage:**
-- `scripts/test-photo-markup.mjs`: 30 checks, booted server, both switch states.
+- `scripts/test-photo-markup.mjs`: 32 checks, booted server, all three switch states (off, `1`, `compare`).
 - `scripts/test-photo-markup-offline.mjs`: 15 checks: the real queue against the real server rules,
   the canvas drawing code, and source guards for D-B3 and for markup and shrinking staying apart.
 - Both are in build:check and fail on #378's code: 14 of 17 counted and 15 of 15.
 - `scripts/test-photo-canvas.mjs` (`npm run test:photo-canvas`): 25 checks; both pages in real
-  Chromium on the real photo. **Not in build:check**, because CI installs no browser. Run it on any
+  Chromium on the benchmark photo. **Not in build:check**, because CI installs no browser. Run it on any
   change to `photo-canvas.mjs`.
 
 **What still needs Patrick: two device checks, each its own gate.** Shrinking stays OFF until the

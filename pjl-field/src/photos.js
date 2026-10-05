@@ -42,8 +42,10 @@ function toPayload(asset, meta) {
 // With shrinking on (the server's photoShrink switch, PJL-112), the photo
 // is taken at 0.80 and resized on the phone to 2400 px at 0.75 before it
 // queues: a sharper source and a smaller upload (0.60 MB against 0.75 MB
-// for a real 12 MP photo at 0.40, measured in test-photo-canvas.mjs). If
-// the resize fails, the 0.80 original goes up as it is.
+// at 0.40, measured in test-photo-canvas.mjs on one 4032×3024 JPEG from
+// the website's files — a stand-in, not a photo from Patrick's phone; the
+// device check measures real ones). If the resize fails, the 0.80 original
+// goes up as it is.
 export const SHRINK_SOURCE_QUALITY = 0.8;
 const options = ({ shrink = false } = {}) => (shrink ? { ...OPTIONS, quality: SHRINK_SOURCE_QUALITY } : OPTIONS);
 

@@ -4,8 +4,12 @@
 // The two photo canvases (pjl-field/src/photo-canvas.mjs) run in a REAL
 // browser engine (Playwright's Chromium), driven the way the app drives
 // them: the same messages in, the same messages out, strokes drawn with a
-// pointer. The photo is a real 4032×3024 iPhone photo from this repo
+// pointer. The photo is one 4032×3024 JPEG from the website's own files
 // (landscape-lighting-hero.jpg), re-encoded at the app's picker quality.
+// It is iPhone-sized but carries no camera data, so it is not proven to be
+// an iPhone photo, and it is not from Patrick's phone. A real photograph,
+// not a synthetic one: a stand-in until the device check measures real
+// captures.
 //
 //   EDITOR  loads a full-size photo; pen, arrow, circle and text each add
 //           a mark; undo and reset; export is a JPEG capped at 2400 px with
@@ -73,7 +77,7 @@ async function host(browser, html, viewport = { width: 390, height: 600 }) {
 
 const browser = await launch();
 try {
-  ok(meta.width === 4032 && meta.height === 3024, `setup: a real 4032×3024 photo (${meta.width}×${meta.height})`);
+  ok(meta.width === 4032 && meta.height === 3024, `setup: a 4032×3024 photograph (${meta.width}×${meta.height})`);
   ok(!/https?:\/\//.test(EDITOR_HTML) && !/https?:\/\//.test(SHRINK_HTML), "both pages are self-contained: nothing loads from the network");
 
   // ---- EDITOR -------------------------------------------------------------
@@ -171,7 +175,7 @@ try {
     ok((await shrink(flat, "flat")).same === true, "shrink: when the result would not be smaller, the original is kept");
     ok(s.errors.length === 0, `shrink: no page errors (${s.errors.join("; ")})`);
 
-    console.log("\nThe upload for a 12-photo closing (this real photo × 12):");
+    console.log("\nThe upload for a 12-photo closing (this ONE photo, counted 12 times — not 12 captures):");
     for (const row of rows) {
       console.log(`  picker quality 0.${row.q}: ${mb(row.input * 12)} full size → ${mb(row.output * 12)} shrunk (${Math.round(row.output / row.input * 100)}%), ${row.ms} ms per photo here`);
     }
