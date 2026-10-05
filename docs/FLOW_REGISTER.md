@@ -8231,9 +8231,25 @@ not transformative. Most of the gain from smaller uploads came from the picker q
   Chromium on the real photo. **Not in build:check**, because CI installs no browser. Run it on any
   change to `photo-canvas.mjs`.
 
-**What still needs Patrick (device check, before shrinking is switched on):**
-1. **Markup:** open, draw and save five full-size photos in a row. Each tool should work with a
-   gloved thumb, with no crash and no freeze.
-2. **Shrinking**, separately and only with `FIELD_PHOTO_SHRINK=1`: take 20 photos in a row with
-   no freeze or memory warning. Then check a report's photos look the same as before.
-3. **If shrinking misbehaves,** unset `FIELD_PHOTO_SHRINK` on the server. Markup is unaffected.
+**What still needs Patrick: two device checks, each its own gate.** Shrinking stays OFF until the
+second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing only.
+
+1. **Markup, with shrinking off** (it ships this way):
+   - open, draw and save about five full-size photos in a row, using every tool;
+   - the editor does not freeze or run out of memory;
+   - the saved markup is crisp on the work order and on the customer's report;
+   - the original is still on the work order for the office.
+2. **Shrinking, on a test visit, with `FIELD_PHOTO_SHRINK=compare`.** Each shot then uploads its
+   untouched original **and** the shrunk copy beside it (labelled "Shrink test"), so both come from
+   the same capture.
+   - Take about five current iPhone camera photos: a sprinkler head or nozzle up close, a valve or
+     valve box, piping or a leak, and a wider zone or property shot.
+   - Compare each original with its shrunk copy for readability, on the office's work-order page.
+   - Record the real before and after bytes: open
+     `https://www.pjllandservices.com/api/work-orders/<WO id>` in the signed-in browser. Each
+     photo's uploaded size is `originalBytes` when the server re-compressed it, otherwise `bytes`.
+     The office page does not show sizes.
+   - Mark up a shrunk photo and confirm the markup stays crisp.
+   - No freeze or memory warning while taking the photos.
+3. **Then** set `FIELD_PHOTO_SHRINK=1` only if check 2 passes. If it misbehaves later, unset it:
+   markup is unaffected.

@@ -141,6 +141,10 @@ await run({ port: 4943, env: { FIELD_PHOTO_SHRINK: "1" } }, async (srv) => {
   await srv.login({ role: "tech" });
   ok((await srv.api("GET", "/api/session")).body.fieldOffline?.photoShrink === 1, "F. FIELD_PHOTO_SHRINK=1 switches shrinking on, with no app change");
 });
+await run({ port: 4945, env: { FIELD_PHOTO_SHRINK: "compare" } }, async (srv) => {
+  await srv.login({ role: "tech" });
+  ok((await srv.api("GET", "/api/session")).body.fieldOffline?.photoShrink === 2, "F. FIELD_PHOTO_SHRINK=compare is the device check (2)");
+});
 
 console.log(`photo-markup: ${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

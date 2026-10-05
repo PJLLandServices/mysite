@@ -130,7 +130,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   const [features, setFeatures] = useState({});
   const shrinkRef = useRef(null);
   const onShrinkerReady = useCallback(fn => { shrinkRef.current = fn; }, []);
-  const shrinkOn = features.photoShrink === 1;
+  const shrinkOn = features.photoShrink === 1 || features.photoShrink === 2;
+  // The device check (FIELD_PHOTO_SHRINK=compare): the original AND the
+  // shrunk copy both go up, so they can be compared side by side.
+  const shrinkCompare = features.photoShrink === 2;
   const photoOptions = { shrink: shrinkOn };
   // The photo just taken, for its "Mark up this photo" button (D-B3).
   const [justTaken, setJustTaken] = useState(null);
@@ -138,11 +141,16 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     const { queue, key } = field.current;
     const ready = shrinkOn && shrinkRef.current ? await shrinkRef.current(photo) : photo;
     const before = new Set((queue.view(key)?.photos || []).map(p => p.clientUploadId));
-    queue.photo(key, ready);
+    // The original is never changed: in the device check it goes up as
+    // taken, and the shrunk copy goes up beside it as its own photo.
+    queue.photo(key, shrinkCompare ? photo : ready);
     const added = (queue.view(key)?.photos || []).find(p => p.pending && !before.has(p.clientUploadId));
+    if (shrinkCompare && ready !== photo) {
+      queue.photo(key, { ...ready, label: `Shrink test${photo.label ? ` (${photo.label})` : ''}` });
+    }
     setJustTaken(added?.clientUploadId || null);
     queue.flush().catch(() => {});
-  }, [shrinkOn]);
+  }, [shrinkOn, shrinkCompare]);
   // Marking up (PJL-112): the editor opens on the original, and Done
   // queues the marked-up copy, linked to it. Nothing changes until Done.
   const [markupFor, setMarkupFor] = useState(null);

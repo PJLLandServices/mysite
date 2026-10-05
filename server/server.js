@@ -1712,10 +1712,15 @@ async function handleAuth(req, res, pathname) {
     return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: {
       photoRetry: 1, photoEdit: 1, ownerCheck: 1, photoMarkup: 1,
       // Shrinking photos on the phone before upload (PJL-112) has its own
-      // switch, OFF unless FIELD_PHOTO_SHRINK=1 on the server: it is turned
-      // on after the device check on Patrick's phone, and off again with no
-      // app update if it misbehaves. Markup does not depend on it.
-      photoShrink: process.env.FIELD_PHOTO_SHRINK === "1" ? 1 : 0
+      // switch, OFF unless FIELD_PHOTO_SHRINK is set on the server: it is
+      // turned on after the device check on Patrick's phone, and off again
+      // with no app update if it misbehaves. Markup does not depend on it.
+      //   1        shrink every photo before it queues
+      //   compare  the device check: each shot uploads BOTH its untouched
+      //            original and the shrunk copy (labelled "Shrink test"),
+      //            so the two can be compared and their real sizes read off
+      //            the work order. Use on a test visit only.
+      photoShrink: process.env.FIELD_PHOTO_SHRINK === "1" ? 1 : process.env.FIELD_PHOTO_SHRINK === "compare" ? 2 : 0
     } });
   }
 

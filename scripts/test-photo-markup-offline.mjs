@@ -238,7 +238,10 @@ await test('the markup editor does not depend on shrinking', () => {
 
 await test('shrinking runs only while the server switch is on, and falls back to the original', () => {
   const screen = read('pjl-field/src/screens/ClosingScreen.js');
-  assert.match(screen, /const shrinkOn = features\.photoShrink === 1;/);
+  assert.match(screen, /const shrinkOn = features\.photoShrink === 1 \|\| features\.photoShrink === 2;/);
+  // The device check uploads the untouched original, and the copy beside it.
+  assert.match(screen, /queue\.photo\(key, shrinkCompare \? photo : ready\);/, 'compare mode must upload the untouched original');
+  assert.match(screen, /label: `Shrink test/);
   assert.match(screen, /\{shrinkOn \? <PhotoShrinker onReady=\{onShrinkerReady\} \/> : null\}/, 'the shrinker is mounted without the switch');
   assert.match(screen, /const ready = shrinkOn && shrinkRef\.current \? await shrinkRef\.current\(photo\) : photo;/);
   const shrinker = read('pjl-field/src/PhotoShrinker.js');
@@ -248,7 +251,7 @@ await test('shrinking runs only while the server switch is on, and falls back to
   assert.match(photos, /quality: 0\.4,/, 'the picker default changed');
   assert.match(photos, /shrink \? \{ \.\.\.OPTIONS, quality: SHRINK_SOURCE_QUALITY \} : OPTIONS/);
   const server = read('server/server.js');
-  assert.match(server, /photoShrink: process\.env\.FIELD_PHOTO_SHRINK === "1" \? 1 : 0/, 'shrinking must default OFF on the server');
+  assert.match(server, /photoShrink: process\.env\.FIELD_PHOTO_SHRINK === "1" \? 1 : process\.env\.FIELD_PHOTO_SHRINK === "compare" \? 2 : 0/, 'shrinking must default OFF on the server');
 });
 
 await test('"Mark up" is offered, never opened on its own (D-B3)', () => {
