@@ -262,12 +262,12 @@ function CorrectionForm({
  * "monitoring" ends up counted as resolved on one screen and not the
  * other. */
 
-const PROBLEM_TONE: Record<ProblemStatus, "danger" | "warn" | "good"> = {
+export const PROBLEM_TONE: Record<ProblemStatus, "danger" | "warn" | "good"> = {
   open: "danger",
   monitoring: "warn",
   resolved: "good"
 };
-const PROBLEM_LABEL: Record<ProblemStatus, string> = {
+export const PROBLEM_LABEL: Record<ProblemStatus, string> = {
   open: "Open",
   monitoring: "Monitoring",
   resolved: "Resolved"
