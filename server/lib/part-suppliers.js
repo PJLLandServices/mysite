@@ -102,6 +102,64 @@ async function bulkSet(updates) {
   return map;
 }
 
+// ---- Choosing the DEFAULT supplier (Patrick, 2026-10-05) -----------------
+//
+// "Make this supplier the default" is its own operation, and it is the only
+// one the Suppliers page uses. It REORDERS: the chosen supplier moves to
+// the front and every other supplier the part already has keeps its place
+// behind it. It never drops an alternate — a part that is one fitting with
+// two suppliers' offers must survive someone touching its dropdown.
+// (setForSku / bulkSet above replace the whole list and are for callers
+// that mean exactly that: the API and migrations.)
+//
+// The rule, once: withPrimary(current, supplierId).
+//   supplierId given  → [supplierId, ...current without it]
+//   supplierId empty  → [] when the part has at most one supplier (plain
+//                       "unassign"); REFUSED when it has alternates, because
+//                       clearing the default would silently promote or lose
+//                       one of them — the caller must pick which is default.
+function withPrimary(current, supplierId) {
+  const ids = [];
+  for (const x of Array.isArray(current) ? current : []) {
+    const id = String(x || "").trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  const chosen = String(supplierId || "").trim();
+  if (!chosen) {
+    if (ids.length > 1) {
+      throw Object.assign(
+        new Error(`This part has ${ids.length} suppliers. Pick which one is the default instead of clearing it.`),
+        { code: "alternates_present", supplierIds: ids }
+      );
+    }
+    return [];
+  }
+  return [chosen, ...ids.filter((id) => id !== chosen)];
+}
+
+// Set the default supplier for many SKUs in one write. `primaries` is
+// { sku: supplierId | "" }. `currentFor(sku)` supplies the part's effective
+// supplier list when the override map has no entry for it (the catalog's own
+// value). All-or-nothing: one refused SKU writes nothing.
+async function setPrimaryBulk(primaries, { currentFor } = {}) {
+  if (!primaries || typeof primaries !== "object") throw new Error("primary map required");
+  const map = await readAll();
+  const next = {};
+  for (const [sku, supplierId] of Object.entries(primaries)) {
+    const current = Array.isArray(map[sku]) && map[sku].length
+      ? map[sku]
+      : (typeof currentFor === "function" ? currentFor(sku) : []);
+    try { next[sku] = withPrimary(current, supplierId); }
+    catch (err) { err.message = `${sku}: ${err.message}`; err.sku = sku; throw err; }
+  }
+  for (const [sku, ids] of Object.entries(next)) {
+    if (ids.length === 0) delete map[sku];
+    else map[sku] = ids;
+  }
+  await writeAll(map);
+  return map;
+}
+
 // Merge the override map into a parts catalog. Mutates parts in-place
 // (faster than copy-on-write at PJL catalog scale; called server-side
 // only). Returns the same parts object for chaining.
@@ -128,5 +186,7 @@ module.exports = {
   getAll,
   setForSku,
   bulkSet,
+  withPrimary,
+  setPrimaryBulk,
   mergeIntoCatalog
 };
