@@ -218,9 +218,10 @@ try {
     ok(same(ov.dailyRecords.latestDay && { h: ov.dailyRecords.latestDay.personHours, n: ov.dailyRecords.latestDay.notes, d: ov.dailyRecords.latestDay.workDate },
       tabDay ? { h: tabDay.personHours, n: tabDay.notes, d: tabDay.workDate } : null), `${label}: the latest day is the tab's own row for it`);
     // Materials — the tab's summary, field for field
-    for (const k of ["listCount", "skuCount", "receivedUnits", "usedUnits", "balanceUnits", "exceptionCount"]) {
+    for (const k of ["listCount", "skuCount", "orderedUnits", "onOrderUnits", "receivedUnits", "usedUnits", "balanceUnits", "exceptionCount"]) {
       ok(ov.materials[k] === materials.summary[k], `${label}: materials ${k} = the tab's (${ov.materials[k]} vs ${materials.summary[k]})`);
     }
+    ok(same(ov.materials.required, materials.summary.required), `${label}: materials required = the tab's (${JSON.stringify(ov.materials.required)})`);
     ok(same(ov.materials.exceptions.map((e) => e.kind + ":" + e.sku), (materials.exceptions || []).slice(0, 3).map((e) => e.kind + ":" + e.sku)),
       `${label}: the material warnings shown are the tab's`);
     // Change Orders — the tab's model (summary, agreement, holds)
@@ -322,8 +323,10 @@ try {
     const list = await materialLists.create({ name: "Front yard", parentType: "project", parentId: pa,
       lineItems: [{ sku: "61146", qty: 4 }, { sku: "ZZ-NOT-A-PART", qty: 2 }] });
     let po = await purchaseOrders.create({ supplierName: "SiteOne", sourceMaterialListIds: [list.id], lineItems: [{ sku: "61146", qty: 4, description: "DryConn" }] });
-    po = await purchaseOrders.markSent(po.id, {});
-    await purchaseOrders.markReceived(po.id, {});
+    // Through the one PO path (purchasing.js, #367): sent (no email), then received in full.
+    const purchasing = srv.lib("purchasing.js");
+    await purchasing.sendPurchaseOrder(po.id, { toEmail: "orders@siteone.test" }, null);
+    await purchasing.receivePurchaseOrder(po.id, {});
     const used = await srv.api("POST", `/api/work-orders/${woA.id}/materials-consumed`, { items: [{ partSku: "61146", qty: 5 }] });
     ok(used.status === 201, `A: the crew's use is recorded through the route (${used.status} ${j(used.body?.errors)})`);
     // Change orders: one in review (open), one approved into an UNSIGNED revision
@@ -541,6 +544,8 @@ try {
       ok(await text("ov-daily-hours") === ovA.dailyRecords.totalPersonHours.toFixed(2), `${name}: person-hours on screen are the server's (${await text("ov-daily-hours")})`);
       ok(await text("ov-daily-problems") === String(ovA.dailyRecords.openProblems), `${name}: problems on screen are the server's`);
       ok(await text("ov-mat-balance") === String(ovA.materials.balanceUnits), `${name}: material balance on screen is the server's`);
+      ok(await text("ov-mat-required") === ovA.materials.required.display, `${name}: Required on screen is the server's words (${await text("ov-mat-required")})`);
+      ok(await text("ov-mat-ordered") === String(ovA.materials.orderedUnits), `${name}: Ordered on screen is the server's (${await text("ov-mat-ordered")})`);
       ok(await text("ov-co-open") === String(ovA.changeOrders.open), `${name}: open change orders on screen are the server's`);
       ok(/\$5,650\.00/.test(await text("ov-fin-contract")) && /\$5,650\.00/.test(await text("ov-co-signed")), `${name}: signed $5,650 on both cards`);
       ok(await text("ov-fin-owed") === "Not determined", `${name}: Outstanding reads "Not determined" (${await text("ov-fin-owed")})`);

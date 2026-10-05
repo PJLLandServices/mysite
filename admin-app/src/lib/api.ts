@@ -486,6 +486,12 @@ export interface StockRow {
   required: number | null;
   requiredAmbiguous: boolean;
   requiredByList: Array<{ listId: string; listName: string; qty: number; status: string; poId: string | null }>;
+  /* Units ordered through purchase orders (server purchase-orders
+     lineCommitment): sent / part-received / received POs count their
+     quantity, a cancelled PO only what arrived, a draft nothing. */
+  ordered: number;
+  onOrder: number;
+  orderedOnPoIds: string[];
   received: number;
   receivedFromPoIds: string[];
   usedOnsite: number;
@@ -504,12 +510,18 @@ export interface MaterialException {
   entries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
 }
 
+export type MaterialsRequired = { kind: "one_list" | "per_list" | "none"; units: number | null; listCount: number; listId: string | null; listName: string | null; display: string; hint: string };
+
 export interface ProjectMaterials {
   planning: MaterialListSummary[];
   stock: StockRow[];
   exceptions: MaterialException[];
   summary: {
     listCount: number; skuCount: number;
+    /* One active list: its units. Several: "per list", units null —
+       never a sum. The words to print are the server's (display, hint). */
+    required: MaterialsRequired;
+    orderedUnits: number; onOrderUnits: number;
     receivedUnits: number; usedUnits: number; balanceUnits: number; exceptionCount: number;
   };
 }
@@ -752,6 +764,9 @@ export interface ProjectOverview {
   };
   materials: {
     listCount: number;
+    required: MaterialsRequired;
+    orderedUnits: number;
+    onOrderUnits: number;
     skuCount: number;
     receivedUnits: number;
     usedUnits: number;

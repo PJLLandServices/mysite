@@ -122,11 +122,13 @@ function describeOverview({
     },
 
     materials: {
-      // The tab's own summary, field for field. There is deliberately no
-      // project-wide "required" or "ordered" figure here — the Materials
-      // tab keeps required per list (lists can disagree) and does not
-      // model ordered quantities at all.
+      // The tab's own summary, field for field (2026-10-05: required and
+      // ordered added there — required is one list's figure or "per list",
+      // never a sum; ordered is purchase-orders.lineCommitment's).
       listCount: materials.summary.listCount,
+      required: materials.summary.required,
+      orderedUnits: materials.summary.orderedUnits,
+      onOrderUnits: materials.summary.onOrderUnits,
       skuCount: materials.summary.skuCount,
       receivedUnits: materials.summary.receivedUnits,
       usedUnits: materials.summary.usedUnits,

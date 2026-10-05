@@ -46,7 +46,21 @@ completion check.
 - Metrics gain `openTasks` and `archivedTasks`; the header's Project progress reads them from
   the server (`GET /api/projects/:id` `progress`) instead of re-deriving it in the browser.
 - **Not shown because not recorded:** tasks carry no due date or "blocked" state (no overdue
-  figure); materials have no "ordered" figure and no project-wide "required" figure (per list).
+  figure).
+- **Materials Required and Ordered (2026-10-05, after #367).** Both the Materials tab and the
+  Overview show them from the tab's own read model (`project-materials describeProject`):
+  - **Required:** one active (non-archived) list → that list's required units; several →
+    "Per list — N lists" and no total (a later list may repeat an earlier one's BOM; nothing in
+    the records says whether it replaces or adds); per-part required unchanged (one list's
+    figure, or each list's figure side by side). The words are the server's (`display`, `hint`).
+  - **Ordered:** units actually ordered through purchase orders, from ONE calculation shared
+    with still-to-order — `purchase-orders.lineCommitment`: sent / partly received / received
+    POs count their quantity, a cancelled PO only what arrived, a draft nothing. Each PO line
+    once; a PO belongs to the job when its own list link or any of its lines names one of the
+    job's lists (`purchaseOrdersForLists`). Re-orders count (they keep their link, #367).
+    Received now comes from the same function.
+  Test: `scripts/test-materials-required-ordered.mjs` (61 checks through the real routes; fails at
+  once on the previous code, which had neither field).
 Tests: `scripts/test-project-overview.mjs` (in `build:check`; `--screen` for desktop + phone)
 compares every Overview field with its tab's route on new / unsigned / active / held /
 part-then-fully-paid / archived projects, including THE reconciliation case. On the pre-change

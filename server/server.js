@@ -7075,10 +7075,10 @@ async function projectMaterialsModel(proj) {
   // Every PO that came from any of this job's lists. Receipts are counted
   // from these, not from a line's "have" status, which a human can set by
   // hand.
-  const listIds = new Set(lists.map((l) => l.id));
-  const allPos = await purchaseOrders.list({});
-  const pos = allPos.filter((po) =>
-    (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
+  // A PO belongs to the job when its own list links, or any of its
+  // lines, name one of the job's lists (purchase-orders
+  // purchaseOrdersForLists) — each PO once, nothing inferred.
+  const pos = purchaseOrders.purchaseOrdersForLists(await purchaseOrders.list({}), lists.map((l) => l.id));
   const buildWos = await workOrders.listBuildWosForProject(proj.id);
   return projectMaterials.describeProject({
     lists, purchaseOrders: pos, buildWos,
