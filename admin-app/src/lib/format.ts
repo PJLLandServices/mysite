@@ -97,3 +97,8 @@ export function projectPercentComplete(
     t.status === "done" ? 100 : Number(t.percentComplete) || 0;
   return Math.round(list.reduce((sum, t) => sum + pct(t), 0) / list.length);
 }
+
+/* Contract, invoice and payment amounts are office-only (2026-10-02). The
+   server sends a technician null in their place; this is what the screen
+   says instead — never "$0.00", which would read as a real figure. */
+export const OFFICE_ONLY = "Office only";

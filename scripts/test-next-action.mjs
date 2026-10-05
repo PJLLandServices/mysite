@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // scripts/test-next-action.mjs
 //
-// "What do I need to do next?" — the Next action card on the rebuilt
-// project overview, against the six situations Patrick named:
+// "What do I need to do next?" — the Next action card on the project
+// Overview, against the six situations Patrick named:
 //
 //   1. A brand-new project without a design
 //   2. McDonald's Dundalk: accepted, paid, 0 of 16 tasks
@@ -11,24 +11,34 @@
 //   5. A completed project with money outstanding
 //   6. A completed and fully paid project
 //
-// admin-app/src/lib/nextAction.ts is pure logic over records the server
-// already returns — no DOM, no fetch — so this runs it directly under
-// Node's type stripping rather than through a browser. The browser-level
-// integration is covered separately by test-app-shell-rebuild.mjs.
+// plus (2026-10-02) the case the browser version got wrong: every task done
+// but the completion check refusing — it must say what holds completion,
+// never "Complete and invoice".
+//
+// The rule moved to the server on 2026-10-02 (server/lib/next-action.js):
+// it reads the Tasks tab's metrics, the Financials tab's action invoice and
+// the completion check's blockers rather than re-deriving them in React.
+// Plain CommonJS now, so this runs on CI's Node and is in build:check. The
+// Overview's own end-to-end check is test-project-overview.mjs.
 //
 // Run: npm run test:next-action
-//
-// NOT in build:check, deliberately: type stripping needs Node 22+ and CI
-// pins Node 20, so putting it in the gate would fail there for a reason
-// that has nothing to do with the code under test. The same logic is
-// also exercised end-to-end through the real built bundle by
-// test-app-shell-rebuild.mjs; this file is the fast, precise version.
 
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { nextAction } = await import(path.join(ROOT, "admin-app", "src", "lib", "nextAction.ts"));
+const require = createRequire(import.meta.url);
+const { nextAction: serverNextAction } = require(path.join(ROOT, "server", "lib", "next-action.js"));
+
+// The card's inputs, as the Overview route passes them: progress is the
+// Tasks tab's metrics, not a count taken here.
+const progressOf = (list) => ({
+  doneTasks: (list || []).filter((t) => t.status === "done").length,
+  totalTasks: (list || []).length
+});
+const nextAction = (project, quote, invoice, design, blockers = []) =>
+  serverNextAction({ project, progress: progressOf(project.tasks), quote, invoice, design, blockers });
 
 let pass = 0;
 const failures = [];
@@ -164,6 +174,31 @@ const tasks = (done, total) =>
   );
   check("sold job with a draft revision is never told to send the proposal", !/send the proposal/i.test(a.headline), a.headline);
   check("sold job with a draft revision keeps building", /finish the install/i.test(a.headline), a.headline);
+}
+
+// ── 7. every task done, but the completion check refuses (2026-10-02) ──
+// The browser version said "Complete and invoice" here, sending the office
+// to a button the server would refuse. It must name what holds it.
+{
+  const blockers = [
+    { key: "revision_unsigned", message: "Revised quote Q-2026-0088-r2 (v6) hasn't been signed by the customer." },
+    { key: "deposit_unpaid", message: "Deposit invoice I-2026-0067 hasn't been paid." }
+  ];
+  const a = nextAction(
+    { id: "P8", status: "active", tasks: tasks(16, 16), proposalSnapshot: snapshot, workOrderIds: ["WO-1"] },
+    acceptedQuote, null, design, blockers
+  );
+  check("7. done but blocked -> never 'complete and invoice'", !/complete and invoice/i.test(a.headline), a.headline);
+  check("7. it says completion is held", /holding completion/i.test(a.headline), a.headline);
+  check("7. it gives the first blocker's own words and the count", /hasn't been signed/.test(a.detail) && /1 more/.test(a.detail), a.detail);
+  check("7. it points at the tab that explains it", a.href === "/app/projects/P8/changes", String(a.href));
+}
+{
+  const a = nextAction(
+    { id: "P9", status: "active", tasks: tasks(16, 16), proposalSnapshot: snapshot, workOrderIds: ["WO-1"] },
+    acceptedQuote, null, design, []
+  );
+  check("7b. done and nothing blocking -> complete and invoice", /complete and invoice/i.test(a.headline), a.headline);
 }
 
 console.log(`\nnext action: ${pass} passed, ${failures.length} failed`);

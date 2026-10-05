@@ -36,14 +36,14 @@ const LIST_TONE: Record<string, "neutral" | "progress" | "good" | "warn"> = {
   archived: "neutral"
 };
 
-const EXCEPTION_LABEL: Record<MaterialExceptionKind, string> = {
+export const EXCEPTION_LABEL: Record<MaterialExceptionKind, string> = {
   unplanned: "Unplanned material",
   over_consumed: "More used than received",
   unknown_sku: "Unknown SKU",
   price_unavailable: "No price available"
 };
 
-const EXCEPTION_TONE: Record<MaterialExceptionKind, "danger" | "warn" | "neutral"> = {
+export const EXCEPTION_TONE: Record<MaterialExceptionKind, "danger" | "warn" | "neutral"> = {
   unplanned: "warn",
   over_consumed: "danger",
   unknown_sku: "warn",
@@ -90,8 +90,11 @@ export function MaterialsTab() {
     <div className="space-y-4">
       <Card>
         <CardHeader title="Materials" />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Stat label="Material lists" value={String(data?.summary.listCount ?? 0)} />
+          {/* The server's words: one list's units, or "Per list — N lists" (never a sum). */}
+          <Stat label="Required" value={data?.summary.required.display ?? "None"} hint={data?.summary.required.hint} />
+          <Stat label="Ordered" value={String(data?.summary.orderedUnits ?? 0)} hint="units on POs, no drafts" />
           <Stat label="Received" value={String(data?.summary.receivedUnits ?? 0)} hint="units, all POs" />
           <Stat label="Used on site" value={String(data?.summary.usedUnits ?? 0)} hint="units, all days" />
           <Stat label="Project balance" value={String(data?.summary.balanceUnits ?? 0)} hint="received − used" />
@@ -181,6 +184,7 @@ export function MaterialsTab() {
                 <tr className="text-left text-[12px] uppercase tracking-[0.07em] text-ink-muted">
                   <th className="py-2 pr-3 font-semibold">Part</th>
                   <th className="py-2 pr-3 font-semibold">Required</th>
+                  <th className="py-2 pr-3 font-semibold">Ordered</th>
                   <th className="py-2 pr-3 font-semibold">Received</th>
                   <th className="py-2 pr-3 font-semibold">Used on site</th>
                   <th className="py-2 font-semibold">Project balance</th>
@@ -197,6 +201,7 @@ export function MaterialsTab() {
                       ) : null}
                     </td>
                     <td className="py-2 pr-3"><RequiredCell row={row} /></td>
+                    <td className="py-2 pr-3" data-testid={`ordered-${row.sku}`}>{row.ordered}</td>
                     <td className="py-2 pr-3">{row.received}</td>
                     <td className="py-2 pr-3">{row.usedOnsite}</td>
                     <td className={`py-2 font-semibold ${row.projectBalance < 0 ? "text-rose-700" : "text-ink"}`}>

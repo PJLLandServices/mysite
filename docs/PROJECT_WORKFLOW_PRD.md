@@ -405,3 +405,40 @@ paid deposit and a held balance invoice read **"$3,390.00 outstanding"** in the 
 **Not in this step:** hours already invoiced when a correction lands (the forward dependency
 noted under Step 2), and the final-invoice review, which belongs to Closeout (out of scope for this phase).
 
+
+## Step 6 — Overview (read-only command centre), 2026-10-02
+
+The Overview summarises the five finished tabs and decides nothing itself.
+`GET /api/projects/:id/overview` (`lib/project-overview.js`) copies each figure out of the read
+model its tab's own route returns — the tab routes and the Overview call the same builder
+functions — so the two cannot disagree. The screen does no arithmetic and sends nothing.
+
+- **Status:** stage; progress (`computeProjectMetrics`); the one next action — now a server rule
+  (`lib/next-action.js`) that respects the completion check, so a finished job with an unsigned
+  revision reads "Clear what's holding completion", never "Complete and invoice"; and every
+  completion blocker, each linking to the tab that explains it.
+- **Tasks:** open / completed / archived and progress (the Tasks tab's metrics). No "overdue":
+  tasks carry no due date or blocked state, and the card says so.
+- **Daily Records:** latest *clocked* workday and its hours and crew note, effective person-hours
+  (corrections applied), days logged, problems needing attention (open + monitoring, the one
+  rule), the latest journal update.
+- **Materials:** lists, received, used, project balance and the tab's own warnings. No "ordered"
+  or project-wide "required" figure — the Materials tab has neither (required is per list).
+- **Change Orders:** open, with the customer, signed; the signed agreement and any unsigned
+  revision (`describeAgreement`); the tab's holds.
+- **Financials:** signed contract with HST, invoiced, recorded payments, outstanding (or **Not
+  determined** while a payment is being reconciled), not yet invoiced, deposit; the
+  reconciliation warning first on the page.
+
+Found and fixed on the way: the Tasks and Daily Records tabs disagreed on "Days logged" (one
+counted clocked visits, the other every visit — now one rule, `session-hours.loggedDays`), and
+`computeProjectMetrics` wrote `totalPersonHours` as an undeclared global.
+
+**Not in this step:** the Projects list and Dashboard still mirror the task-progress rule in the
+browser (`format.ts`); moving them to the server is a separate change.
+
+**Money is office-only (2026-10-02).** Contract, invoice, payment, outstanding and
+reconciliation amounts — and the Financials tab — are for the office (role `admin`). A
+technician sees the same Overview without them: the Financials card says only whether the
+office has billing to deal with, the header reads "Office only", and the Financials tab is not
+offered. The server removes the figures (`lib/money-visibility.js`); the screens never decide.

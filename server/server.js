@@ -137,6 +137,8 @@ const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
 const changeOrdersView = require("./lib/change-orders-view");
 const financialsView = require("./lib/financials-view");
+const projectOverview = require("./lib/project-overview");
+const moneyVisibility = require("./lib/money-visibility");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -7090,6 +7092,156 @@ async function billingPreviewFor(proj) {
     note: src.note
   };
 }
+
+// ---- The project workspace's read models (2026-10-02) ----------------
+//
+// One builder per workspace tab. Each tab's GET route returns exactly what
+// its builder returns, and the Overview (GET /api/projects/:id/overview)
+// calls the SAME builders — so an Overview figure cannot disagree with the
+// tab it summarises: it is that tab's figure, read from that tab's model.
+
+// Materials tab — lib/project-materials.js over the job's lists, the POs
+// they produced and the build WOs' consumption, priced from the effective
+// parts catalog.
+async function projectMaterialsModel(proj) {
+  const lists = await materialLists.list({ parentType: "project", parentId: proj.id, includeArchived: true });
+  // Every PO that came from any of this job's lists. Receipts are counted
+  // from these, not from a line's "have" status, which a human can set by
+  // hand.
+  // A PO belongs to the job when its own list links, or any of its
+  // lines, name one of the job's lists (purchase-orders
+  // purchaseOrdersForLists) — each PO once, nothing inferred.
+  const pos = purchaseOrders.purchaseOrdersForLists(await purchaseOrders.list({}), lists.map((l) => l.id));
+  const buildWos = await workOrders.listBuildWosForProject(proj.id);
+  return projectMaterials.describeProject({
+    lists, purchaseOrders: pos, buildWos,
+    partsMap: (PARTS && PARTS.parts) || {}
+  });
+}
+
+// Change Orders tab — lib/change-orders-view.js over the shared "open"
+// rule, the quote chain and the completion check's own blockers.
+async function projectChangeOrdersModel(proj, preflight = null) {
+  const chainInfo = await projects.resolveProjectQuote(proj);
+  const pf = preflight || await projects.completionPreflight(proj.id);
+  return changeOrdersView.describeChangeOrders({
+    project: proj,
+    chainInfo,
+    blockers: pf.blockers || [],
+    stageOf: projects.scopeChangeStage,
+    describeAgreement: projects.describeAgreement,
+    revisionStateOf: projects.scopeChangeRevisionState
+  });
+}
+
+// Daily Records tab — lib/daily-records.js over the build WOs.
+async function projectDailyRecordsModel(proj) {
+  const buildWos = await workOrders.listBuildWosForProject(proj.id);
+  return dailyRecords.describeProject(buildWos, { project: proj });
+}
+
+// Financials tab — lib/financials-view.js over the signed agreement, the
+// job's invoices (projects.invoicesForProject), the deposit quote, the
+// shared billing preview and the completion check's money blockers.
+async function projectFinancialsModel(proj, preflight = null) {
+  const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
+  const projInvoices = await projects.invoicesForProject(proj);
+  const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+  let billing;
+  try { billing = await billingPreviewFor(proj); } catch (err) {
+    billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
+  }
+  const pf = preflight || await projects.completionPreflight(proj.id);
+  return financialsView.describeFinancials({
+    project: proj,
+    agreement,
+    invoices: projInvoices,
+    depositQuote,
+    billing,
+    blockers: pf.blockers || [],
+    methodLabels: invoices.PAYMENT_METHOD_LABELS
+  });
+}
+
+// The quote the project is linked to, resolved to the current version of
+// its revision chain (PJL-54). Post-acceptance the anchor is
+// sourceQuoteId; pre-acceptance, a System-Builder-originated job carries
+// systemDesign.linkedQuoteId — which may itself be stale, naming an early
+// revision that's since been superseded — so the FULL chain is walked.
+async function projectLinkedQuote(proj) {
+  const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
+  if (!quoteAnchorId) return null;
+  try {
+    const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
+    if (!resolved) return null;
+    const { current, chain } = resolved;
+    const isProposal = current.type === "project_proposal";
+    return {
+      id: current.id,
+      version: current.version || 1,
+      status: current.status,
+      type: current.type,
+      presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
+      // A send only ever completes once markSentForApproval's gate has
+      // matched the confirmed mode to the live one (PJL-48) — so any
+      // project_proposal quote that made it past "draft" was, by
+      // construction, confirmed for the mode it's showing right now.
+      confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+      subtotal: Number(current.subtotal) || 0,
+      hst: Number(current.hst) || 0,
+      total: Number(current.total) || 0,
+      lineItems: Array.isArray(current.lineItems)
+        ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
+        : [],
+      // The deposit/balance invoice is a real, populated field — but it
+      // lives on the INVOICE (invoice.quoteId), never on the quote itself
+      // (quote.depositInvoiceId is a schema placeholder nothing has ever
+      // written to — caught live, 2026-09-21, Patrick: "this invoice is
+      // part of the project. it has the deposit on it," for one that this
+      // field was reading as null). The project route fills it from the
+      // job's invoices.
+      depositInvoiceId: null,
+      chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+    };
+  } catch (err) { return null; /* tolerate — panel just doesn't render */ }
+}
+
+// System Builder summary (2026-09-21) — station/valve/area counts and the
+// last-saved date, from data already on the project record. Stations,
+// valves and areas are three different numbers; this used to send
+// `zoneCount: areas.length`, which agreed with the builder only on jobs
+// where no area produced several valves and no drip beds were grouped.
+// The counts come from the same engine the builder runs.
+function projectSiteBuilderSummary(proj) {
+  if (!(proj.systemDesign && Array.isArray(proj.systemDesign.areas))) return null;
+  // The save timestamp comes from the most recent system_design_saved
+  // history entry (systemDesign itself carries no timestamp — the server
+  // only size-caps and timestamps the HISTORY entry, per the comment on
+  // projects.update()).
+  const lastSave = (proj.history || [])
+    .filter((h) => h.action === "system_design_saved")
+    .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
+  const counts = countSystemDesign(proj.systemDesign) ||
+                 { stationCount: 0, valveCount: 0, areaCount: proj.systemDesign.areas.length };
+  return {
+    stationCount: counts.stationCount,   // programmed outputs on the controller
+    valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
+    areaCount: counts.areaCount,         // traced landscape areas
+    lastSavedAt: lastSave ? lastSave.ts : null,
+    // The saved plan, station by station, so the workspace can SHOW it
+    // rather than only count it (2026-09-24). Same engine pass as the
+    // counts above, so the list and the totals cannot disagree.
+    stations: describeSystemDesign(proj.systemDesign)
+  };
+}
+
+// Who may see a job's money — the office only (Patrick, 2026-10-02). Read
+// from the session on every /api/projects/* read; lib/money-visibility.js
+// holds the rule and the redactions.
+async function viewerCanSeeMoney(req) {
+  return moneyVisibility.canSeeMoney(await readSession(req));
+}
+const OFFICE_ONLY_ERROR = { ok: false, code: "office_only", errors: ["Financial figures are office-only."] };
 
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
@@ -16934,11 +17086,15 @@ async function handleApi(req, res, pathname) {
     // Dashboard show these; they never read the frozen proposalSnapshot or
     // add money up in the browser (2026-09-27).
     const agreements = await projects.agreementsForProjects(all);
-    return sendJson(res, 200, {
+    const listPayload = {
       ok: true,
       projects: all.map((p) => ({ ...p, agreement: agreements.get(p.id) || null })),
-      totals: projects.contractTotals(all, agreements)
-    });
+      totals: projects.contractTotals(all, agreements),
+      viewer: { canSeeMoney: true }
+    };
+    // A technician gets the list without contract values or totals.
+    if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, moneyVisibility.projectListForTech(listPayload));
+    return sendJson(res, 200, listPayload);
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
@@ -17142,49 +17298,7 @@ async function handleApi(req, res, pathname) {
     // been superseded) and walk the FULL chain to the actually-current
     // version. Frontend renders "Quote v3 — sent, Summary total,
     // confirmed" from this without a second round-trip.
-    let linkedQuote = null;
-    const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
-    if (quoteAnchorId) {
-      try {
-        const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
-        if (resolved) {
-          const { current, chain } = resolved;
-          const isProposal = current.type === "project_proposal";
-          linkedQuote = {
-            id: current.id,
-            version: current.version || 1,
-            status: current.status,
-            type: current.type,
-            presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
-            // A send only ever completes once markSentForApproval's gate has
-            // matched the confirmed mode to the live one (PJL-48) — so any
-            // project_proposal quote that made it past "draft" was, by
-            // construction, confirmed for the mode it's showing right now.
-            confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
-            subtotal: Number(current.subtotal) || 0,
-            hst: Number(current.hst) || 0,
-            total: Number(current.total) || 0,
-            lineItems: Array.isArray(current.lineItems)
-              ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
-              : [],
-            // The deposit/balance invoice is a real, populated field —
-            // but it lives on the INVOICE (invoice.quoteId), never on the
-            // quote itself (quote.depositInvoiceId is a schema
-            // placeholder nothing has ever written to — caught live,
-            // 2026-09-21, Patrick: "this invoice is part of the project.
-            // it has the deposit on it," for one that this field was
-            // reading as null). Look it up the right way: every invoice
-            // raised against ANY quote in this job's revision chain (a
-            // deposit is usually raised against whichever version was
-            // actually accepted, not necessarily today's current one).
-            // Prefer the balance invoice if the deposit's already been
-            // paid and superseded by one; else the deposit invoice.
-            depositInvoiceId: null,
-            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
-          };
-        }
-      } catch (err) { /* tolerate — panel just doesn't render */ }
-    }
+    const linkedQuote = await projectLinkedQuote(proj);
 
     // The project's invoices — projects.invoicesForProject, the ONE rule
     // (Financials Fix B, 2026-09-28): tagged with the project, its final
@@ -17230,39 +17344,7 @@ async function handleApi(req, res, pathname) {
       } catch (err) { /* tolerate — Invoice panel just doesn't render */ }
     }
 
-    // System Builder summary (2026-09-21) — zone count + last-saved date
-    // inline, pulled from data already on the project record (no extra
-    // fetch): systemDesign.areas is the builder's own area list; the
-    // save timestamp comes from the most recent system_design_saved
-    // history entry (systemDesign itself carries no timestamp — the
-    // server only size-caps and timestamps the HISTORY entry, per the
-    // comment on projects.update()).
-    let siteBuilderSummary = null;
-    if (proj.systemDesign && Array.isArray(proj.systemDesign.areas)) {
-      const lastSave = (proj.history || [])
-        .filter((h) => h.action === "system_design_saved")
-        .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
-      // Stations, valves and areas are three different numbers, and this
-      // used to send one of them under a name belonging to another:
-      // `zoneCount: areas.length`. An area can produce several valves, and
-      // grouped drip beds collapse several areas onto one — so it agreed
-      // with the builder only on jobs where neither happened. The counts
-      // now come from the same engine the builder runs.
-      const counts = countSystemDesign(proj.systemDesign) ||
-                     { stationCount: 0, valveCount: 0, areaCount: proj.systemDesign.areas.length };
-      siteBuilderSummary = {
-        stationCount: counts.stationCount,   // programmed outputs on the controller
-        valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
-        areaCount: counts.areaCount,         // traced landscape areas
-        lastSavedAt: lastSave ? lastSave.ts : null,
-        // The saved plan, station by station, so the workspace can SHOW it
-        // rather than only count it (2026-09-24). Reading a plan is the
-        // half of the System Builder that has to work on a phone; drawing
-        // one stays a desktop job for now. Same engine pass as the counts
-        // above, so the list and the totals cannot disagree.
-        stations: describeSystemDesign(proj.systemDesign)
-      };
-    }
+    const siteBuilderSummary = projectSiteBuilderSummary(proj);
 
     // The signed agreement — projects.describeAgreement, the SAME function
     // the Change Orders tab reads — so "Contract value" is never an
@@ -17281,7 +17363,23 @@ async function handleApi(req, res, pathname) {
         project: proj, agreement, invoices: projInvoices, depositQuote, methodLabels: invoices.PAYMENT_METHOD_LABELS
       }));
     } catch (err) { /* tolerate — the header shows "—" */ }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing });
+    // The header's "Project progress" — computeProjectMetrics, the Tasks
+    // tab's own figures, rather than a mirror of its rule in the browser
+    // (2026-10-02).
+    let progress = null;
+    try {
+      const m = await projects.computeProjectMetrics(id);
+      progress = { doneTasks: m.doneTasks, totalTasks: m.totalTasks, percentComplete: m.percentComplete };
+    } catch (err) { /* tolerate — the header shows "—" */ }
+    const detailPayload = { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing, progress, viewer: { canSeeMoney: true } };
+    // A technician sees no contract, invoice or payment amount — only
+    // whether the office has billing to deal with.
+    if (!(await viewerCanSeeMoney(req))) {
+      let attention = false;
+      try { attention = moneyVisibility.needsOfficeAttention(await projectFinancialsModel(proj)); } catch (err) { /* no notice */ }
+      return sendJson(res, 200, moneyVisibility.projectDetailForTech(detailPayload, { attention }));
+    }
+    return sendJson(res, 200, detailPayload);
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -17689,21 +17787,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(projectMaterialsMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-
-      const lists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
-      // Every PO that came from any of this job's lists. Receipts are
-      // counted from these, not from a line's "have" status, which a
-      // human can set by hand.
-      const listIds = new Set(lists.map((l) => l.id));
-      const allPos = await purchaseOrders.list({});
-      const pos = allPos.filter((po) =>
-        (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
-      const buildWos = await workOrders.listBuildWosForProject(id);
-
-      const model = projectMaterials.describeProject({
-        lists, purchaseOrders: pos, buildWos,
-        partsMap: (PARTS && PARTS.parts) || {}
-      });
+      const model = await projectMaterialsModel(proj);
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
@@ -17721,17 +17805,9 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(changeOrdersViewMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const chainInfo = await projects.resolveProjectQuote(proj);
-      const preflight = await projects.completionPreflight(id);
-      const model = changeOrdersView.describeChangeOrders({
-        project: proj,
-        chainInfo,
-        blockers: preflight.blockers || [],
-        stageOf: projects.scopeChangeStage,
-        describeAgreement: projects.describeAgreement,
-        revisionStateOf: projects.scopeChangeRevisionState
-      });
-      return sendJson(res, 200, { ok: true, ...model });
+      const model = await projectChangeOrdersModel(proj);
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, { ok: true, ...moneyVisibility.changeOrdersForTech(model) });
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
     }
@@ -17752,8 +17828,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(dailyRecordsMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const buildWos = await workOrders.listBuildWosForProject(id);
-      const model = dailyRecords.describeProject(buildWos, { project: proj });
+      const model = await projectDailyRecordsModel(proj);
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
@@ -18164,7 +18239,8 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, scopeChanges: proj.scopeChangeRequests || [] });
+      const scopeChanges = proj.scopeChangeRequests || [];
+      return sendJson(res, 200, { ok: true, scopeChanges: (await viewerCanSeeMoney(req)) ? scopeChanges : moneyVisibility.stripMoney(scopeChanges) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
     }
@@ -18415,6 +18491,9 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(completionPreflightMatch[1]);
       const checks = await projects.completionPreflight(id);
+      if (!(await viewerCanSeeMoney(req))) {
+        return sendJson(res, 200, { ok: true, checks: { ...checks, blockers: moneyVisibility.redactBlockers(checks.blockers), warnings: moneyVisibility.redactBlockers(checks.warnings) } });
+      }
       return sendJson(res, 200, { ok: true, checks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run preflight."] });
@@ -18579,6 +18658,7 @@ async function handleApi(req, res, pathname) {
   if (tandmPreviewMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(tandmPreviewMatch[1]);
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       return sendJson(res, 200, { ok: true, ...(await billingPreviewFor(proj)) });
@@ -18598,28 +18678,61 @@ async function handleApi(req, res, pathname) {
   if (financialsMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(financialsMatch[1]);
+      // Office only (2026-10-02): a technician is refused, not redacted —
+      // there is nothing on this tab but money.
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
-      const projInvoices = await projects.invoicesForProject(proj);
-      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
-      let billing;
-      try { billing = await billingPreviewFor(proj); } catch (err) {
-        billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
-      }
-      const preflight = await projects.completionPreflight(id);
-      const model = financialsView.describeFinancials({
-        project: proj,
-        agreement,
-        invoices: projInvoices,
-        depositQuote,
-        billing,
-        blockers: preflight.blockers || [],
-        methodLabels: invoices.PAYMENT_METHOD_LABELS
-      });
-      return sendJson(res, 200, { ok: true, ...model });
+      const model = await projectFinancialsModel(proj);
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financials."] });
+    }
+  }
+
+  // GET /api/projects/:id/overview — the Overview tab (2026-10-02, stage 6
+  // of the Project Workspace). Read-only. It runs the five tabs' OWN
+  // builders (the same functions their GET routes return) and
+  // lib/project-overview.js copies fields out of them — no arithmetic of
+  // its own — so every Overview figure is its tab's figure.
+  const overviewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/overview$/);
+  if (overviewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(overviewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      // One completion check for the whole page — the Change Orders and
+      // Financials models read their holds from it, and the status card
+      // shows it.
+      const preflight = await projects.completionPreflight(id);
+      const [metrics, dailyRecordsModel, materialsModel, changeOrdersModel, financialsModel, linkedQuote] = await Promise.all([
+        projects.computeProjectMetrics(id),
+        projectDailyRecordsModel(proj),
+        projectMaterialsModel(proj),
+        projectChangeOrdersModel(proj, preflight),
+        projectFinancialsModel(proj, preflight),
+        projectLinkedQuote(proj)
+      ]);
+      const overview = projectOverview.describeOverview({
+        project: proj,
+        metrics,
+        dailyRecords: dailyRecordsModel,
+        materials: materialsModel,
+        changeOrders: changeOrdersModel,
+        financials: financialsModel,
+        preflight,
+        linkedQuote,
+        design: projectSiteBuilderSummary(proj)
+      });
+      if (!(await viewerCanSeeMoney(req))) {
+        // A technician: the same Overview, with every amount removed and
+        // the Financials card reduced to "does the office have billing to
+        // deal with" (Patrick, 2026-10-02).
+        return sendJson(res, 200, { ok: true, ...moneyVisibility.overviewForTech(overview, { attention: moneyVisibility.needsOfficeAttention(financialsModel) }) });
+      }
+      return sendJson(res, 200, { ok: true, ...overview, viewer: { canSeeMoney: true } });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the overview."] });
     }
   }
 
