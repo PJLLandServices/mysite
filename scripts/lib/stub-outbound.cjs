@@ -99,8 +99,19 @@ nodemailer.createTransport = function createStubTransport() {
         log({ channel: "email-failed", to: String(msg.to || ""), subject: String(msg.subject || "") });
         throw new Error("stub: 550 mailbox unavailable");
       }
+      // Attachments are kept, so a test can read the PDF the customer would
+      // have received: each is written beside the outbox and logged by path.
+      const attachments = [];
+      for (const [i, a] of (Array.isArray(msg.attachments) ? msg.attachments : []).entries()) {
+        if (!a || a.content == null) continue;
+        const dir = `${OUTBOX}.attachments`;
+        fs.mkdirSync(dir, { recursive: true });
+        const file = `${dir}/${Date.now()}-${i}-${String(a.filename || "file").replace(/[^\w.-]/g, "_")}`;
+        fs.writeFileSync(file, Buffer.isBuffer(a.content) ? a.content : Buffer.from(String(a.content)));
+        attachments.push({ filename: String(a.filename || ""), contentType: String(a.contentType || ""), path: file });
+      }
       log({ channel: "email", to: String(msg.to || ""), cc: msg.cc || "", subject: String(msg.subject || ""),
-        text: String(msg.text || ""), html: String(msg.html || "") });
+        text: String(msg.text || ""), html: String(msg.html || ""), attachments });
       return { messageId: `<stub-${Date.now()}-${Math.random().toString(36).slice(2)}@stub>`, accepted: [msg.to] };
     },
     verify: async () => true,

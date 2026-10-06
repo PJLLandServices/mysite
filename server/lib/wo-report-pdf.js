@@ -38,6 +38,7 @@ const PDFDocument = require("pdfkit");
 const { checklistKeysForWorkOrder } = require("./work-orders");
 const { documentFilename } = require("./format");
 const woPhotoEdits = require("./wo-photo-edits");
+const woSettlement = require("./wo-settlement");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -554,6 +555,19 @@ function generateWoReportPdf({ wo: record, property = {}, customer = {}, mode, a
   if (wo.customerEmail || customer.customerEmail) contactBits.push(wo.customerEmail || customer.customerEmail);
   if (contactBits.length) keyValueRow(doc, "Contact", contactBits.join("  ·  "));
   doc.moveDown(0.5);
+
+  // ---- Account: Paid in Full (P-PJL-22 D) ----------------------------
+  // A prepaid visit says so, and nothing else about money: no amount, no
+  // subtotal, HST or balance (hard rule 1 holds — this line has no price).
+  // The office's copy also names what paid for it.
+  if (woSettlement.isPaidInFull(record)) {
+    sectionHeading(doc, "Account");
+    keyValueRow(doc, "Payment", "PAID IN FULL");
+    doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+    doc.text("This visit was prepaid. There is nothing to pay.", 60, doc.y + 1, { width: doc.page.width - 120 });
+    if (audience === "internal" && record.settlement.reference) keyValueRow(doc, "Prepaid by", record.settlement.reference);
+    doc.moveDown(0.5);
+  }
 
   // ---- Cheat-sheet block --------------------------------------------
   sectionHeading(doc, "System Overview");

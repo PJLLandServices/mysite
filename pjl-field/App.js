@@ -38,6 +38,7 @@ import BookScreen from './src/screens/BookScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
 import NoChargeScreen from './src/screens/NoChargeScreen';
+import PaidInFullScreen from './src/screens/PaidInFullScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
@@ -90,6 +91,7 @@ export function tabsForRole(role) {
 export const JOB = {
   CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice', THREAD: 'thread', ADD_STOP: 'addStop',
   NO_CHARGE: 'noCharge',
+  PAID_IN_FULL: 'paidInFull',     // { workOrderId } — prepaid: nothing to collect (P-PJL-22 D)
 };
 
 // A work order becomes one of two things. Kept out of the component so
@@ -316,8 +318,10 @@ export default function App() {
                 // and the visit is completed either way — fall back to
                 // the work order rather than stranding the tech on a
                 // screen that has just told them it is done.
-                onFinished={({ invoiceId, noCharge }) => {
+                onFinished={({ invoiceId, noCharge, paidInFull }) => {
                   if (invoiceId) setJob({ kind: JOB.INVOICE, invoiceId });
+                  // Paid in Full: prepaid, nothing to collect (P-PJL-22 D).
+                  else if (paidInFull) setJob({ kind: JOB.PAID_IN_FULL, workOrderId: job.workOrderId });
                   // No charge: nothing to collect, so no invoice screen and
                   // no "Take payment" (fall-closing fix #8).
                   else if (noCharge) setJob({ kind: JOB.NO_CHARGE, workOrderId: job.workOrderId });
@@ -334,9 +338,12 @@ export default function App() {
                 invoiceId={job.invoiceId}
                 onBack={closeJob}
                 onSignIn={openSignIn}
+                role={role}
               />
             ) : job.kind === JOB.NO_CHARGE ? (
               <NoChargeScreen workOrderId={job.workOrderId} onBack={closeJob} />
+            ) : job.kind === JOB.PAID_IN_FULL ? (
+              <PaidInFullScreen workOrderId={job.workOrderId} role={role} onBack={closeJob} />
             ) : job.kind === JOB.ADD_STOP ? (
               <AddStopScreen
                 key={`add-stop-${job.day || 'today'}-${signedIn}`}

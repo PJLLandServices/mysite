@@ -495,7 +495,10 @@ function renderServiceRecords(property) {
     const warrantyDate = r.warrantyExpiresAt
       ? new Date(r.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "short", year: "numeric" })
       : null;
-    const totalLine = r.total > 0 ? `$${Number(r.total).toFixed(2)} incl. HST` : "No charge";
+    // Paid in Full (P-PJL-22 D): satisfied by prepayment — never "No charge".
+    const totalLine = r.settlement?.type === "paid_in_full"
+      ? `Paid in full (prepaid)${r.settlement.reference ? ` — ${r.settlement.reference}` : ""}`
+      : r.total > 0 ? `$${Number(r.total).toFixed(2)} incl. HST` : "No charge";
     const invoiceLink = r.invoiceId
       ? `<a class="property-service-record__invoice" href="/admin/invoice/${encodeURIComponent(r.invoiceId)}">Invoice ${escapeHtml(r.invoiceId)}</a>`
       : "";

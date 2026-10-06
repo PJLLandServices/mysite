@@ -1175,11 +1175,10 @@ function isPayableOnline(inv) {
 // emailed: status stays draft (so it still sits in Patrick's list), and
 // the stamp lets the pay page take the card. A full payment then flips it
 // to paid through the ledger.
-async function openForOnSitePayment(id, { by = "" } = {}) {
-  const records = await readAll();
-  const idx = records.findIndex((r) => r.id === id);
-  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
-  const inv = records[idx];
+// THE guards for taking money on site, before anyone opens a draft for it
+// (P-PJL-22 C: "Take payment now", Tap to Pay, and "Take payment now
+// instead" all ask this one function). Returns a refusal, or null.
+function onSiteRefusal(inv) {
   if (reconciliationFor(inv).required) {
     const r = reconciliationFor(inv);
     return { ok: false, status: 409, code: "reconciliation_required", errors: [`This invoice is marked Paid, but only ${fmtMoneyCa(r.recorded)} of ${fmtMoneyCa(r.total)} is recorded — ${fmtMoneyCa(r.unresolved)} unresolved. The office reconciles it before anything is charged. Nothing was charged.`] };
@@ -1201,6 +1200,16 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   if (isPriceUnconfirmed(inv)) {
     return { ok: false, status: 409, code: "needs_pricing", errors: ["PJL confirms this visit's price before the customer pays — the office sends the invoice once it's set. Nothing was charged."] };
   }
+  return null;
+}
+
+async function openForOnSitePayment(id, { by = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const inv = records[idx];
+  const refused = onSiteRefusal(inv);
+  if (refused) return refused;
   if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
     if (inv.paidOnSiteAtCompletion !== true) {
       return {
@@ -1214,6 +1223,39 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   }
   if (!inv.paymentToken) inv.paymentToken = cryptoMod.randomBytes(16).toString("hex");
   inv.updatedAt = new Date().toISOString();
+  records[idx] = inv;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(inv) };
+}
+
+// "Take payment now instead" (P-PJL-22 C, admin only — the route checks).
+// The visit was signed off "Send invoice / bill later", and the customer
+// is standing there ready to pay: the draft is opened for payment on site
+// exactly as a "Collect payment now" draft is — still a draft, nothing
+// emailed, nothing sent to QuickBooks — so Tap to Pay and Take payment now
+// work without sending the invoice first. Every guard still applies
+// (onSiteRefusal). The sign-off answer itself (paidOnSiteAtCompletion) is
+// left as the tech gave it; the history says who switched it and when.
+async function switchToCollectNow(id, { by = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const inv = records[idx];
+  const refused = onSiteRefusal(inv);
+  if (refused) return refused;
+  if (inv.status !== "draft" || inv.sentAt) {
+    return { ok: false, status: 409, code: "already_sent", errors: ["This invoice has already been sent — Tap to Pay and Take payment now are already open for it."] };
+  }
+  if (inv.onSitePayment?.openedAt || inv.paidOnSiteAtCompletion === true) {
+    return { ok: true, invoice: hydrate(inv), unchanged: true };
+  }
+  const now = new Date().toISOString();
+  inv.onSitePayment = { openedAt: now, by: String(by || ""), switchedFromBillLater: true };
+  inv.history = Array.isArray(inv.history) ? inv.history : [];
+  inv.history.push({ ts: now, action: "switched_to_collect_now", by: String(by || "admin"),
+    note: "Take payment now instead: switched from Send invoice / bill later to Collect payment now. Not emailed." });
+  if (!inv.paymentToken) inv.paymentToken = cryptoMod.randomBytes(16).toString("hex");
+  inv.updatedAt = now;
   records[idx] = inv;
   await writeAll(records);
   return { ok: true, invoice: hydrate(inv) };
@@ -2388,6 +2430,8 @@ module.exports = {
   remove: withStoreLock(remove),
   ensurePaymentToken: withStoreLock(ensurePaymentToken),
   openForOnSitePayment: withStoreLock(openForOnSitePayment),
+  switchToCollectNow: withStoreLock(switchToCollectNow),
+  onSiteRefusal,
   isPayableOnline,
   // PJL-96
   payBlockReason,

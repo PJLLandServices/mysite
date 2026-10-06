@@ -52,6 +52,11 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
   const [showSummary, setShowSummary] = useState(false);
 
   const paid = wo?.paidOnSite;
+  // Paid in Full (P-PJL-22 D): the office settled this visit (prepaid).
+  // Nothing to choose and nothing to show in dollars. A tech's copy of
+  // the work order carries only paymentHandledByOffice; an admin's has
+  // the settlement itself.
+  const officeHandles = wo?.paymentHandledByOffice === true || wo?.settlement?.type === 'paid_in_full';
   const returning = wo?.needsReturnVisit;
 
   const onReady = useCallback((fn) => setCapture(() => fn), []);
@@ -90,14 +95,14 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
     if (!reason) blockers.push('A reason nobody signed');
     if (reason === 'other' && note.trim().length < 4) blockers.push('A note saying what happened');
   }
-  if (paid !== true && paid !== false) blockers.push('How they are paying');
+  if (!officeHandles && paid !== true && paid !== false) blockers.push('How they are paying');
   if (returning !== true && returning !== false) blockers.push('Whether you are coming back');
 
   const finish = () => {
     if (blockers.length) return;
     const label = who === 'customer'
-      ? `${name.trim()} signs, the visit completes, and the invoice is drafted.`
-      : 'The visit completes without a signature, and the invoice is drafted.';
+      ? `${name.trim()} signs and the visit completes${officeHandles ? ' — nothing to collect' : ', and the invoice is drafted'}.`
+      : `The visit completes without a signature${officeHandles ? ' — nothing to collect' : ', and the invoice is drafted'}.`;
     Alert.alert('Finish this closing?', `${label}\n\nAfter this the scope is locked.`, [
       { text: 'Not yet', style: 'cancel' },
       {
@@ -210,7 +215,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
         </Section>
       ) : null}
 
-      {feeAt ? (
+      {feeAt && !officeHandles ? (
         <View style={styles.fee}>
           <Text style={styles.feeTitle}>Closing fee</Text>
           {feePending ? (
@@ -229,12 +234,18 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
       ) : null}
 
       <Section title="Before it closes">
-        <ChoiceRow
-          label="How are they paying?"
-          value={paid === true ? 'paid' : paid === false ? 'bill' : ''}
-          options={[{ value: 'paid', label: 'Paid on site' }, { value: 'bill', label: 'Bill later' }]}
-          onChange={(v) => save({ paidOnSite: v === 'paid' ? true : v === 'bill' ? false : null })}
-        />
+        {officeHandles ? (
+          <Text style={styles.feeMeta}>
+            {wo?.settlement?.type === 'paid_in_full' ? 'Payment: paid in full (prepaid) — nothing to collect' : 'Payment: handled by the office'}
+          </Text>
+        ) : (
+          <ChoiceRow
+            label="How are they paying?"
+            value={paid === true ? 'paid' : paid === false ? 'bill' : ''}
+            options={[{ value: 'paid', label: 'Collect payment now' }, { value: 'bill', label: 'Send invoice / bill later' }]}
+            onChange={(v) => save({ paidOnSite: v === 'paid' ? true : v === 'bill' ? false : null })}
+          />
+        )}
         <ChoiceRow
           label="Does this job need another visit?"
           value={returning === true ? 'yes' : returning === false ? 'no' : ''}
@@ -253,7 +264,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
 
       <View style={styles.actions}>
         <Button
-          label={busy ? (busyLabel || 'Finishing…') : 'Finish and invoice'}
+          label={busy ? (busyLabel || 'Finishing…') : officeHandles ? 'Finish' : 'Finish and invoice'}
           onPress={finish}
           disabled={busy || saving || blockers.length > 0}
         />

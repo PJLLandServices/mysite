@@ -8541,6 +8541,39 @@ second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing
 
 ---
 
+## 2026-10-05 — INV-SEND-01 · INV-LINK-01 · TTP-COLLECT-01 · SETTLE-PIF-01: invoice delivery, Tap to Pay, Paid in Full — **documented, then BUILT on PR #383 (not merged; awaiting Patrick's approval of the state model and wording)** (P-PJL-22: PJL-126…130)
+
+Patrick, 2026-10-05, from two houses in the field: the customer's invoice PDF said DRAFT, and Tap to
+Pay would not come up until the invoice had been emailed. His requirements A–E are mapped hop by hop
+in **`docs/INVOICE_DELIVERY_TTP.md`**. That document holds the proposed state model and wording,
+and Patrick approves it before any implementation.
+
+| Flow | Broken hop (main `9d36363f`) | Suite (fails today) |
+|---|---|---|
+| INV-SEND-01 | `/send` renders the PDF from the draft, so the customer copy says **DRAFT**. Sent copies say **OVERDUE** (there is no due date). Part paid says **DRAFT**. The project-completion email loses its invoice PDF (`generateInvoicePdf` used as a stream). | `test-invoice-first-send.mjs` |
+| INV-LINK-01 | The PDF promises "the secure payment link below" and has never drawn one. | `test-invoice-pdf-pay-link.mjs` |
+| TTP-COLLECT-01 | "Paid on site" / "Bill later" reads as "already paid" / "not paid yet". Bill later hides Tap to Pay until the invoice is sent, and only an emailed send unlocks it. | `test-collect-payment-now.mjs` |
+| SETTLE-PIF-01 | A prepaid visit has no state. It gets an invoice for money already paid, or a $0 price that makes it No Charge. | `test-paid-in-full.mjs` |
+
+**PASS flows touched by the proposal, and how each is re-verified:**
+- **FLOW-23** gains a new way *in* to the same pay page (the PDF link), plus one admin route that
+  opens a Bill-later draft for on-site payment through the existing `openForOnSitePayment`
+  guards.
+  - `payBlockReason`, the charge path, finalize and the ledger are untouched.
+  - Re-verified by the pinned B2–B4 / C2–C5 checks, and one walked payment through a PDF link.
+- **No Charge** (FLOW-31 #8) is pinned unchanged by D6.
+
+Run `npm run test:invoice-delivery`. All four suites now pass and are in `build:check`. The build is
+described in `docs/INVOICE_DELIVERY_TTP.md` ("How it was built").
+
+**Patrick's acceptance walk, after he approves and it merges:**
+1. Send a real invoice to yourself. The PDF says PAYMENT DUE, not DRAFT, and **View and pay online** opens
+   the pay page.
+2. Pay it through that link. The same link then reads Paid and offers no card form.
+3. On a "Send invoice / bill later" closing, Take payment now is hidden.
+4. Press **Take payment now instead** and pay without sending.
+5. Mark a test visit Paid in full on the office page and finish it on the phone. There is no invoice. The
+   report and email say PAID IN FULL with no amounts, and the tech login never shows the words.
 ## 2026-10-05 — CADENCE-04: the send-time re-check used the wall clock, not the sweep's (FLOW-35 touched; no PASS flow)
 
 `sendStepForBooking` re-reads the booking just before sending and asks again whether the step is

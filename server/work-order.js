@@ -1478,6 +1478,7 @@ function populateForm(wo) {
   renderWoPhotos(wo);
   renderSignoff(wo);
   renderPaidOnSite(wo);
+  renderPaidInFull(wo);
   renderOnSiteQuote(wo);
   renderPostSigBanner(wo);
   renderHistory(wo);
@@ -2238,6 +2239,63 @@ document.getElementById("woPaidOnSiteSection")?.addEventListener("change", async
   }
 });
 
+// Paid in Full (P-PJL-22 D). The office records that the customer
+// prepaid; the visit then completes with no invoice. Only before it
+// completes (the server refuses after). The payment radio above is moot
+// while it is set, so it is hidden.
+function renderPaidInFull(wo) {
+  const state = document.getElementById("woPaidInFullState");
+  const form = document.getElementById("woPaidInFullForm");
+  const clear = document.getElementById("woPaidInFullClear");
+  const radios = document.getElementById("woPaidOnSiteSection");
+  if (!state) return;
+  const s = wo?.settlement?.type === "paid_in_full" ? wo.settlement : null;
+  const closed = wo?.status === "completed" || wo?.status === "cancelled";
+  if (s) {
+    const when = s.at ? new Date(s.at).toLocaleDateString("en-CA") : "";
+    state.textContent = `Paid in full — ${s.reference}${s.by ? ` · set by ${s.by}` : ""}${when ? ` on ${when}` : ""}. No invoice; the customer's report and email say PAID IN FULL.`;
+  } else {
+    state.textContent = closed ? "Not set — this visit was billed as usual." : "Not set — this visit is billed as usual.";
+  }
+  if (form) form.hidden = Boolean(s) || closed;
+  if (clear) clear.hidden = !s || closed;
+  if (radios) radios.hidden = Boolean(s);
+}
+
+async function saveSettlement(method, body) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/settlement`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+    if (data.workOrder) loadedWorkOrder = data.workOrder;
+    renderPaidInFull(loadedWorkOrder);
+    if (typeof updateWoSignoffSubmitState === "function") updateWoSignoffSubmitState();
+  } catch (err) {
+    await pjlDialog.alert(err.message || "Couldn't save.", { title: "Couldn't save paid in full", icon: "warning" });
+  }
+}
+
+document.getElementById("woPaidInFullSet")?.addEventListener("click", async () => {
+  const reference = (document.getElementById("woPaidInFullRef")?.value || "").trim();
+  if (reference.length < 3) {
+    await pjlDialog.alert("Say what paid for this visit — for example, 2026 prepaid plan and its receipt number.", { title: "What paid for it?", icon: "warning" });
+    return;
+  }
+  if (!(await pjlDialog.confirm("Mark this visit paid in full? It completes with no invoice, and the customer's report and email say PAID IN FULL with no amounts.", { title: "Paid in full", confirmLabel: "Mark paid in full" }))) return;
+  await saveSettlement("PUT", { type: "paid_in_full", reference });
+});
+
+document.getElementById("woPaidInFullClear")?.addEventListener("click", async () => {
+  if (!(await pjlDialog.confirm("Remove paid in full? The visit is billed as usual when it completes.", { title: "Remove paid in full", icon: "warning", confirmLabel: "Remove" }))) return;
+  await saveSettlement("DELETE", null);
+});
+
 // History viewer — append-only audit trail per spec §10 r4. Renders
 // newest-first as a flat list. Each entry: timestamp · actor · action
 // slug · summary note. Status changes show before→after on a second line.
@@ -2258,6 +2316,8 @@ const HISTORY_ACTION_LABELS = {
   customer_accepted: "Customer accepted scope",
   customer_declined_all: "Customer declined all",
   remote_approval_sent: "Sent for remote approval",
+  settlement_paid_in_full: "Marked paid in full",
+  settlement_cleared: "Paid in full removed",
   issue_deferred: "Issue deferred",
   issues_bulk_deferred: "Issues bulk-deferred",
   emergency_override: "Emergency override",
@@ -2544,7 +2604,7 @@ const WO_SIGN_GATE_META = {
   drawn:            { label: "Have the customer sign on the pad", jumpTo: "#woSignoffCanvas" },
   bonus:            { label: "Mark the AI intake diagnosis as Matched or Didn't Match", jumpTo: "#woIntakeGuarantee" },
   customerNotes:    { label: "Add a note about what you did at this visit", jumpTo: "#woCustomerNotes" },
-  payment:          { label: "Choose payment method (paid on site or bill later)", jumpTo: "#woPaidOnSiteSection" },
+  payment:          { label: "Choose: Collect payment now, or Send invoice / bill later", jumpTo: "#woPaidOnSiteSection" },
   returnVisit:      { label: "Answer: does this job need a return visit?", jumpTo: "" },
   materials:        { label: "Confirm materials packed", jumpTo: "#woMaterialsSection" },
   materialsConfirm: { label: "Confirm the materials list is accurate", jumpTo: "" },
@@ -2598,7 +2658,7 @@ function woSignGateBlockers() {
       blockers.push(woSignGate("photos", `Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`));
     }
   }
-  if (wo.paidOnSite !== true && wo.paidOnSite !== false) blockers.push(woSignGate("payment"));
+  if (wo.paidOnSite !== true && wo.paidOnSite !== false && wo.settlement?.type !== "paid_in_full") blockers.push(woSignGate("payment"));
   if (!wo.materialsConfirmedAt) blockers.push(woSignGate("materialsConfirm"));
   // Required by type (mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE).
   if (WO_CUSTOMER_NOTE_REQUIRED_BY_TYPE[wo.type] ?? true) {

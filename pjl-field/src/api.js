@@ -302,6 +302,13 @@ export const resendInvoice = (id) =>
 export const invoicePaymentLink = (id) =>
   sendJson(`/api/invoices/${encodeURIComponent(id)}/payment-link`, 'POST', {}).then((d) => d.url);
 
+// "Take payment now instead" (admin, P-PJL-22 C): a draft signed off "Send
+// invoice / bill later" is opened for payment on site — still a draft,
+// nothing emailed — so Tap to Pay and Take payment now work at once. The
+// server keeps every guard and refuses a tech.
+export const collectNowInvoice = (id) =>
+  sendJson(`/api/invoices/${encodeURIComponent(id)}/collect-now`, 'POST', {}).then((d) => d.invoice);
+
 // Record money that arrived OUTSIDE our pay page — cash, a cheque, or a
 // card tapped on the phone through Stripe's own app.
 //
