@@ -1,0 +1,11 @@
+{
+  "_about": "Native builds of PJL Field that main's over-the-air updates may reach, read by scripts/field-native-guard.mjs before every publish (.github/workflows/field-app-update.yml). Runtime = expo.version (runtimeVersion policy appVersion). nativeFingerprint is computed on Linux, the way CI computes it: `node scripts/field-native-guard.mjs --print` after `npm ci` in pjl-field/. A tree whose fingerprint differs from its version's entry has different native code, so it gets a new version and a new build, never a publish. Adding or changing an entry is a release decision (PJL-114, One-app migration plan).",
+  "builds": {
+    "1.1.0": {
+      "nativeFingerprint": "df302f1b072455478b9d47d726cc68d94d8bb0d9",
+      "what": "One app: Tap to Pay merged into main (Stripe Terminal 0.0.1-beta.32, proximity-reader entitlement), photos saved to the iPhone library (expo-media-library 18.2.1, add-only), upload copy resized on the phone (expo-image-manipulator 14.0.8). Expo SDK 54.",
+      "how": "Hand-built by Patrick on his Mac in Xcode (development profile; Apple's Tap to Pay development entitlement), from main at the release tag field-native/1.1.0. See docs/ONE_APP_MAC_BUILD.md.",
+      "recorded": "2026-10-06"
+    }
+  }
+}
