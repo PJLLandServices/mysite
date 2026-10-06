@@ -249,19 +249,26 @@ if (bottomNav) {
     window.addEventListener('pageshow', (e) => { if (e.persisted) closeServicesSheet(); });
   }
 
-  // Book → booking page pre-set to the current season's service. The
-  // season is decided only by js/season.js (window.PJLSeason) — the same
-  // answer the town pages' "Book Fall Closing" buttons use — so the bar
-  // flips Fall → off-season → Spring on its own. The href in the markup is
-  // the fall fallback used if the script can't load.
+  // Book → booking page pre-set by the season: repairs Jun 16 – Aug 31,
+  // otherwise the current (or next) seasonal service. The dates are decided
+  // only by js/season.js (window.PJLSeason.bookHref, windows in
+  // season.config.json), so the bar flips on its own. The href in the
+  // markup is the fall fallback used if the script can't load.
   const bookBtn = bottomNav.querySelector('.bottom-nav__book');
   if (bookBtn) {
     const applySeason = () => {
       const S = window.PJLSeason;
-      if (!S || typeof S.copyFor !== 'function') return;
+      if (!S) return;
       try {
-        const copy = S.copyFor(S.season, S.calcSeason, '');
-        if (copy && copy.ctaHref) bookBtn.setAttribute('href', copy.ctaHref);
+        let href = null;
+        if (typeof S.bookHref === 'function') {
+          href = S.bookHref();
+        } else if (typeof S.copyFor === 'function') {
+          // An older cached season.js without bookHref(): season CTA only.
+          const copy = S.copyFor(S.season, S.calcSeason, '');
+          href = copy && copy.ctaHref;
+        }
+        if (href) bookBtn.setAttribute('href', href);
       } catch (e) { /* keep the fallback href */ }
     };
     if (window.PJLSeason) {

@@ -72,7 +72,7 @@
   // Edit the JSON, not this block.
   /* @@PJL:season-config-START */
   // Generated from season.config.json by scripts/sync-seasonal-meta.mjs — edit the JSON.
-  var CONFIG = {"fall":{"page":["08-15","11-20"],"meta":["08-01","11-20"],"preUntil":"09-04"},"spring":{"page":["03-15","06-15"],"meta":["03-01","06-15"],"preFrom":"01-15"}};
+  var CONFIG = {"fall":{"page":["08-15","11-20"],"meta":["08-01","11-20"],"preUntil":"09-04"},"spring":{"page":["03-15","06-15"],"meta":["03-01","06-15"],"preFrom":"01-15"},"repairs":{"book":["06-16","08-31"]}};
   /* @@PJL:season-config-END */
 
   // MM-DD keys compare lexically. Windows are inclusive.
@@ -214,7 +214,8 @@
   }
 
   // ---- Resolve once, stamp <html> -----------------------------------
-  var phase = readOverride() || resolvePhase();
+  var override = readOverride();
+  var phase = override || resolvePhase();
   var season = seasonForPhase(phase);
   var calcSeason = calcSeasonForPhase(phase);
 
@@ -273,6 +274,23 @@
     fillPrices(doc);
   }
 
+  // Where a general "Book" button goes (the mobile bottom bar). Inside the
+  // summer repairs window (CONFIG.repairs.book) it books a repair — that
+  // window runs past the start of pre-fall on purpose. Otherwise it books
+  // the current season's service, or the next one off-season: the same
+  // href the town pages' seasonal CTA uses. A QA override has no date, so
+  // it maps midseason -> repair and every other phase -> the season CTA.
+  var REPAIR_HREF = "book.html?service=sprinkler_repair";
+  function bookHref(d) {
+    var repairs = CONFIG.repairs && CONFIG.repairs.book;
+    var p = override || resolvePhase(d);
+    var inRepairs = override
+      ? override === "midseason"
+      : !!repairs && within(key(d || new Date()), repairs);
+    if (inRepairs) return REPAIR_HREF;
+    return copyFor(seasonForPhase(p), calcSeasonForPhase(p), "").ctaHref;
+  }
+
   global.PJLSeason = {
     phase: phase,
     season: season,
@@ -284,6 +302,7 @@
     TIER_STATS: TIER_STATS,
     tierStatHtml: tierStatHtml,
     copyFor: copyFor,
+    bookHref: bookHref,
     apply: apply
   };
 

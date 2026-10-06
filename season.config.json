@@ -23,9 +23,16 @@
     "into js/season.js between its @@PJL:season-config markers on every build and the",
     "--check mode fails if the two ever differ. Edit THIS file, then run npm run build.",
     "",
+    "repairs.book — summer repair season for general \"Book\" buttons (the mobile bottom",
+    "                bar). Inside it, Book goes to sprinkler repair booking; it deliberately",
+    "                runs into the pre-fall weeks (Patrick, Oct 6 2026: service booking stays",
+    "                open all summer to the end of August). Outside it, Book follows the",
+    "                season (fall closing / spring opening). Read via PJLSeason.bookHref().",
+    "",
     "These are MARKETING windows. The operational season (first/last day a truck rolls,",
     "public booking cut-offs) is a separate setting in seasons.json."
   ],
   "fall":   { "page": ["08-15", "11-20"], "meta": ["08-01", "11-20"], "preUntil": "09-04" },
-  "spring": { "page": ["03-15", "06-15"], "meta": ["03-01", "06-15"], "preFrom": "01-15" }
+  "spring": { "page": ["03-15", "06-15"], "meta": ["03-01", "06-15"], "preFrom": "01-15" },
+  "repairs": { "book": ["06-16", "08-31"] }
 }
