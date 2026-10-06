@@ -8625,3 +8625,50 @@ should. So from the morning of 2026-10-05 those checks got `inside_cutoff`.
 - **Fix:** their portal sections now place the visit three days out, the way the iCal section of
   the same suite already did. The cutoff rule is untouched, and so is every other assertion.
 - **Verified:** full `build:check` and all 8 E2E journeys pass under Node 20.
+
+---
+
+## 2026-10-06 — FLOW-31/32: two work orders under one number are split at boot (Rina Sinapi; FLOW-23 not touched)
+
+**Found:** Patrick finished Rina Sinapi's fall closing (8 zones) and the app showed the invoice as
+already PAID, and as a spring opening. Her fall work order was created on 2026-09-08, two weeks
+before `create()` began refusing a taken id (4a1eee80, 2026-09-22). It was minted under the lead's
+spring envelope id, so the store held two records as WO-2SYJCAW6: the July spring opening
+(invoice I-2026-0040, paid by card) and the fall closing. At Finish, the cascade's idempotency
+check (`findServiceRecordByWo`) found spring's service record under that number and returned
+`alreadyRan` with spring's paid invoice. The closing got no invoice, no service record and no
+report, and nothing was sent to the customer. A scan of all 78 live work orders found this as
+the only shared number.
+
+**Rule:** `workOrders.splitDuplicateIds()` keeps the number on the EARLIEST-created record. Every
+invoice, service record and report written under the number before the second record existed
+belongs to that one. Each later record gets a fresh number and a history line (`renumbered`,
+before/after id). `repairDuplicateWorkOrderIds()` in server.js runs it once at boot. When nothing
+is shared it does nothing.
+
+**The whole workflow, for a renumbered record:**
+
+- **Customer:** nothing is sent. The completion runs like the admin "Run cascade" button: no
+  notify deps, and `skipInvoiceSms` is set. The draft reaches the customer only when the office
+  presses Send, the normal portal send.
+- **Patrick:** no completion alert. A DRAFT invoice for the visit's own signed lines appears in
+  Invoices, along with a `[wo-dup-ids]` log line.
+- **Capacity / calendar:** untouched. Bookings are left alone, because each already lists the
+  visit it was made for. The lead's booking envelope still names the spring visit, which is
+  correct.
+- **Linked records:**
+  - A completed visit with no service record under its new number gets its completion:
+    service record, report snapshot and draft invoice.
+  - Photo files are COPIED to the new number's folder, and the old folder is left intact.
+  - `lead.workOrderId` moves to the new number.
+  - QuickBooks gets the invoice at Send, as usual.
+- **Audit:** the `renumbered` history entry, plus the cascade's own `cascade_fire` /
+  `invoice_drafted`.
+- **Deliberately left alone:**
+  - The fall record's `scheduledFor` still reads the spring date it inherited. Its
+    `completedAt` (the real day) is what the invoice and report use.
+  - A phone that cached the visit under the old number shows the spring visit after its next
+    sync. The visit is finished, so nothing is lost.
+- **Test:** `scripts/test-wo-duplicate-id-repair.mjs` (in build:check). On the parent it fails
+  12 of 24, including "a DRAFT invoice for the fall visit (got paid)" and "GET WO-… is the spring
+  visit (got fall_closing)". With the fix, 24 of 24 pass, and a second boot changes nothing.
