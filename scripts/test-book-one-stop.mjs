@@ -183,7 +183,7 @@ const assigned = async () => (await bookings.list()).filter((b) => b.source === 
   ok("the plan payload carries each stop's booking state by the plan's own rule",
     /stopState: \(code, date\) => driven\.stateFor\(code, date\)/.test(server) && /stop\.bookingState = \(st && st\.state\) \|\| "unassigned"/.test(server), "no bookingState");
   ok("the day card offers Book now on an unassigned stop only",
-    /else if \(stop\.bookingState === "unassigned"\) meta\.appendChild\(bookNowControl\(stop, date\)\)/.test(page), "no Book now");
+    /else if \(stop\.bookingState === "unassigned"\) \{\s*meta\.appendChild\(bookNowControl\(stop, date\)\)/.test(page), "no Book now");
   ok("…two presses, posting that one code and day to the assign route",
     /armTwice\(button, "Press again to BOOK"[\s\S]{0,700}\/assign`[\s\S]{0,300}JSON\.stringify\(\{ code: stop\.code, date \}\)/.test(page), "not two-press or wrong body");
   ok("…and the toast says whether the customer was told", /booked for \$\{prettyDate\(date\)\} and told/.test(page) && /NOT told — /.test(page));

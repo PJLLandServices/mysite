@@ -706,7 +706,21 @@ async function assign(season, year, deps = {}) {
 // changes their mind can be put back without anyone having to remember
 // where they were. CLAUDE.md, "finish the workflow, not the write".
 
-const GONE_STATES = new Set(["moved", "cancelled", "no_show"]);
+const GONE_STATES = new Set(["moved", "cancelled", "no_show", "skipped"]);
+
+// Patrick's own "not this season" on a property — the per-season opt-out
+// the Outreach page and the tray's Skip button set. The gauntlet already
+// refuses to message or assign such a property (season_opt_out); the
+// board now honours the same flag: a planned stop with no appointment
+// behind it leaves its day as `skipped` instead of standing there with a
+// Book now button. 2026-10-06: "why is Peter on the calendar for Oct 7
+// still?" — he had told Patrick no by phone, nothing in the system said
+// so, and there was no button on the stop to say it with.
+function skippedThisSeason(property, season, year) {
+  const key = properties.seasonKey(Number(year), season);
+  return Boolean(property && property.seasonalOutreach && property.seasonalOutreach[key]
+    && property.seasonalOutreach[key].optOutThisSeason === true);
+}
 
 // The ONE liveness rule, by the name every reader uses for it
 // (server.js delegates to the same function). Named here so the
@@ -839,7 +853,12 @@ async function drivenPlan(season, year, deps = {}) {
   const stateFor = (code, date) => {
     const property = byCode.get(code);
     if (!property) return { state: "unassigned" };
-    return planStopState({ date, bookingsForProperty: byPropertyId.get(property.id) || [], season, year });
+    const info = planStopState({ date, bookingsForProperty: byPropertyId.get(property.id) || [], season, year });
+    // A live or finished appointment on the day always shows — the flag
+    // stops the plan ASKING, not a visit that exists. Only an intent with
+    // nothing behind it is skipped.
+    if (info.state === "unassigned" && skippedThisSeason(property, season, year)) return { state: "skipped" };
+    return info;
   };
   const { plan, gone } = planAsDriven(stored, stateFor);
   for (const list of Object.values(gone)) {
@@ -1166,5 +1185,5 @@ async function followPlanMoves(season, year, { codes = null, dryRun = false, act
 module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
-  planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES,
+  planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES, skippedThisSeason,
   priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

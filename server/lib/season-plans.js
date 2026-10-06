@@ -174,6 +174,21 @@ function validate(input) {
       if (Object.keys(kept).length) day.constraints = kept;
     }
     if (typeof src.frost === "string" && src.frost) day.frost = src.frost.slice(0, 40);
+    // Where a stop came from when it was NOT in the import — { at, by, via,
+    // from? } per code, written by addStop / moveStop. Same reason as
+    // constraints: validate() rebuilds each day, so anything not copied
+    // here is lost on the next save. 2026-10-06, Patrick on a stop nobody
+    // could account for: "figure out why it got there."
+    if (src.placed && typeof src.placed === "object") {
+      const kept = {};
+      for (const [code, raw] of Object.entries(src.placed)) {
+        if (!raw || typeof raw !== "object" || !raw.at) continue;
+        const rec = { at: String(raw.at).slice(0, 40), by: String(raw.by || "admin").slice(0, 80), via: String(raw.via || "add").slice(0, 24) };
+        if (raw.from) rec.from = String(raw.from).slice(0, 10);
+        kept[String(code).slice(0, 40)] = rec;
+      }
+      if (Object.keys(kept).length) day.placed = kept;
+    }
 
     for (const bucket of BUCKETS) {
       const list = src[bucket];
@@ -254,7 +269,17 @@ async function removePlan(season, year) {
 // building or maintaining.
 //
 // Returns { plan, warnings, moved: { propertyCode, from, to } }.
-async function moveStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin" } = {}) {
+// The provenance line a hand-placed stop carries on its day: who, when,
+// how (drag / picker / preview / place-all / move / custom-date / api) and,
+// for a move, where from. A stop with no record came from the import.
+function recordPlaced(day, code, { by, via, from } = {}) {
+  day.placed = day.placed || {};
+  const rec = { at: new Date().toISOString(), by: String(by || "admin").slice(0, 80), via: String(via || "add").slice(0, 24) };
+  if (from) rec.from = String(from).slice(0, 10);
+  day.placed[code] = rec;
+}
+
+async function moveStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin", via = "move" } = {}) {
   const key = planKey(season, year);
   const code = String(propertyCode || "").trim();
   if (!code) throw new Error("propertyCode is required.");
@@ -279,13 +304,18 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   for (const [dateKey, day] of Object.entries(plan.days)) {
     for (const bucket of BUCKETS) {
       const i = (day[bucket] || []).indexOf(code);
-      if (i > -1) { day[bucket].splice(i, 1); from = { date: dateKey, bucket }; }
+      if (i > -1) {
+        day[bucket].splice(i, 1);
+        from = { date: dateKey, bucket };
+        if (day.placed) delete day.placed[code];   // the record travels with the stop
+      }
     }
   }
   if (!from) throw new Error(`${code} is not in the ${key} plan.`);
 
   plan.days[toDate][toBucket] = plan.days[toDate][toBucket] || [];
   plan.days[toDate][toBucket].push(code);
+  recordPlaced(plan.days[toDate], code, { by: actor, via, from: from.date });
 
   const { plan: revalidated, warnings } = validate(plan);
   revalidated.updatedAt = new Date().toISOString();
@@ -310,7 +340,7 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
 // and deliberately refuses a code that is already in the plan: putting a
 // planned stop somewhere else is a MOVE, and one operation per state is
 // how the two never disagree about what happened.
-async function addStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin" } = {}) {
+async function addStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin", via = "add" } = {}) {
   const key = planKey(season, year);
   const code = String(propertyCode || "").trim();
   if (!code) throw new Error("propertyCode is required.");
@@ -336,6 +366,7 @@ async function addStop(season, year, { propertyCode, toDate, toBucket }, { actor
   }
   plan.days[toDate][toBucket] = plan.days[toDate][toBucket] || [];
   plan.days[toDate][toBucket].push(code);
+  recordPlaced(plan.days[toDate], code, { by: actor, via });
 
   const { plan: revalidated, warnings } = validate(plan);
   revalidated.updatedAt = new Date().toISOString();

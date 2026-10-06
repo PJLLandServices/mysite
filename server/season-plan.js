@@ -256,13 +256,34 @@
         geo.textContent = "no coordinates";
         meta.appendChild(geo);
       }
+      // WHY IS THIS STOP HERE. A stop that was not in the import says who
+      // put it on this day, when and how — Patrick, 2026-10-06, on a stop
+      // nobody could account for: "figure out why the fuck it got there."
+      // No tag means the stop came in with the season's plan import.
+      if (stop.placed && stop.placed.at) {
+        const prov = document.createElement("span");
+        prov.className = "sp-tag is-placed";
+        prov.textContent = `added ${shortDate(stop.placed.at)} · ${placedWords(stop.placed)}`;
+        prov.title = `Put on this day by ${stop.placed.by || "admin"} on ${new Date(stop.placed.at).toLocaleString("en-CA")}`
+          + (stop.placed.from ? `, moved from ${prettyDate(stop.placed.from)}` : "");
+        meta.appendChild(prov);
+      }
       const window = windowControl(stop, date);
       meta.appendChild(window.button);
       windowForm = window.form;
       meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
       if (stop.confirmation) meta.appendChild(confirmControl(stop.confirmation));
-      else if (stop.bookingState === "unassigned") meta.appendChild(bookNowControl(stop, date));
+      else if (stop.bookingState === "unassigned") {
+        meta.appendChild(bookNowControl(stop, date));
+        if (stop.propertyId) {
+          meta.appendChild(skipSeasonControl({
+            propertyId: stop.propertyId, name: stop.customerName || stop.code,
+            className: "sp-window-btn sp-skip-season",
+            done: "off this day, listed under Off this day", onDone: load
+          }));
+        }
+      }
     }
     li.appendChild(meta);
     if (windowForm) li.appendChild(windowForm);
@@ -477,12 +498,12 @@
     custom.textContent = "Any other date…";
     select.appendChild(custom);
 
-    const doMove = async (toDate, toBucket, revert) => {
+    const doMove = async (toDate, toBucket, revert, via = "move") => {
       try {
         const response = await fetch(`${base()}/move`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ propertyCode: stop.code, toDate, toBucket })
+          body: JSON.stringify({ propertyCode: stop.code, toDate, toBucket, via })
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error((data.errors || ["Move failed."]).join(" "));
@@ -527,7 +548,7 @@
         go.addEventListener("click", async () => {
           if (!dateInput.value) { dateInput.focus(); return; }
           go.disabled = true;
-          await doMove(dateInput.value, bucketSel.value, () => { go.disabled = false; });
+          await doMove(dateInput.value, bucketSel.value, () => { go.disabled = false; }, "custom-date");
         });
         return;
       }
@@ -799,12 +820,25 @@
     }
   }
 
+  // How a hand-placed stop got onto its day, in plain words.
+  function placedWords(placed) {
+    const via = placed && placed.via;
+    return via === "drag" ? "dragged from the tray"
+      : via === "picker" ? "picked from the tray"
+      : via === "preview" ? "added from the day preview"
+      : via === "place-all" ? "Place all"
+      : via === "custom-date" ? "moved here (any other date)"
+      : via === "move" ? "moved here"
+      : "added by hand";
+  }
+
   // One line per stop that left the day, in the customer's words where
   // there are any.
   function droppedMessage(g) {
     const who = [String(g.address || "").split(",")[0], g.customerName].filter(Boolean).join(" · ") || g.code;
     const why = g.state === "moved" ? `moved to ${g.toDate ? prettyDate(g.toDate) : "another day"}`
       : g.state === "no_show" ? "nobody home"
+      : g.state === "skipped" ? "skipped this season (marked by you — undo on the property)"
       : `customer cancelled${g.reason ? ` — ${g.reason}` : ""}`;
     return `Off this day: ${who} — ${why}`;
   }
@@ -1626,34 +1660,49 @@
     act.appendChild(dayPickerFor(row, row.days));
     // NOT A GAP. Patrick, 2026-10-06, on seventeen chips: "we aren't
     // serving them anymore." A customer the plan should stop asking about
-    // is marked skip-this-season here, on the chip — the same flag the
-    // outreach page sets, honoured by the same gauntlet — and moves to
-    // the "can't be placed" list below instead of standing in for a gap.
-    // Two presses, like every other write on this page.
+    // is marked skip-this-season here, on the chip — and moves to the
+    // "can't be placed" list below instead of standing in for a gap.
+    act.appendChild(skipSeasonControl({
+      propertyId: row.propertyId, name: row.customerName || row.code,
+      className: "pjl-btn pjl-btn-outline sp-standby-book sp-skip-season",
+      done: 'now under "Can\'t be placed"', onDone: loadUnplanned
+    }));
+    wrap.append(who, act);
+    return wrap;
+  }
+
+  // "Not this season", said once, honoured everywhere. The same per-season
+  // opt-out flag the Outreach page's bulk action sets: the gauntlet then
+  // refuses to message or assign the property, the tray lists it under
+  // "can't be placed", and the board drops its planned stop from the day
+  // as "skipped". Two presses, like every other write on this page. On a
+  // tray chip AND on a planned stop that has no appointment behind it —
+  // Patrick, 2026-10-06, on a customer who had said no by phone: "why is
+  // Peter on the calendar for Oct 7 still?" There was no button to say it.
+  function skipSeasonControl({ propertyId, name, className, done, onDone }) {
     const skip = document.createElement("button");
     skip.type = "button";
-    skip.className = "pjl-btn pjl-btn-outline sp-standby-book sp-skip-season";
+    skip.className = className;
     skip.textContent = "Skip this season";
+    skip.title = "They said no for this season — take them off the plan and the messages (undo on the property)";
     armTwice(skip, "Press again to SKIP them", async () => {
       skip.disabled = true;
       try {
         const response = await fetch("/api/outreach/opt-out-season", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ propertyId: row.propertyId, season: seasonSelect.value, year: Number(yearSelect.value), optOut: true })
+          body: JSON.stringify({ propertyId, season: seasonSelect.value, year: Number(yearSelect.value), optOut: true })
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't skip them."]).join(" "));
-        showToast(`${row.customerName || row.code} skipped for this season — now under "Can't be placed".`);
-        loadUnplanned();
+        showToast(`${name} skipped for this season — ${done}.`);
+        if (onDone) onDone();
       } catch (error) {
         showToast(error.message, "bad");
         skip.disabled = false;
       }
     });
-    act.appendChild(skip);
-    wrap.append(who, act);
-    return wrap;
+    return skip;
   }
 
   // What happened to the appointment behind a moved stop — said on the
@@ -1901,7 +1950,7 @@
     if (why) { showToast(why, "bad"); return; }
     if (drag.kind === "unplanned") {
       const day = ((current && current.days) || []).find((d) => d.date === date);
-      await addToDay(drag.id, date, bucket || lighterBucketOf(day));
+      await addToDay(drag.id, date, bucket || lighterBucketOf(day), null, "drag");
       return;
     }
     if (!drag.row) { showToast("That customer is no longer waiting.", "bad"); loadStandby(); return; }
@@ -1948,7 +1997,7 @@
       if (!previewState || !previewState.data) return;
       const { row, date, bucket } = previewState;
       previewAdd.disabled = true;
-      const added = await addToDay(row.code, date, bucket, () => { previewAdd.disabled = false; });
+      const added = await addToDay(row.code, date, bucket, () => { previewAdd.disabled = false; }, "preview");
       if (added) closePreview();
     });
   }
@@ -2082,12 +2131,12 @@
 
   // The one write: put the code on the day. Shared by the preview's Add
   // and the "Any other date…" path.
-  async function addToDay(code, toDate, toBucket, revert) {
+  async function addToDay(code, toDate, toBucket, revert, via = "picker") {
     try {
       const response = await fetch(`${base()}/add`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyCode: code, toDate, toBucket })
+        body: JSON.stringify({ propertyCode: code, toDate, toBucket, via })
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't add that stop."]).join(" "));

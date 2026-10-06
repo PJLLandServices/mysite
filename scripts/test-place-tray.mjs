@@ -99,7 +99,7 @@ const dropRefusal = lift("dropRefusal", `
   ok("while a chip is in the air, rail rows show its drive cost, best in green",
     /annotateRailForDrag\(\)/.test(page) && /badge\.textContent = `\+\$\{c\.addedDriveMinutes\} min`/.test(page) && /badge\.classList\.add\("is-best"\)/.test(page), "no costs on the rail");
   ok("a property drop adds through addToDay, the ONE plan write on this page",
-    /await addToDay\(drag\.id, date, bucket \|\| lighterBucketOf\(day\)\)/.test(page) && (page.match(/\$\{base\(\)\}\/add`/g) || []).length === 1, "a second add path");
+    /await addToDay\(drag\.id, date, bucket \|\| lighterBucketOf\(day\), null, "drag"\)/.test(page) && (page.match(/\$\{base\(\)\}\/add`/g) || []).length === 1, "a second add path");
   ok("a standby drop books through bookStandby, carrying the half it landed on and this season's band",
     /await bookStandby\(drag\.row, date, bucket \|\| "afternoon", sameBandThisSeason\(drag\.row\.serviceKey, services\) \|\| drag\.row\.serviceKey\)/.test(page), "drops book some other way");
   ok("…and the drawer's button uses the SAME function", /const booked = await bookStandby\(row, date, half\.value, svc\.value\)/.test(page), "the drawer books its own way");

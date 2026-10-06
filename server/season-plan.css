@@ -435,6 +435,7 @@
 }
 .sp-tag.is-warn { background: var(--pjl-amber-pale); color: var(--pjl-amber); }
 .sp-tag.is-bad { background: #FBE3E3; color: #A32020; }
+.sp-tag.is-placed { background: #EEF2FF; color: #3B4CA8; }
 .sp-count {
   font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums;
   padding: 2px 8px; border-radius: 999px;
