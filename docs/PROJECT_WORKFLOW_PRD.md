@@ -522,9 +522,18 @@ Financials (read-only, office-only), Overview. What is left, each kept separate:
    task progress in the browser (`projectPercentComplete()` in `admin-app/src/lib/format.ts`),
    mirroring the server rule; `test-task-progress-agrees.mjs` keeps the two equal. Moving them
    to the server is its own change, not started.
-4. **Office-only money gaps** — the table above. A decision for Patrick.
-5. **"Log an update" on the Overview does nothing yet** — the button has no action. Noted, not
-   fixed.
+4. **Office-only money gaps** — the table above. Documented exceptions, kept as they are
+   (Patrick, 2026-10-06): invoice access the crew needs to take payment on site is NOT to be
+   changed, and no permission is widened or narrowed without his direction.
+5. **UNFINISHED UI — "Log an update" does nothing.** The Overview header shows a primary
+   (working-looking) "Log an update" button, to the office and to technicians, with no action
+   behind it (`admin-app/src/routes/ProjectOverview.tsx`, the header `actions`). Patrick,
+   2026-10-06: a working-looking button with no action must not be presented. **Proposed
+   smallest correction (not built, awaiting his go):** remove the button from the header — one
+   line in that file, then rebuild `server/app-dist`. Nothing else references it (no route, no
+   test). Hiding is preferred over a disabled button because a disabled primary button still
+   promises a feature that is not planned in this phase. "Open in classic" stays. No update
+   workflow is built; the project journal on the classic page is where updates are logged today.
 
 The booking test investigation (`test-day-order`, cause unconfirmed) is unrelated to this plan
 and is recorded on its own in `docs/FLOW_REGISTER.md`.
@@ -537,7 +546,7 @@ purchases, emails, payments or edits. Each tab below lists the buttons NOT to pr
 
 | Tab | What should be there | Must agree with | Opens a classic page | Don't press |
 |---|---|---|---|---|
-| Overview | header: Contract value, Project progress, Billing; six cards and the next action | each card = its tab (below) | "Open in classic" → classic project page; customer / property links | "Log an update" (inert) |
+| Overview | header: Contract value, Project progress, Billing; six cards and the next action | each card = its tab (below) | "Open in classic" → classic project page; customer / property links | "Log an update" (does nothing — unfinished, item 5) |
 | Tasks | Complete %, tasks done, days logged, person-hours, the list | Complete % = header Project progress = Overview Tasks card (= Projects list bar, browser-mirrored); days logged and person-hours = Daily Records | — | progress buttons, Complete, Edit, Remove, Add task, Restore |
 | Daily Records | each day: clock in/out, people, person-hours, photos, notes; problems | days logged, person-hours, problems open = Overview Daily Records card | photos open full size | Correct clock times, Correct crew count, Raise a problem, problem status |
 | Materials | Required (one number, or "Per list — N lists"), Ordered, Received, Used on site, Project balance; lists; project stock | the same figures on the Overview Materials card; Ordered = units on this job's sent / partly received / received POs (cancelled: only what arrived; drafts: none) | list name → classic material list; PO number → classic PO; work order number → classic work order | anything on those classic pages (send, receive, cancel, edit) |
