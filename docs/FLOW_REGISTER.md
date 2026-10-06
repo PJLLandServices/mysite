@@ -27,9 +27,17 @@ preview, place-all, move, custom-date, api — `planVia` whitelist); the plan pa
 tooltip. A stop with no tag came in with the import. NOT touched: the stored plan still holds a
 skipped code (the flag is reversible on the property; clear it and the stop is back); an inbound
 SMS "no" still does not set the flag (Twilio STOP is a different thing) — named, not built.
-Coverage: `test-plan-follows-bookings` (46: skipped state, booked-but-skipped stays, the named
-rule), `test-season-plan-unplanned` (49: placed record on add, survives re-read, travels on
-move, import has none; route/page/payload guards), `test-place-tray` guard updated.
+**The actual cause, from Patrick minutes later:** *"I personally deleted his appointment."* A
+DELETE erases the record; a cancellation keeps one. Every reader of a "no" (`planStopState`,
+`declinedThisSeason`, the tray, outreach) reads records, so a deleted seasonal booking said
+nothing and the planned stop stood. (4) **A seasonal delete now asks "Was this a no?"** on both
+admin delete buttons (Schedule canvas, booking page): *Yes — they said no* sends `{ saidNo: true }`
+and the route sets the property's skip-this-season flag (season from the service key, year from
+the appointment), so the plan, tray, outreach and cadence all read the same no; *No — booked by
+mistake* deletes as before. A repair's delete asks nothing. Coverage: `test-plan-follows-bookings`
+(52: skipped state, booked-but-skipped stays, the named rule, the delete route and both pages),
+`test-season-plan-unplanned` (49: placed record on add, survives re-read, travels on move,
+import has none; route/page/payload guards), `test-place-tray` guard updated.
 **2026-10-06, evening (A cancelled SELF-booking now leaves its plan day):** Patrick: *"why are
 there cancelled appointments in the current booking seasonal plan?"* The board's per-stop rule
 (`planStopState`) knew a cancelled ASSIGNMENT as a no (the stop leaves the day, listed under *Off

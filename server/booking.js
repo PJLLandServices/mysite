@@ -224,6 +224,18 @@ if (deleteBookingBtn) {
       original.scheduledFor ? formatDateTime(original.scheduledFor) : ""
     ].filter(Boolean).join("\n");
     if (!(await pjlDialog.confirm(lines, { title: "Delete booking", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
+    // A deleted SEASONAL booking leaves no record, so the Season Plan, the
+    // tray and outreach would go on treating the customer as open (Patrick,
+    // 2026-10-06: "I personally deleted his appointment"). One more
+    // question: did they say no? Yes marks the property skip-this-season.
+    const key = String(original.serviceKey || "");
+    const seasonal = key.startsWith("spring_open_") || key.startsWith("fall_close_");
+    const saidNo = seasonal ? await pjlDialog.confirm(
+      `Did ${original.customerName || "this customer"} say NO to their ${key.startsWith("spring_open_") ? "spring opening" : "fall closing"} this season?\n\n`
+      + `Yes — they're marked "skip this season": off the Season Plan, no messages, not offered a day.\n`
+      + `No — it was booked by mistake; they stay a customer to plan.`,
+      { title: "Was this a no?", icon: "warning", confirmLabel: "Yes — they said no", cancelLabel: "No — booked by mistake" }
+    ) : false;
 
     deleteBookingError.hidden = true;
     deleteBookingBtn.disabled = true;
@@ -231,7 +243,9 @@ if (deleteBookingBtn) {
     try {
       const res = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, {
         method: "DELETE",
-        credentials: "same-origin"
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saidNo })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {

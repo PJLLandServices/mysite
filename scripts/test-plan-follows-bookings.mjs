@@ -181,6 +181,31 @@ const state = (rows, over = {}) => lib("planStopState")({ ...ctx, bookingsForPro
   ok("no plan → null, not a crash", none === null, j(none));
 }
 
+// ---- 3b. A deleted seasonal booking can carry the customer's no ----------
+// Patrick, 2026-10-06: "I personally deleted his appointment." A delete
+// leaves no record — unlike a cancellation — so nothing told the plan,
+// the tray or outreach that the customer had said no. The delete route
+// now takes { saidNo: true } and sets the property's skip-this-season
+// flag (the one flag every reader honours); both admin delete buttons
+// ask the question for a seasonal booking and send the answer.
+{
+  const server = read("server/server.js");
+  const schedule = read("server/schedule.js");
+  const booking = read("server/booking.js");
+  ok("the delete route reads saidNo from the body",
+    /bookingMatch && req\.method === "DELETE"[\s\S]{0,1500}const saidNo = deleteBody && deleteBody\.saidNo === true/.test(server), "no saidNo on the route");
+  ok("…and, for a seasonal booking, sets skip-this-season on the property after the delete",
+    /saidNo && bookingToDelete\?\.propertyId[\s\S]{0,900}outreach\.setOptOutForSeason\(bookingToDelete\.propertyId, season, year, true\)/.test(server), "the no has no home");
+  ok("…naming the season from the service key, never guessing",
+    /outreach\.SEASONAL_SERVICE_PREFIXES[\s\S]{0,200}key\.startsWith\(prefix\)/.test(server), "season not derived from the key");
+  ok("the Schedule page asks 'was this a no?' for a seasonal delete and sends the answer",
+    /async function askIfCustomerSaidNo/.test(schedule) && /confirmLabel: "Yes — they said no", cancelLabel: "No — booked by mistake"/.test(schedule)
+    && /askIfCustomerSaidNo\(\{ \.\.\.summary, serviceKey: pendingAction\.serviceKey \}\)/.test(schedule) && /body: JSON\.stringify\(\{ saidNo \}\)/.test(schedule), "schedule delete doesn't ask");
+  ok("the booking page asks the same question and sends the same answer",
+    /Was this a no\?/.test(booking) && /body: JSON\.stringify\(\{ saidNo \}\)/.test(booking), "booking delete doesn't ask");
+  ok("a repair's delete asks nothing", /const seasonal = key\.startsWith\("spring_open_"\) \|\| key\.startsWith\("fall_close_"\);/.test(booking) && /if \(!seasonal\) return false;/.test(schedule));
+}
+
 // ---- 4. Every reader holds the DRIVEN plan --------------------------------
 {
   const src = read("server/server.js");

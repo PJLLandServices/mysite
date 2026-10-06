@@ -13786,6 +13786,15 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete bookings."] });
       const id = decodeURIComponent(bookingMatch[1]);
+      // Why the delete, when the page asks. A deleted SEASONAL booking
+      // leaves no record — unlike a cancellation — so the plan, the tray
+      // and outreach went on treating the customer as open. Patrick,
+      // 2026-10-06, on a stop that would not leave Oct 7: "I personally
+      // deleted his appointment." `saidNo: true` gives the no a home: the
+      // property's skip-this-season flag, the one every reader honours.
+      // Absent or false (booked by mistake), the delete is what it was.
+      const deleteBody = await parseRequestBody(req).catch(() => ({}));
+      const saidNo = deleteBody && deleteBody.saidNo === true;
       // Fetch the canonical record BEFORE remove() so we can resolve
       // its leadId for the lead.booking cleanup below — the legacy
       // embedded lead.booking shape doesn't carry the canonical BK- id,
@@ -13831,7 +13840,22 @@ async function handleApi(req, res, pathname) {
       } catch (e) {
         console.warn("[booking delete] lead.booking cleanup failed:", e?.message);
       }
-      return sendJson(res, 200, { ok: true, deletedId: result.deletedId });
+      let skippedSeason = null;
+      if (saidNo && bookingToDelete?.propertyId && bookingToDelete.scheduledFor) {
+        const key = String(bookingToDelete.serviceKey || "");
+        const season = Object.entries(outreach.SEASONAL_SERVICE_PREFIXES)
+          .find(([, prefix]) => key.startsWith(prefix))?.[0] || null;
+        if (season) {
+          const year = new Date(bookingToDelete.scheduledFor).getFullYear();
+          try {
+            await outreach.setOptOutForSeason(bookingToDelete.propertyId, season, year, true);
+            skippedSeason = { season, year };
+          } catch (e) {
+            console.warn("[booking delete] skip-this-season after delete failed:", e?.message);
+          }
+        }
+      }
+      return sendJson(res, 200, { ok: true, deletedId: result.deletedId, skippedSeason });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete booking."] });
     }
