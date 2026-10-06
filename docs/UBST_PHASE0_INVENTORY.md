@@ -98,7 +98,7 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
 | W14 | Season Plan edits: `PUT /api/season-plans/:s/:y` 27594; `/move` 28607 (`seasonPlans.moveStop` + `followPlanMoves` → `bookings.moveAssignmentDay`); `/day` 28554 (`moveDay` + `moveDayBookings`); `/add` 28903; `/unplanned/place` 28843; `/stop-window` 28449; `/stop-order` 28496; `/auto-order` 28525; `/caps` 28476; `/follow-plan` 28653 | Season Plan board (drag, move, add, reorder) | plan, bookings | `season-plans.json`; for assignment bookings `moveAssignmentDay` writes `scheduledFor` + `assignment.date/bucket`, resets the customer's answer, queues a day-move notice — **not** `bookings.reschedule` (no rescheduleCount), no WO date | Y — the plan is the second representation; a move is a reschedule by another name | `moveDay` refuses days with real bookings | plan stop = `{bookingId, route metadata}`; move = `rescheduleBooking(reason:"plan_move")` |
 | W15 | `syncRoutedTimes` (`server.js:30475`; after every plan edit/booking, and on an interval 31118) | automatic | plan, bookings, leads, WOs | `bookings.update(scheduledFor)` on pristine assignment bookings; `retimeCustomerBooking` (30425) → `lead.booking.start/end` + `mirrorBookingOnly` + `wo.scheduledFor` | mirror × 3, periodic | skips arrived/locked | the TRD's `internalRouteTime`, separate from the promised date+bucket; one writer |
 | W16 | `bookings.healFromLeads` (sweep 31144; iCal feed `lib/ical-feed.js:309`) | automatic | leads without a canonical record | creates canonical from `lead.booking` | **Y** — resurrects a hard-deleted record whose envelope survived | by leadId | retire once `lead.booking` is a projection |
-| W17 | `POST /api/work-orders` (`server.js:21744`) | CRM new work order (lead or **property only**) | lead, property; refuses a dead `lead.booking` | WO (`leadId/propertyId`, `scheduledFor` from `lead.booking.start`, `customId` = envelope id); `bookings.attachWorkOrder(recordForLeadBooking)` (21967, PJL-93 fixed); `lead.workOrderId` | **Y** for property-only WOs: a dated WO with **no Booking anywhere**, shown on Today via `mergeDaySchedule` | id never reused | scheduled work must create/bind a Booking; WO gets `bookingId` |
+| W17 | `POST /api/work-orders` (`server.js:21744`) | CRM new work order (lead or **property only**); the Field app for **every season-plan row** (`pjl-field/src/api.js:195`) | lead, property; refuses a dead `lead.booking` (property-only creates are unguarded) | WO (`leadId/propertyId`, `scheduledFor` from `lead.booking.start`, `customId` = envelope id); `bookings.attachWorkOrder(recordForLeadBooking)` only when a lead exists (21965-21970, PJL-93 fixed); `lead.workOrderId` | **Y** — property-only WOs are never linked, so **no season-plan booking ever gets a Work Order id**; a dated WO with no Booking shows on Today via `mergeDaySchedule` | id never reused; no upsert (a second POST for the same lead makes a second linked WO) | scheduled work must create/bind a Booking; WO gets `bookingId` |
 | W18 | `POST /api/leads/:id/open-wo` (`server.js:26582`) | Field app "Open WO" | `workOrderForLeadBooking` (818) else create under envelope id | WO; `attachWorkOrder(recordForLeadBooking)` (26631); `lead.workOrderId` | heuristic fallback (type + createdAt) when the envelope names no WO | — | resolve by `bookingId` first |
 | W19 | Follow-up WO (`server.js:15240-15340`) | WO page "Follow-up" | parent WO, lead, availability | follow-up WO; **raw `fs.writeFile` of bookings.json** with a hand-built record (`created_followup`) | Y (bypasses store lock → lost-update risk against any concurrent writer) | none | `bookings.createDirect` |
 | W20 | WO `PATCH` → `status:"completed"` (`server.js:22470-22560`) | Field app Finish / desk | WO | completion cascade: `property.serviceRecords`, invoice, warranty, notifications; **no Booking write**; `lead.booking.workOrder.status` not written | **Y** — Booking stays `confirmed` forever; portal reconciles from `serviceRecords` (PJL-107 #2) | cascade idempotent per WO | `completeBooking(bookingId, woId, completedAt)` inside the cascade |
@@ -171,6 +171,56 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
     `job-finder.js:105-113/125/157-159` (lead verdict has no status check), `schedule.js:219`,
     `work-order.js:999-1001`, `crm-reschedule.js:128-131`, `admin.js:1840`, `day-schedule.js:56`,
     `server.js:16035-16037, 27500-27502`, `assignments.js:283, 895, 1038, 1103`.
+
+### 3.4 Additional findings from the writer cross-check (verified, origin/main)
+
+1. **A season-plan booking can never be linked to its Work Order.** The Field app opens a WO for a
+   lead-less row with `POST /api/work-orders {type, propertyId}` (`pjl-field/src/api.js:195-196`),
+   and that route links a booking only when a lead is present (`server.js:21965-21970`). Every
+   assignment booking therefore keeps `workOrderIds: []` for life, its WO exists only as a second
+   unlinked record, and Unassign's "has_work_order" guard can never fire for them.
+2. **Three GET endpoints write.** `GET /api/bookings?leadId=` (13741-13748), portal
+   `reschedule-availability` (15906-15917) and portal `booking-actions` (16010-16029) call
+   `syncBookingFromLead` when the lead has no record, which can create a record, close last
+   season's record as `completed` (`closed_by_rebook`), promote the customer and re-time the day on
+   a page view.
+3. **Five more writers copy onto `lead.booking` without checking it is the lead's current booking:**
+   reschedule (5869), DELETE (13827), service-type (14037), `retimeCustomerBooking` (30441), plus
+   the cancel mirror already listed. With a follow-up record sharing the parent's `leadId`, any of
+   them can overwrite or cancel the main appointment's envelope. Only the portal routes resolve
+   through `currentRecordForLead`.
+4. **Reserve's retry safety only works for the PJL Assistant.** The `clientRequestId` receipt is
+   sent by `lib/assistant-mcp.js:356` and by nobody else; the public page, the admin Schedule modal
+   and the Field app have no replay protection beyond the lock.
+5. **The reserve new-lead path never looks for an existing lead or customer** (`isLikelyDuplicate`
+   is used only at 7711), so a returning customer booking from the public page gets a second lead,
+   envelope and record. Book-from-lead (A4) overwrites the envelope with no check for a live one; the
+   earlier record is left `confirmed` with `officeReview` and keeps holding its slot and its Today row.
+6. **bookings.json has no store lock.** Writes go through `writeJsonAtomic` only (`lib/bookings.js:72`);
+   just `/api/booking/hold` and `/api/booking/reserve` take `bookingReserveLock`. Season plans
+   (`lib/season-plans.js:112`) and the schedule store write non-atomically. Concurrent cancel,
+   reschedule, cadence and re-time writes can lose each other.
+7. **More writers of appointment state:** emergency override `POST /api/work-orders/:id/emergency…`
+   (24389, creates a `service_visit` WO dated at `lead.booking.start`, no booking); `DELETE
+   /api/work-orders/:id` (22900, clears `lead.workOrderId` only, the booking keeps the dead id);
+   bulk WO change-status (`lib/bulk-actions.js:196-204`, no cascade, no booking change); Property
+   DELETE (11032, leaves season-plan bookings orphaned); lead lost/archive/soft-delete (only the lead
+   pass of `activeBookings` drops them, the canonical pass still holds the slot); inbound SMS "YES"
+   (7521 → `appointmentActions.confirm`); follow-up with no slot picked (WO dated at the parent's
+   `lead.booking.start`, an extra Today row).
+8. **"Skip this season" (29354) does not cancel an existing assignment booking**; it only sets the
+   property opt-out, so the plan can carry both a live booking and a recorded "no".
+9. **`PATCH /api/bookings/:id` is reachable by the tech role** (path auth "user", 1709), and
+   `bookings.update` has no transition rule, so a dead booking can be revived to `confirmed`.
+10. **`admin_custom` reschedule skips every availability and overlap check** (5808-5827); the MCP
+    `reschedule_booking` with `customTime` inherits that.
+11. **Dead or unswept state:** `lead.booking.dayLocked` is read (30446) but never written;
+    `holds.sweep()` is never called (expired holds are only filtered on read).
+12. **More hand-rolled status lists:** `server.js:2261` (a WO finished list duplicating the
+    unexported one in `lib/bookings.js:262`), `server.js:4741, 16129, 16153, 27834, 28575`,
+    `lib/outreach.js:261, 328`, `lib/work-orders.js:817, 1978, 2234`, `lib/assignments.js:455, 780,
+    981`, `assignment-cadence.js:724`, `portal.js:660`, `work-orders-index.js:34`,
+    `work-order-tech.js:1371, 4899`, `schedule.js:410, 524`.
 
 ---
 
@@ -258,10 +308,10 @@ stubbed, tripwires), run from `build:check`, each confirmed failing on `origin/m
 |---|---|---|---|
 | T1 `test-ubst-cancel-everywhere.mjs` (Peter) | property + fall plan stop + assignment booking with a step-1 touch; the same visit expressed as a lead booking (with its WO opened); a self-booked-then-cancelled customer on a plan day | After each of the six cancel doors (W5, W6, W7, W8, W11, W12): a canonical record **still exists** with a terminal status + `cancelledAt` (fails W5/W6: gone; W8: no `cancelledAt`); plan GET lists the stop under `dropped`, not in `morning` (fails W5/W6: `unassigned`, numbered); `unplanned`/preflight report `cancelled_this_season`, not a free property (fails W5/W6, and fails for the self-cancelled customer under season-wide Assign, §3.3.3); a re-run of Assign creates **zero** records and sends nothing (fails W5/W6 and §3.3.3); `activeBookings` frees the slot for a lead-backed booking (fails W8); Today's `removed` names an assignment booking taken off by "Not today" (fails W7 for lead-less); Today shows **no `work_order` row** for the cancelled visit (fails W7/W8: §3.3.2); W7 and W11 cascade identically to the WO (fails: W7 does not); "Not today" on the visit shown acts on that visit's record when a follow-up exists (fails: §3.3.1) | iCal, reminders, cadence exclude it; history kept for W7/W11/W12 |
 | T2 `test-ubst-returning-customer.mjs` (PJL-73/97) | lead with completed spring booking + WO; fall booked three ways: reserve with `leadId`, season Assign for the property, MCP book with `leadId` | spring Booking is `completed` **at WO completion time**, not only when the customer re-books (fails); fall WO carries `bookingId` = fall Booking (fails: field absent); spring record untouched by the fall reschedule | new BK id; fall record links only the fall WO; Today/open-wo pick the fall WO (PJL-97/93 fixes) |
-| T3 `test-ubst-crm-wo-binds-one-booking.mjs` (PJL-93) | lead with a closed spring record and a live fall record; property with a live assignment booking and no lead | property-only `POST /api/work-orders` binds to the live assignment Booking (fails: no link at all); WO gets `bookingId` (fails); a WO raised against a cancelled assignment booking is refused (fails: guard reads `lead.booking` only) | lead path attaches to `recordForLeadBooking` only |
+| T3 `test-ubst-crm-wo-binds-one-booking.mjs` (PJL-93) | lead with a closed spring record and a live fall record; property with a live assignment booking and no lead; the Field app's exact `{type, propertyId}` call | property-only `POST /api/work-orders` binds to the live assignment Booking (fails: no link at all, §3.4.1); WO gets `bookingId` (fails); a WO raised against a cancelled assignment booking is refused (fails: guard reads `lead.booking` only); `DELETE /api/work-orders/:id` leaves no dead id on the Booking (fails) | lead path attaches to `recordForLeadBooking` only |
 | T4 `test-ubst-completion-reconciles.mjs` (PJL-107) | assignment booking + WO; lead booking + WO | WO → completed ⇒ `booking.status === "completed"`, `completedAt` set, history entry (fails); portal `deriveBookingState().completed` true **without** reading `serviceRecords` (fails by construction today); plan stop reads `done`; cadence sends nothing further; WO cancelled/no_show ⇒ Booking reconciled (fails) | portal header says "season done" via serviceRecords |
 | T5 `test-ubst-one-active-rule.mjs` | table: every status × every reader (R1 availability, R2 today, R3 `/api/bookings`+`/api/quotes` as the canvas sees them, R4 plan, R5 portal facts, R8 iCal, R9/R10 sweeps, R16 find-jobs) | each reader's "active" answer equals `holdsItsSlot(status)`; portal `envelopeUpcoming` false for a cancelled future lead booking (fails); job-finder treats `no_show`/`completed` plan stops consistently (fails); lint extended to `server/*.js` front-end copies | lib readers already on the shared rule |
-| T6 `test-ubst-idempotent-writers.mjs` | each writer twice, then concurrently | follow-up (W19) twice → one record and no lost update against a concurrent reserve (fails: raw write); Book now twice → one record; PATCH never changes status (fails) | reserve receipt replay; Assign twice → settled |
+| T6 `test-ubst-idempotent-writers.mjs` | each writer twice, then concurrently | follow-up (W19) twice → one record and no lost update against a concurrent reserve (fails: raw write); Book now twice → one record; PATCH never changes status (fails); a replayed public/admin reserve with the same request id returns the same booking (fails: receipts only honoured for the MCP caller, §3.4.4); `GET /api/bookings?leadId`, portal `reschedule-availability` and `booking-actions` change nothing on disk (fails: §3.4.2); concurrent cancel + cadence step on one record keeps both writes (fails: no store lock, §3.4.6) | reserve receipt replay for the MCP; Assign twice → settled |
 | T7 `test-ubst-no-raw-store-writes.mjs` | static | no `bookings.json` path or `fs.writeFile` of the store outside `lib/bookings.js` (fails: `server.js:15305`); no caller of `bookings.remove` outside purge (fails: W5, W6) | — |
 | T8 `test-ubst-plan-stop-identity.mjs` (PJL-134) | plan + Assign + Book now; then savePlan/resequence/move/day-move | stop carries `bookingId` after assign and after every plan rewrite (fails: codes only); a stop whose booking is missing is never `unassigned`-bookable by Assign (fails); route rebuild creates no second Booking; move = same Booking id, `rescheduleCount` semantics decided | `drivenPlan` drops cancelled/moved stops |
 | T9 `test-ubst-audit-fixtures.mjs` (PJL-137) | one fixture record per audit category (§5.8 + TRD §11) | `node scripts/audit-bookings.mjs --json` reports the expected counts and ids, writes nothing, exits non-zero on critical conflicts (fails: tool does not exist) | — |
@@ -309,15 +359,21 @@ envelope until Phase 6).
   purge + never-messaged records, with `cancelBooking(reason)` as the admin "delete"; (c) `bucket`
   (promised window) on every Booking; (d) `WO.bookingId` is part of the contract here; (e) keep
   `workOrderIds[]` with the same-visit invariant, `primaryWorkOrderId` derived; (f) no "rescheduled"
-  status; (g) `standby` decision.
+  status; (g) `standby` decision; (h) a store lock around every bookings.json write (today only
+  hold/reserve are locked, §3.4.6); (i) status transition rules (no reviving a dead record); (j) GET
+  endpoints must not write (the heal moves to the sweep only).
 * **PJL-134**: plan stop stores `bookingId` at assign/Book-now; `planStopState` resolves by id first;
   a missing/terminal booking never returns a stop to Assign-bookable; Unassign → cancel-with-reason (or
   removed); `seasonalOutreach.touches` carry `bookingId`; "Skip this season", a cancelled assignment
   and `declinedThisSeason` collapse into one `seasonAnswer()` read by preflight, unplanned and Book now.
-* **PJL-135**: writer list = W2, W4, W5, W6, W7, W8, W9, W11, W12, W14, W15, W16, W17, W19, W23, W28
-  (the issue names only public/portal/admin/assignment/holds/reschedule/cancel). Idempotency keys:
-  reserve `clientRequestId` (exists); assign `property+season`; Book now `property+season+date`;
-  follow-up `parentWoId+slot`; W8 none (refused).
+* **PJL-135**: writer list = W2, W4, W5, W6, W7, W8, W9, W11, W12, W14, W15, W16, W17, W19, W23, W28,
+  plus the §3.4.7 set (emergency override, WO delete, bulk WO status, property delete, lead
+  lost/archive, SMS YES, slotless follow-up) and the three GET-that-write sites (§3.4.2). Every lead
+  mirror must resolve the record through `currentRecordForLead` (§3.4.3). Idempotency keys: reserve
+  `clientRequestId` sent by **every** caller, not only the MCP (§3.4.4); assign `property+season`;
+  Book now `property+season+date`; follow-up `parentWoId+slot`; W8 none (refused). The public
+  new-lead reserve path needs a returning-customer resolution rule (§3.4.5) or an explicit decision
+  that a second lead is acceptable.
 * **PJL-136**: backfill resolver order: `booking.workOrderIds ∋ wo.id` → lead envelope id → same lead,
   same local day, same type → unresolved (manual); cascade reconciles on `completed`, `cancelled` and
   `no_show`; property-only WO must create/bind a Booking; follow-up WO path included; #391 relink.
