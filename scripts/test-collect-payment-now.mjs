@@ -68,6 +68,10 @@ function ok(cond, label) {
     ok(src.includes(COLLECT) && src.includes(BILL), `C1. ${name} asks "${COLLECT}" / "${BILL}"`);
     ok(!/['">]\s*(Paid on site|Bill later|Yes — paid in the field|No — invoice to follow)\s*['"<]/.test(src), `C1. ${name} no longer offers the old labels`);
   }
+  // The tech page is cached by tech-sw.js (cache-first for its JS/HTML):
+  // a change to it ships with a cache bump or phones keep the old words.
+  const sw = (read("server/tech-sw.js").match(/const CACHE_VERSION = "pjl-tech-v(\d+)"/) || [])[1];
+  ok(Number(sw) >= 54, `C1. the tech page cache was bumped with the new words (pjl-tech-v${sw})`);
   for (const file of ["server/server.js", "server/work-order-tech.js", "server/work-order.js"]) {
     ok(!read(file).includes("paid on site or bill later"), `C1. ${file}'s sign-off blocker uses the new words`);
   }
