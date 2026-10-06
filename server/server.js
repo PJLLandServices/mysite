@@ -193,6 +193,8 @@ const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const partAlias = require("./lib/part-alias");
 const partPhotosLib = require("./lib/part-photos");
+const partReferences = require("./lib/part-references");
+const partMergeDuplicates = require("./lib/part-merge-duplicates");
 const purchaseOrders = require("./lib/purchase-orders");
 // Send / receive / cancel: the PO and its list lines in one commit.
 const purchasing = require("./lib/purchasing");
@@ -621,27 +623,25 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
 // and must keep meaning what it meant. Reads the JSON stores directly and
 // matches the number as a whole quoted value, so "405-007" never matches
 // "1405-0071".
+// The rule lives in lib/part-references.js (shared with the duplicate
+// migration tool); this is the server's handle on it.
 function findPartReferences(sku) {
-  const needle = JSON.stringify(String(sku));
-  const stores = { materialLists: "material-lists.json", purchaseOrders: "purchase-orders.json", quoteRequests: "quote-requests.json", projects: "projects.json", workOrders: "work-orders.json", invoices: "invoices.json" };
-  const out = { total: 0 };
-  for (const [name, file] of Object.entries(stores)) {
-    let ids = [];
-    try {
-      const p = path.join(__dirname, "data", file);
-      if (fsSync.existsSync(p)) {
-        const records = JSON.parse(fsSync.readFileSync(p, "utf8") || "[]");
-        ids = (Array.isArray(records) ? records : []).filter((r) => JSON.stringify(r).includes(needle)).map((r) => r && r.id).filter(Boolean);
-      }
-    } catch (err) {
-      // An unreadable store can't prove the number is unreferenced.
-      throw new Error(`Couldn't read ${file} to check references (${err.message}).`);
-    }
-    out[name] = ids;
-    out.total += ids.length;
-  }
-  out.summary = Object.entries(out).filter(([k, v]) => Array.isArray(v) && v.length).map(([k, v]) => `${v.length} in ${k}`).join(", ") || "none";
-  return out;
+  return partReferences.findPartReferences(DATA_DIR, sku);
+}
+
+// The duplicate-fittings migration tool (lib/part-merge-duplicates.js),
+// built fresh per request so it always sees the current catalog and
+// baseline. The route never authorizes the batch: only the pilot pair.
+function mergeDuplicatesTool() {
+  return partMergeDuplicates.create({
+    dataDir: DATA_DIR,
+    baseline: () => BASELINE_PARTS,
+    catalog: () => (PARTS && PARTS.parts) || {},
+    partsLib, partSuppliers, partSupplierPrices, partPhotos, partPhotosLib, partAlias,
+    references: findPartReferences,
+    quickbooksItems: () => quickbooks.getItemsMap(),
+    rebuild: () => rebuildCatalogFromOverrides()
+  });
 }
 
 // One-time seed of per-supplier prices from quote requests that were
@@ -14440,6 +14440,50 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't restore part."] });
+    }
+  }
+
+  // ---------- Duplicate fittings migration (Step C, 2026-10-06) ------------
+  // POST /api/parts/merge-duplicates/dry-run   (admin) — READ ONLY. The
+  //   approved 45-pair plan recomputed from the stores as they are now:
+  //   per-pair status, exact before/after, drift from what was approved, and
+  //   the fingerprint an apply must quote. Writes nothing, ever.
+  // POST /api/parts/merge-duplicates/apply { fingerprint, pairs }  (admin)
+  //   Refused unless the fingerprint matches a dry run of the CURRENT state,
+  //   the plan has no drift, and `pairs` is exactly the pilot pair (the batch
+  //   is not authorized from here). Backs the stores up to
+  //   server/data/BACKUP-<stamp>-merge-duplicates/ and proves the backup reads
+  //   back before the first write. lib/part-merge-duplicates.js is the rule.
+  if (req.method === "POST" && (pathname === "/api/parts/merge-duplicates/dry-run" || pathname === "/api/parts/merge-duplicates/apply")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!BASELINE_PARTS || !PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    const tool = mergeDuplicatesTool();
+    if (pathname.endsWith("/dry-run")) {
+      try {
+        const plan = await tool.dryRun();
+        return sendJson(res, 200, plan);
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, errors: [err.message || "The dry run failed."] });
+      }
+    }
+    const by = await actorLabel(req);
+    const payload = await parseRequestBody(req).catch(() => ({}));
+    try {
+      const result = await tool.apply({ fingerprint: String(payload.fingerprint || ""), pairs: payload.pairs, by });
+      await settings.recordAudit({
+        who: by, action: "catalog.merge-duplicates",
+        note: `${result.ok ? "Merged" : "Merged WITH VERIFICATION FAILURES"} ${result.applied.map((x) => `${x.b} → ${x.a}`).join(", ")} (backup ${path.basename(result.backupDir)})`,
+        after: { backupDir: result.backupDir, fingerprint: result.fingerprintApplied, applied: result.applied.map((x) => ({ a: x.a, b: x.b, ok: x.ok, verification: x.verification })) }
+      });
+      return sendJson(res, result.ok ? 200 : 500, result);
+    } catch (err) {
+      const code = err.code || "apply_failed";
+      const status = code === "apply_failed" || code === "post_apply_verification_failed" ? 500 : 409;
+      if (err.backupDir) {
+        await settings.recordAudit({ who: by, action: "catalog.merge-duplicates", note: `Merge attempt FAILED (${code}): ${err.message}`, after: { backupDir: err.backupDir, steps: err.steps || [], pair: err.pair || null } }).catch(() => {});
+      }
+      return sendJson(res, status, { ok: false, code, errors: [err.message || "Couldn't apply the merge."], expected: err.expected, given: err.given, drift: err.drift, pilot: err.pilot, backupDir: err.backupDir, steps: err.steps, pair: err.pair });
     }
   }
 
