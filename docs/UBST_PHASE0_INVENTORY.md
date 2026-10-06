@@ -260,6 +260,17 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
     `lib/outreach.js:261, 328`, `lib/work-orders.js:817, 1978, 2234`, `lib/assignments.js:455, 780,
     981`, `assignment-cadence.js:724`, `portal.js:660`, `work-orders-index.js:34`,
     `work-order-tech.js:1371, 4899`, `schedule.js:410, 524`.
+13. **A stop's time window has two sources and the day card shows one.** Patrick's window lives in
+    `day.constraints[code]` (written only by `seasonPlans.setStopWindow`, route 28482) and is what
+    the card displays (`resolvePlanDay` 27447-27453, `season-plan.js:352-422`). The customer's own
+    window from the appointment page lives on the booking (`requestedWindow`, W12) and reaches the
+    sequencer through `requestedWindowsFor` (27513) but is **never shown on the stop**. So a day can
+    re-order around a window nobody can see, and a window that is visible carries no record of who
+    set it or when (the admin action log keeps method and path only). Tonight's "after 11:00" on
+    94 Dianawood Ridge (PR #399) is this gap: a visible window is a plan constraint, so someone
+    pressed Time window → Save on the plan, and only the action log's timestamp can say when.
+    Target: one `windows` read with provenance (`{notBefore, notAfter, by: "customer" | user,
+    at}`), shown on the stop, and `setStopWindow` stamping who/when the way `placed` now does.
 
 ---
 
@@ -354,6 +365,7 @@ stubbed, tripwires), run from `build:check`, each confirmed failing on `origin/m
 | T7 `test-ubst-no-raw-store-writes.mjs` | static | no `bookings.json` path or `fs.writeFile` of the store outside `lib/bookings.js` (fails: `server.js:15305`); no caller of `bookings.remove` outside purge (fails: W5, W6) | — |
 | T8 `test-ubst-plan-stop-identity.mjs` (PJL-134) | plan + Assign + Book now; then savePlan/resequence/move/day-move | stop carries `bookingId` after assign and after every plan rewrite (fails: codes only); a stop whose booking is missing is never `unassigned`-bookable by Assign (fails); route rebuild creates no second Booking; move = same Booking id, `rescheduleCount` semantics decided | `drivenPlan` drops cancelled/moved stops |
 | T9 `test-ubst-audit-fixtures.mjs` (PJL-137) | one fixture record per audit category (§5.8 + TRD §11) | `node scripts/audit-bookings.mjs --json` reports the expected counts and ids, writes nothing, exits non-zero on critical conflicts (fails: tool does not exist) | — |
+| T10 `test-ubst-season-walk.mjs` (the "walk a full season" pass the parallel session proposed, made permanent) | a sanitised copy of production-shaped data on the booted harness: plan import → Assign → blast → customer answers (confirm, cancel, reschedule, window, zones) → Patrick's edits (move, day move, add, Skip, Unassign, delete, Status dropdown) → Today → open WO → complete → invoice → portal → next season re-book | after **every** step, one shared assertion: all readers in §3.2 agree with `holdsItsSlot` for every record, every plan stop has a Booking or a recorded "no", no WO is dated without a Booking, Today's rows equal the plan's driven day, and the audit (T9) reports zero conflicts. Each of tonight's four gaps (#390/#397, #395, #398, #399) is a step in the walk, so this suite would have failed before each of them shipped | — |
 
 Per CLAUDE.md each will be run against the unfixed code first and the failing assertion count
 recorded in the test header.
