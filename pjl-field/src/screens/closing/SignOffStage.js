@@ -33,7 +33,7 @@ const BYPASS_REASONS = [
   { key: 'other', label: 'Other (say why)' },
 ];
 
-export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLabel, onStrokeChange, getDraft }) {
+export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLabel, onStrokeChange, getDraft, role = null, settlePaidInFull = null }) {
   const recordedSignoff = getDraft?.('signoff');
   // null until asked. Not defaulted: which of these is "normal" is the
   // thing that varies, and guessing wrong makes the common case worse.
@@ -57,6 +57,42 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
   // the work order carries only paymentHandledByOffice; an admin's has
   // the settlement itself.
   const officeHandles = wo?.paymentHandledByOffice === true || wo?.settlement?.type === 'paid_in_full';
+  // An admin can settle the visit as Paid in Full right here (the office
+  // page does the same). Never offered to a tech; the server refuses one.
+  const canSettle = role === 'admin' && typeof settlePaidInFull === 'function';
+  const [settling, setSettling] = useState(false);
+  const settle = async (reference) => {
+    setSettling(true);
+    try {
+      await settlePaidInFull(reference);
+    } catch (err) {
+      Alert.alert(reference ? "Couldn't mark it paid in full" : "Couldn't remove paid in full",
+        `${err?.message || 'Nothing changed.'} This needs a connection.`);
+    } finally {
+      setSettling(false);
+    }
+  };
+  const askPaidInFull = () => {
+    Alert.prompt(
+      'Paid in full (prepaid)',
+      'What paid for this visit? For example: 2026 prepaid plan, receipt #. The visit finishes with no invoice, and the customer\'s report says PAID IN FULL with no amounts.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark paid in full',
+          onPress: (text) => {
+            const reference = String(text || '').trim();
+            if (reference.length < 3) {
+              Alert.alert('What paid for it?', 'Say what paid for this visit, for example "2026 prepaid plan".');
+              return;
+            }
+            settle(reference);
+          },
+        },
+      ],
+      'plain-text',
+    );
+  };
   const returning = wo?.needsReturnVisit;
 
   const onReady = useCallback((fn) => setCapture(() => fn), []);
@@ -235,15 +271,31 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
 
       <Section title="Before it closes">
         {officeHandles ? (
-          <Text style={styles.feeMeta}>
-            {wo?.settlement?.type === 'paid_in_full' ? 'Payment: paid in full (prepaid) — nothing to collect' : 'Payment: handled by the office'}
-          </Text>
+          <View>
+            <Text style={styles.feeMeta}>
+              {wo?.settlement?.type === 'paid_in_full'
+                ? `Payment: paid in full (prepaid)${wo.settlement.reference ? ` — ${wo.settlement.reference}` : ''}. Nothing to collect.`
+                : 'Payment: handled by the office'}
+            </Text>
+            {canSettle && wo?.settlement?.type === 'paid_in_full' ? (
+              <Text style={styles.feeMeta} onPress={settling ? undefined : () => settle(null)} accessibilityRole="button">
+                {settling ? 'Removing…' : 'Remove paid in full'}
+              </Text>
+            ) : null}
+          </View>
         ) : (
           <ChoiceRow
             label="How are they paying?"
             value={paid === true ? 'paid' : paid === false ? 'bill' : ''}
-            options={[{ value: 'paid', label: 'Collect payment now' }, { value: 'bill', label: 'Send invoice / bill later' }]}
-            onChange={(v) => save({ paidOnSite: v === 'paid' ? true : v === 'bill' ? false : null })}
+            options={[
+              { value: 'paid', label: 'Collect payment now' },
+              { value: 'bill', label: 'Send invoice / bill later' },
+              ...(canSettle ? [{ value: 'prepaid', label: settling ? 'Saving…' : 'Paid in full (prepaid)' }] : []),
+            ]}
+            onChange={(v) => {
+              if (v === 'prepaid') { if (!settling) askPaidInFull(); return; }
+              save({ paidOnSite: v === 'paid' ? true : v === 'bill' ? false : null });
+            }}
           />
         )}
         <ChoiceRow

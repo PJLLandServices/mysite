@@ -15,8 +15,8 @@ import {
   ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import {
-  AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder, patchProperty,
-  patchWorkOrder, signatureBypass, removePropertyZone,
+  AuthRequiredError, clearWorkOrderPaidInFull, completeWorkOrder, deferIssues, getWorkOrder, patchProperty,
+  patchWorkOrder, setWorkOrderPaidInFull, signatureBypass, removePropertyZone,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
 import { money as formatMoney } from '../format';
@@ -40,7 +40,7 @@ const STAGES = [
   { key: 'signoff', label: 'Sign-off' },
 ];
 
-export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignIn }) {
+export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignIn, role = null }) {
   const [wo, setWo] = useState(null);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
@@ -90,6 +90,20 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     const stop = watchFieldQueue(queue);
     return () => { unsubscribe(); stop(); };
   }, [fieldContext]);
+
+  // Paid in Full from the sign-off (P-PJL-22 D, admin only). Up here with
+  // the other hooks, above the early returns (scripts/test-hooks-order.mjs).
+  // Not queued:
+  // the office's record of a prepayment needs the server to say yes, so it
+  // goes straight there, and the work order the server returns becomes the
+  // phone's copy (pending edits re-apply on top of it).
+  const settlePaidInFull = useCallback(async (reference) => {
+    const { queue, key } = field.current;
+    const updated = reference
+      ? await setWorkOrderPaidInFull(workOrderId, reference)
+      : await clearWorkOrderPaidInFull(workOrderId);
+    if (updated) queue.seed(key, updated);
+  }, [workOrderId]);
 
   // SQLite commits before the screen announces success. Uploading is a
   // separate serialized operation, and its responses reapply pending edits.
@@ -553,7 +567,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         ) : stage === 'closeout' ? (
           <CloseOutStage {...shared} blockers={blockers} onFinish={toSignOff} />
         ) : (
-          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} busyLabel={finishText} onStrokeChange={setSigning} />
+          <SignOffStage {...shared} role={role} settlePaidInFull={settlePaidInFull} onFinish={finishSignOff} busy={finishing} busyLabel={finishText} onStrokeChange={setSigning} />
         )}
       </ScrollView>
       <PhotoMarkup visible={!!markupFor} source={markupSource} onSave={saveMarkup} onCancel={() => setMarkupFor(null)} />

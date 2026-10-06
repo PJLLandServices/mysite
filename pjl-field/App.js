@@ -322,6 +322,7 @@ export default function App() {
                 workOrderId={job.workOrderId}
                 onExit={closeJob}
                 onSignIn={openSignIn}
+                role={role}
                 // A finished closing goes straight to its invoice. When
                 // the cascade did not hand one back — it is best-effort
                 // and the visit is completed either way — fall back to
