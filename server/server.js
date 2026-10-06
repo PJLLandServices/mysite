@@ -27430,6 +27430,9 @@ async function orderDayForDriving(rows) {
       };
       const c = confirm ? confirmationFor(confirm.stopBookingId(code, date)) : null;
       if (c) stop.confirmation = c;
+      const st = confirm && typeof confirm.stopState === "function" ? confirm.stopState(code, date) : null;
+      stop.bookingState = (st && st.state) || "unassigned";
+      if (st && st.bookingId) stop.bookingId = st.bookingId;
       return stop;
     };
     // Plan stops only — the synthetic booked codes are dropped from the
@@ -27500,7 +27503,12 @@ async function orderDayForDriving(rows) {
       stopBookingId: (code, date) => {
         const s = driven.stateFor(code, date);
         return s && s.state === "on_day" ? s.bookingId : null;
-      }
+      },
+      // The stop's booking state by the plan's own rule (planStopState):
+      // on_day / done / unassigned. The day card offers Book now only on
+      // an unassigned stop — a planned intent with no appointment behind
+      // it yet (2026-10-06).
+      stopState: (code, date) => driven.stateFor(code, date)
     };
 
     const shared = { byCode, season, bucketCap: plan.bucketCap, requestedWindows: customerWindows, woType, confirm };
@@ -28236,6 +28244,17 @@ async function orderDayForDriving(rows) {
   // blast. Same message, same send path, same rule 1: the cadence and
   // the blast can never double-send a customer confirmed here. Admin
   // only, exactly like the blast — it messages a customer.
+  // Why a confirmation was NOT sent, in Patrick's words — read by the
+  // per-stop Send confirmation and by Book now, which sends the same
+  // message the moment the stop is booked (2026-10-06: "those got booked,
+  // but it didn't send the notifications").
+  const CONFIRM_SKIP_WORDS = {
+    season_opt_out: "This property opted out of this season's messages.",
+    no_contact_needed: "This property is marked “no need to contact” — it is never messaged.",
+    no_deliverable_channel: "No email or SMS can reach this customer.",
+    inactive: "This property is archived or deleted.",
+    not_found: "The booking's property no longer exists."
+  };
   const sendConfirmMatch = pathname.match(/^\/api\/assignments\/bookings\/([^/]+)\/send-confirmation$/);
   if (sendConfirmMatch && req.method === "POST") {
     try {
@@ -28248,14 +28267,7 @@ async function orderDayForDriving(rows) {
         { by: session?.email || session?.name || "admin", appointmentPageReady: APPOINTMENT_PAGE_READY }
       );
       if (result.ok === false && result.skipped) {
-        const why = {
-          season_opt_out: "This property opted out of this season's messages.",
-          no_contact_needed: "This property is marked “no need to contact” — it is never messaged.",
-          no_deliverable_channel: "No email or SMS can reach this customer.",
-          inactive: "This property is archived or deleted.",
-          not_found: "The booking's property no longer exists."
-        };
-        return sendJson(res, 422, { ok: false, errors: [why[result.reason] || `Skipped: ${result.reason}.`] });
+        return sendJson(res, 422, { ok: false, errors: [CONFIRM_SKIP_WORDS[result.reason] || `Skipped: ${result.reason}.`] });
       }
       if (result.ok === false) {
         return sendJson(res, 502, { ok: false, errors: (result.errors || []).map((e) => `${e.channel || "send"}: ${e.error}`) });
@@ -28355,9 +28367,37 @@ async function orderDayForDriving(rows) {
       const season = assignRunMatch[1];
       const year = Number(assignRunMatch[2]);
       if (assignRunMatch[3] === "assign") {
-        const result = await assignments.assign(season, year, { actor });
+        // Body { code, date } books ONE planned stop (the day card's Book
+        // now); an empty body is the season-wide run it has always been.
+        const body = await parseRequestBody(req).catch(() => ({}));
+        const onlyCode = normalizeString(body?.code, 40);
+        const onlyDate = normalizeString(body?.date, 10);
+        const only = onlyCode && /^\d{4}-\d{2}-\d{2}$/.test(onlyDate) ? { code: onlyCode, date: onlyDate } : null;
+        const result = await assignments.assign(season, year, only ? { actor, only } : { actor });
         if (!result.ok) {
           return sendJson(res, 404, { ok: false, errors: ["No plan loaded for that season — nothing to assign."] });
+        }
+        if (only && !result.stop) {
+          return sendJson(res, 404, { ok: false, errors: [`${onlyCode} isn't on the plan for ${onlyDate}.`] });
+        }
+        // Book now TELLS the customer, like a hand booking does: the same
+        // step-1 confirmation the per-stop button sends, through the same
+        // gates (opt-out, no-contact, no channel), so the two can never
+        // disagree. The season-wide run still leaves telling to the blast.
+        if (only && result.stop && result.stop.outcome === "created" && result.stop.bookingId) {
+          try {
+            const told = await assignmentCadence.sendConfirmationForBooking(result.stop.bookingId, {
+              by: actor, appointmentPageReady: APPOINTMENT_PAGE_READY
+            });
+            result.told = told.ok
+              ? { ok: true, sent: told.sent || [] }
+              : { ok: false, reason: told.reason || null,
+                  words: told.skipped
+                    ? (CONFIRM_SKIP_WORDS[told.reason] || `Skipped: ${told.reason}.`)
+                    : (told.errors || []).map((e) => `${e.channel || "send"}: ${e.error}`).join("; ") || "The send failed." };
+          } catch (err) {
+            result.told = { ok: false, reason: err?.code || "error", words: err?.message || "The send failed." };
+          }
         }
         return sendJson(res, 200, {
           ...result,

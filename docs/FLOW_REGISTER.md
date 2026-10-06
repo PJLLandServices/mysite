@@ -2,6 +2,31 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06, later (Book now — one planned stop becomes an appointment without a season-wide
+Assign):** Patrick: *"I dragged an appointment into the season plan, but it doesn't show booked, or
+booking or anything like that... but it's in the seasonal plan."* — *"I need to be able to just book
+it regardless too."* A chip dropped on a day was a planned INTENT (`/add`); the appointment existed
+only after **Assign**, and the only hint was a toast. Now: `assignments.assign(season, year, { only:
+{ code, date } })` narrows the season run to that one stop — same preflight, same record shape
+(`source: "assignment"`, the assignment block, the sequenced start), same time sync (scoped with
+`onlyDates` to that day) — and answers with `stop` (the row) beside the usual summary. The route is
+the existing `POST /api/assignments/:season/:year/assign` with body `{ code, date }` (an empty body
+is the season run it has always been; a code not on that day is a 404 that names it). The plan
+payload now carries `bookingState` per stop (`planStopState`, via `driven.stateFor`), and the day
+card shows **Book now** (two presses) on every `unassigned` stop. **The customer is told:** right
+after the booking is written, the route sends the step-1 confirmation through
+`assignmentCadence.sendConfirmationForBooking` — the same path and gates (opt-out, no-contact, no
+channel) as the per-stop Send confirmation button, with one shared `CONFIRM_SKIP_WORDS` — and the
+toast says *booked and told (email + sms)* or *booked, NOT told — why*. Patrick, minutes after
+the first cut: *"those got booked, but it didn't send the notifications."* The season-wide Assign
+is unchanged: it books silently and the blast tells. **"Regardless", defined:** the explicit press
+overrules the two RECORDED no's the season run honours — skip-this-season (`season_opt_out`) and a
+cancelled assignment (`assignment_declined`), each stamped on the row as `overruled` — and never a
+data gap (`no_zone_count` still refuses with its reason). The season run itself is unchanged: it
+still honours both no's for everyone, and reads a hand-booked stop as settled. NOT touched: the drop
+itself still only plans (booking stays an explicit press); the Open Bucket drop still books, as
+before. Coverage: `scripts/test-book-one-stop.mjs` (26, sandboxed real writer + source guards), in
+`build:check`.
 **2026-10-06 (The tray still held seventeen — cancelled customers, and customers no longer
 served):** Patrick, after the 10-04 fix went live: *"they are all still there, but this is wrong
 information because we don't need them there. They have either cancelled or we aren't serving

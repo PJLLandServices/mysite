@@ -501,6 +501,33 @@ async function assign(season, year, deps = {}) {
   const flight = await preflight(season, year, deps);
   if (!flight.ok) return flight;
 
+  // ONE STOP, NOW. Patrick, 2026-10-06, after dragging a chip onto a day
+  // and finding nothing booked: "I need to be able to just book it
+  // regardless too." `deps.only = { code, date }` narrows the run to that
+  // stop on that day — the same writer, the same record shape, the same
+  // time sync — so a Book-now press and a season-wide Assign can never
+  // produce different bookings for the same customer. "Regardless": a
+  // human's explicit yes on one stop overrules the two RECORDED no's the
+  // season run honours (skip-this-season, a cancelled assignment); it
+  // never overrules a data gap (no zone count, no property, no name).
+  const only = deps.only && deps.only.code && deps.only.date
+    ? { code: String(deps.only.code), date: String(deps.only.date) }
+    : null;
+  if (only) {
+    flight.days = flight.days
+      .filter((d) => d.date === only.date)
+      .map((d) => ({ ...d, stops: d.stops.filter((st) => st.code === only.code) }));
+    for (const d of flight.days) {
+      for (const st of d.stops) {
+        if (st.outcome === "skipped" && st.reason === "season_opt_out") {
+          st.outcome = "ready";
+          st.overruled = st.reason;
+          delete st.reason;
+        }
+      }
+    }
+  }
+
   const plan = await getPlan(season, year);
   const all = await listProperties();
   const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
@@ -557,10 +584,14 @@ async function assign(season, year, deps = {}) {
       if (assignedPropertyIds.has(property.id)) { skip("duplicate_in_plan"); continue; }
 
       const prior = priorAssignment.get(property.id);
-      if (prior) {
+      // A cancelled assignment is a recorded no — unless this is Book now
+      // on exactly this stop, which is the "book by hand" the outcome text
+      // has always pointed at.
+      if (prior && !(only && prior.status === "cancelled")) {
         skip(prior.status === "cancelled" ? "assignment_declined" : "previously_assigned");
         continue;
       }
+      if (prior && only) row.overruled = "assignment_declined";
 
       const zoneCount = zoneCountFor(property);
       if (!zoneCount) { skip("no_zone_count"); continue; }
@@ -621,13 +652,21 @@ async function assign(season, year, deps = {}) {
   // run creates nothing for settled stops but still trues them up.
   let timesSynced = 0;
   try {
-    const sync = await syncAssignedTimes(season, year, deps);
+    // One stop re-times ITS day only (onlyDates): a Book-now press must
+    // not cost a season of Distance Matrix calls.
+    const sync = await syncAssignedTimes(season, year, only ? { ...deps, onlyDates: [only.date] } : deps);
     timesSynced = sync.updated;
   } catch (err) {
     console.warn("[assignments] time sync after assign failed:", err?.message);
   }
 
-  return { ok: true, batchId, assignedAt, season, year: Number(year), days, summary, timesSynced };
+  const out = { ok: true, batchId, assignedAt, season, year: Number(year), days, summary, timesSynced };
+  if (only) {
+    // The one row the press was about, lifted to the top for the toast.
+    out.only = only;
+    out.stop = days.flatMap((d) => d.stops).find((st) => st.code === only.code) || null;
+  }
+  return out;
 }
 
 // Re-anchor pristine assignment bookings to the plan's CURRENT sequenced
