@@ -30354,6 +30354,27 @@ function seasonAndYearFor(date) {
   return { season, year };
 }
 
+// ---- PJL Assistant (Claude connector) ---------------------------------
+// The assistant acts AS an admin user: by PJL_ASSISTANT_USER_EMAIL when set,
+// otherwise the first enabled admin. It gets a fresh 10-minute signed
+// session for each call — the same cookie a browser login would carry — so
+// every existing admin gate, history stamp and audit line applies unchanged.
+async function assistantAdminCookie() {
+  const all = await users.list({ includeDisabled: false });
+  const want = String(process.env.PJL_ASSISTANT_USER_EMAIL || "").trim().toLowerCase();
+  const admins = all.filter((u) => u.role === "admin" && !u.disabled);
+  const user = (want && admins.find((u) => String(u.email || "").toLowerCase() === want)) || admins[0];
+  if (!user) return null;
+  const config = await readAuthConfig();
+  const encoded = encodePayload({ uid: user.id, role: "admin", exp: Date.now() + 10 * 60 * 1000 });
+  return `${AUTH_COOKIE}=${encodeURIComponent(`${encoded}.${signPayload(encoded, config.sessionSecret)}`)}`;
+}
+const assistantMcp = require("./lib/assistant-mcp").createAssistantMcp({
+  port: PORT,
+  getAdminCookie: assistantAdminCookie,
+  services: BOOKABLE_SERVICES,
+});
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // "close" fires however the response ends (finished, aborted, errored).
@@ -30386,6 +30407,18 @@ const server = http.createServer(async (req, res) => {
     });
     res.end(req.method === "HEAD" ? undefined : body);
     return;
+  }
+  // PJL Assistant (lib/assistant-mcp.js) — Patrick's Claude app talks to
+  // the CRM here. Answered before redirects/auth: the long key in the URL
+  // is the credential, and with PJL_ASSISTANT_KEY unset the path 404s.
+  if (pathname.startsWith("/mcp/")) {
+    try {
+      if (await assistantMcp.handle(req, res, pathname, (r) => parseRequestBody(r, { maxBytes: 2_000_000 }))) return;
+    } catch (err) {
+      console.warn("[assistant-mcp] request failed:", err?.message || err);
+      if (!res.headersSent) { res.writeHead(500, { "content-type": "application/json" }); res.end('{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}'); }
+      return;
+    }
   }
   // Legacy Wix URL → current page. 301 so search engines and bookmarks
   // update. Runs before auth/static dispatch so e.g. /contact never falls
