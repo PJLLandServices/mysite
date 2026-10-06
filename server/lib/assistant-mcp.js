@@ -37,7 +37,9 @@ const MIN_KEY_LENGTH = 24;
 const INSTRUCTIONS = [
   "You are Patrick's assistant for PJL Land Services (irrigation + landscape lighting, Newmarket, Ontario; time zone America/Toronto).",
   "These tools read and change his LIVE CRM and booking system.",
-  "Before ANY tool that books, reschedules or cancels, read the details back to Patrick in plain English (who, address, service, date/time, whether the customer gets emailed) and wait for a clear yes.",
+  "Before ANY tool that books, reschedules or cancels, read the details back to Patrick in plain English (who, address, service, date/time) and wait for a clear yes.",
+  "Say what the customer will receive: booking sends the normal confirmation; rescheduling ALWAYS emails the customer (cannot be skipped); cancelling emails only if Patrick says so.",
+  "If a book_appointment call fails with a timeout or unclear error, retry ONCE with the same operationId — never a new one — or check list_bookings first.",
   "To book: find the customer first (search_customers / find_jobs), pick the service with list_services, get real open times with check_availability, then book_appointment with a slotStart copied exactly from those results.",
   "Only use customTime when Patrick asks for a specific time outside the offered slots.",
   "Answer in short plain English. Patrick is not a programmer — never show raw IDs or JSON unless he asks.",
@@ -155,6 +157,15 @@ const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: fal
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
 const DATE = { type: "string", description: "Date as YYYY-MM-DD (Toronto time)." };
+
+// read_crm whitelist. Deliberately NOT "any /api GET": the admin API also
+// serves the user list, integration status (QuickBooks, Stripe) and other
+// settings the assistant has no business reading. Business records only.
+const READ_CRM_ALLOWED = [
+  "/api/work-orders", "/api/projects", "/api/properties", "/api/admin/quote-folder",
+  "/api/purchase-orders", "/api/material-lists", "/api/quote-requests", "/api/parts",
+  "/api/season-plans", "/api/schedule",
+];
 
 function buildTools({ services }) {
   return [
@@ -312,8 +323,9 @@ function buildTools({ services }) {
           address: { type: "string" },
           zoneCount: { type: "integer", minimum: 1, maximum: 99 },
           notes: { type: "string" },
+          operationId: { type: "string", maxLength: 60, description: "Make up ONE short random id per booking you intend to make and reuse it if you must retry after an error or timeout — the server then returns the original booking instead of double-booking." },
         },
-        required: ["serviceKey", "slotStart", "firstName", "lastName", "address"],
+        required: ["serviceKey", "slotStart", "firstName", "lastName", "address", "operationId"],
       },
       annotations: WRITE,
       async run(a, api) {
@@ -339,6 +351,9 @@ function buildTools({ services }) {
           if (!h.ok || !h.body?.holdToken) return apiError(h);
           body.holdToken = h.body.holdToken;
         }
+        // Retry safety: the same operationId replayed within 24 h returns
+        // the ORIGINAL booking instead of making a second one (PJL-87).
+        body.clientRequestId = a.operationId ? `assistant:${a.operationId}` : `assistant:${crypto.randomUUID()}`;
         const r = await api.post("/api/booking/reserve", body);
         return r.ok ? textResult(slim(r.body)) : apiError(r);
       },
@@ -362,7 +377,7 @@ function buildTools({ services }) {
     {
       name: "reschedule_booking",
       title: "Reschedule a booking",
-      description: "Moves a booking to a new time (same rules as rescheduling in the CRM). ALWAYS confirm the new day/time with Patrick first.",
+      description: "Moves a booking to a new time (same rules as rescheduling in the CRM). The customer is ALWAYS sent a 'rescheduled' notice — there is no way to skip it. Tell Patrick that, confirm the new day/time, and wait for a yes.",
       inputSchema: {
         type: "object",
         properties: {
@@ -440,13 +455,16 @@ function buildTools({ services }) {
     {
       name: "read_crm",
       title: "Read anything in the CRM",
-      description: "Read-only access to any CRM record the other tools don't cover, by API path. Examples: /api/work-orders/WO-2026-0123, /api/projects, /api/projects/PROJ-2026-0008, /api/properties/PROP-0042, /api/admin/quote-folder, /api/purchase-orders, /api/material-lists/ML-2026-0015, /api/quote-requests, /api/parts, /api/season-plans. Never changes anything.",
+      description: "Read-only access to CRM records the other tools don't cover, by API path. Allowed: /api/work-orders…, /api/projects…, /api/properties…, /api/admin/quote-folder, /api/purchase-orders…, /api/material-lists…, /api/quote-requests…, /api/parts…, /api/season-plans…, /api/schedule…. Examples: /api/work-orders/WO-2026-0123, /api/projects/PROJ-2026-0008. Anything else is refused. Never changes anything.",
       inputSchema: { type: "object", properties: { path: { type: "string", description: "Must start with /api/" } }, required: ["path"] },
       annotations: READ,
       async run({ path }, api) {
         const p = String(path || "");
         if (!p.startsWith("/api/") || p.includes("..") || /[\r\n]/.test(p)) {
           return textResult("Path must start with /api/.", true);
+        }
+        if (!READ_CRM_ALLOWED.some((prefix) => p === prefix || p.startsWith(prefix + "/") || p.startsWith(prefix + "?"))) {
+          return textResult("That part of the CRM isn't available to the assistant.", true);
         }
         const r = await api.get(p);
         return r.ok ? textResult(slim(r.body)) : apiError(r);

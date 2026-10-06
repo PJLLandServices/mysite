@@ -55,6 +55,11 @@ assert.equal(cancel.annotations.destructiveHint, true, "cancel is marked destruc
 
 r = await hit(P, "POST", { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "read_crm", arguments: { path: "/etc/passwd" } } });
 assert.equal(r.json.result.isError, true, "read_crm refuses non-/api paths");
+r = await hit(P, "POST", { jsonrpc: "2.0", id: 31, method: "tools/call", params: { name: "read_crm", arguments: { path: "/api/users" } } });
+assert.equal(r.json.result.isError, true, "read_crm refuses the user list");
+r = await hit(P, "POST", { jsonrpc: "2.0", id: 32, method: "tools/call", params: { name: "read_crm", arguments: { path: "/api/admin/quickbooks/status" } } });
+assert.equal(r.json.result.isError, true, "read_crm refuses integration status");
+assert.match(r.json.result.content[0].text, /isn't available/);
 
 r = await hit(P, "POST", { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "list_services", arguments: {} } });
 assert.match(r.json.result.content[0].text, /site_visit/);
@@ -79,9 +84,10 @@ assert.equal(r.json.result.isError, true, "no admin account → a clear error, n
   const book = (extra) => m2.handleMessage({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "book_appointment", arguments: {
     serviceKey: "fall_close_4z", slotStart: "2026-10-08T12:00:00.000Z", firstName: "A", lastName: "B", address: "1 Main St, Newmarket", ...extra } } });
 
-  await book({});
+  await book({ operationId: "op-7" });
   assert.deepEqual(calls.map((c) => c.path), ["/api/booking/hold", "/api/booking/reserve"], "normal slot: hold, then reserve");
   assert.equal(calls[1].body.holdToken, "HOLD-1", "reserve carries the hold token");
+  assert.equal(calls[1].body.clientRequestId, "assistant:op-7", "reserve carries the operation id for retry safety");
 
   calls.length = 0;
   await book({ customTime: true });

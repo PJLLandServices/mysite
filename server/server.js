@@ -134,6 +134,10 @@ const customers = require("./lib/customers");
 const { writeJsonAtomic, serialize: serializeOn } = require("./lib/atomic-json");
 const { createLock } = require("./lib/booking-lock");
 const holds = require("./lib/booking-holds");
+// Retry-safety for /api/booking/reserve: a repeated clientRequestId gets the
+// original reply back instead of a second booking (PJL-87). Created after
+// DATA_DIR is known — see reserveReceipts below.
+const reserveReceiptsLib = require("./lib/reserve-receipts");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
@@ -273,6 +277,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const SITE_DIR = path.resolve(__dirname, "..");
 const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
+const reserveReceipts = reserveReceiptsLib.createReceipts({ dataDir: DATA_DIR });
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
 // AI photo backfill (P-PJL-35 M3c). The engine is wired to the real Claude
@@ -25076,8 +25081,35 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // releases a holder that overruns, so a wedged request can never take the
     // booking page down with it.
     await bookingReserveLock.holdUntilResponse(res);
+    const sendJsonOuter = sendJson;
     try {
       const payload = await parseRequestBody(req);
+
+      // ---- Retry safety (PJL-87) -------------------------------------------
+      // A caller that lost our reply sends the same request again with the
+      // same clientRequestId. Inside the lock, so a retry that arrives while
+      // the first is still writing waits and then finds the receipt. Reads
+      // the receipt BEFORE anti-bot/validation: the first request already
+      // passed them, and a retry must not be bounced by the rate limit it
+      // helped fill.
+      const clientRequestId = reserveReceipts.normalizeId(payload?.clientRequestId);
+      if (clientRequestId) {
+        const prior = reserveReceipts.lookup(clientRequestId);
+        if (prior) {
+          console.log("[reserve] replayed receipt for", clientRequestId);
+          return sendJsonOuter(res, prior.status, { ...prior.body, replayed: true });
+        }
+      }
+      // Every 2xx reply from this handler is filed under the id. Wrapping the
+      // one reply function means the three success paths below (bind to an
+      // existing lead, standby, fresh lead) need no edits of their own.
+      const sendJson = async (r, status, body) => {
+        if (clientRequestId && status >= 200 && status < 300) {
+          await reserveReceipts.file(clientRequestId, status, body).catch((err) =>
+            console.warn("[reserve] receipt not filed:", err?.message || err));
+        }
+        return sendJsonOuter(r, status, body);
+      };
 
       // Resolve admin session up-front. Two reasons it has to happen
       // before the anti-bot gate runs:
