@@ -179,7 +179,11 @@ try {
   fs.writeFileSync(path.join(DATA, "holds.json"), "[]\n");
   const open = await slotsFor();
   const a = open[0].start;
-  const b = open.find((s) => s.start !== a)?.start;
+  // b on a DIFFERENT day: two back-to-back slots on one day cannot both be
+  // served (no travel gap), so holding b legitimately hides a. Picking the
+  // neighbour made this test fail whenever today's slots were offered
+  // (early morning), while passing at night — 2026-10-06.
+  const b = open.find((s) => s.start.slice(0, 10) !== a.slice(0, 10))?.start;
   ok("two open slots to swap between", Boolean(b));
   const holdA = await hold(a);
   const holdB = await hold(b, holdA.body.holdToken);
@@ -191,6 +195,21 @@ try {
   const backAgain = await slotsFor();
   ok("the abandoned slot is offered again straight away",
     backAgain.some((s) => s.start === a));
+
+  // ---- 6b. A re-pick is judged without the hold it hands back -----------
+  // Re-clicking the time you already hold (releaseToken = your own hold)
+  // must succeed. The old code checked availability with that hold still
+  // counted, so your own hold made your own pick read "just taken" — the
+  // same fault that refused a same-day swap into capacity the first hold
+  // was using.
+  fs.writeFileSync(path.join(DATA, "holds.json"), "[]\n");
+  const c = (await slotsFor())[0].start;
+  const holdC = await hold(c);
+  const again = await hold(c, holdC.body.holdToken);
+  ok("re-picking the time you already hold is not 'just taken'",
+    again.status === 201 && Boolean(again.body.holdToken),
+    `${again.status} ${JSON.stringify(again.body).slice(0, 160)}`);
+  ok("…and leaves exactly one hold", read("holds").length === 1, `${read("holds").length} holds live`);
 
   // ---- 7. The load-test path still works --------------------------------
   // Patrick's bot posts reserve directly. PJL_TEST_KEY is server-side and

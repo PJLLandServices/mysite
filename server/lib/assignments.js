@@ -397,6 +397,16 @@ function lighterBucket(planDay) {
   return a < m ? "afternoon" : "morning";
 }
 
+// The words for a declined booking on the tray's "can't be placed" list:
+// the reason given, else the label of the code tapped, else the status.
+function cancelWords(declined) {
+  if (!declined) return "";
+  if (declined.reason) return declined.reason;
+  const code = declined.reasonCode;
+  const label = (code && (bookings.CUSTOMER_CANCEL_REASONS[code] || bookings.REMOVAL_REASONS[code]) || {}).label;
+  return label || (declined.status === "no_show" ? "no-show" : "cancelled");
+}
+
 async function unplanned(season, year, deps = {}) {
   const getPlan = deps.getPlan || seasonPlans.getPlan;
   const listProperties = deps.listProperties || properties.list;
@@ -411,7 +421,8 @@ async function unplanned(season, year, deps = {}) {
   if (!plan) return { ok: false, reason: "no_plan", placeable: [], blocked: [] };
 
   const planned = seasonPlans.plannedCodes(plan);
-  const prior = await priorAssignmentsFor(season, year, listBookings);
+  const allBookings = (await listBookings()) || [];
+  const prior = await priorAssignmentsFor(season, year, async () => allBookings);
   const all = await listProperties();
 
   const placeable = [];
@@ -442,6 +453,17 @@ async function unplanned(season, year, deps = {}) {
     const had = prior.get(property.id);
     if (had) {
       blocked.push({ ...row, reason: had.status === "cancelled" ? "assignment_declined" : "previously_assigned", bookingId: had.id });
+      continue;
+    }
+    // A cancelled or no-show seasonal booking this season — ANY source,
+    // the customer's own included — is a no, not a gap. The records are
+    // the property's by the board's own rule (belongsToProperty), the
+    // verdict is outreach.declinedThisSeason, the same one
+    // deriveBookingState reports. Reported, never offered a day.
+    const declined = outreach.declinedThisSeason(
+      allBookings.filter((b) => bookings.belongsToProperty(b, property)), season, year);
+    if (declined) {
+      blocked.push({ ...row, reason: "cancelled_this_season", bookingId: declined.bookingId, note: cancelWords(declined) });
       continue;
     }
     if (rankDays) {

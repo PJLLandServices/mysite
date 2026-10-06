@@ -235,6 +235,43 @@ async function isSeasonWorkCompleted(propertyId, season, year) {
   return match ? { completedAt: match.completedAt, woId: match.woId || null } : null;
 }
 
+// The records among `records` that are THIS season's service, this year:
+// a seasonal service key for the season, scheduled inside its window.
+// One filter, read by deriveBookingState and declinedThisSeason.
+function seasonRecords(records, season, year) {
+  const prefix = SEASONAL_SERVICE_PREFIXES[season];
+  if (!prefix) return [];
+  return (records || []).filter((b) => b && typeof b.serviceKey === "string"
+    && b.serviceKey.startsWith(prefix)
+    && isInSeasonWindow(b.scheduledFor, season, year));
+}
+
+// A seasonal booking this season that is DEAD — cancelled or no-show —
+// with nothing live or completed beside it: the customer, or the crew,
+// said no to this season. Pure over records, so the Season Plan's
+// Not-on-the-plan tray and deriveBookingState read one answer.
+//
+// Outreach deliberately still treats this customer as UNBOOKED (a nudge
+// to re-book is right for someone who cancelled); the tray must not
+// offer them a route day as if nothing had happened. Patrick,
+// 2026-10-06, on seventeen chips: "They have either cancelled or we
+// aren't serving them anymore."
+function declinedThisSeason(records, season, year) {
+  const mine = seasonRecords(records, season, year);
+  if (mine.some((b) => bookings.holdsItsSlot(b.status) || b.status === "completed")) return null;
+  const dead = mine.filter((b) => !bookings.holdsItsSlot(b.status));
+  if (!dead.length) return null;
+  const last = dead.slice().sort((a, b) =>
+    String(b.cancelledAt || b.updatedAt || "").localeCompare(String(a.cancelledAt || a.updatedAt || "")))[0];
+  return {
+    bookingId: last.id,
+    status: last.status,
+    reason: last.cancellationReason || "",
+    reasonCode: last.removalCode || null,
+    at: last.cancelledAt || null
+  };
+}
+
 // Query bookings.json for any booking on this property whose
 // serviceKey signals the right season and whose scheduledFor
 // lands in-window for the given year.
@@ -272,10 +309,8 @@ async function deriveBookingState(propertyId, season, year) {
   const matches = property
     ? await bookings.listForProperty(property)
     : await bookings.listByProperty(propertyId);
-  const isThisSeason = (b) => b && typeof b.serviceKey === "string"
-    && b.serviceKey.startsWith(prefix)
-    && isInSeasonWindow(b.scheduledFor, season, year);
-  const candidate = matches.find((b) => isThisSeason(b) && bookings.holdsItsSlot(b.status));
+  const mine = seasonRecords(matches, season, year);
+  const candidate = mine.find((b) => bookings.holdsItsSlot(b.status));
   if (candidate) {
     return {
       hasBooking: true,
@@ -290,7 +325,7 @@ async function deriveBookingState(propertyId, season, year) {
       completed: false
     };
   }
-  const completedOne = matches.find((b) => isThisSeason(b) && b.status === "completed");
+  const completedOne = mine.find((b) => b.status === "completed");
   if (completedOne) {
     return {
       hasBooking: false,
@@ -300,7 +335,14 @@ async function deriveBookingState(propertyId, season, year) {
       completed: true
     };
   }
-  return { hasBooking: false, bookingId: null, scheduledDate: null, bucket: null, completed: false };
+  // Nothing live, nothing done. `declined` names the cancelled or
+  // no-show booking this season, if there is one — null means the
+  // customer was never booked at all. Readers that only care about
+  // booked/completed ignore it.
+  return {
+    hasBooking: false, bookingId: null, scheduledDate: null, bucket: null, completed: false,
+    declined: declinedThisSeason(mine, season, year)
+  };
 }
 
 // Is this season SETTLED for the property — a visit on the calendar, or
@@ -942,6 +984,8 @@ module.exports = {
   setOptOutForSeason,
   honorUnsubscribe,
   deriveBookingState,
+  seasonRecords,
+  declinedThisSeason,
   seasonSettled,
   verdictIsSettled,
   SETTLED_REASONS,

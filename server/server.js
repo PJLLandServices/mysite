@@ -134,6 +134,10 @@ const customers = require("./lib/customers");
 const { writeJsonAtomic, serialize: serializeOn } = require("./lib/atomic-json");
 const { createLock } = require("./lib/booking-lock");
 const holds = require("./lib/booking-holds");
+// Retry-safety for /api/booking/reserve: a repeated clientRequestId gets the
+// original reply back instead of a second booking (PJL-87). Created after
+// DATA_DIR is known — see reserveReceipts below.
+const reserveReceiptsLib = require("./lib/reserve-receipts");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
@@ -273,6 +277,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const SITE_DIR = path.resolve(__dirname, "..");
 const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
+const reserveReceipts = reserveReceiptsLib.createReceipts({ dataDir: DATA_DIR });
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
 // AI photo backfill (P-PJL-35 M3c). The engine is wired to the real Claude
@@ -2993,6 +2998,64 @@ async function deleteWorkOrderPhotoFile(woId, n) {
     try { await fs.unlink(file); return true; } catch {}
   }
   return false;
+}
+
+// Work orders that share a number (workOrders.splitDuplicateIds), repaired
+// once at boot — a no-op once the store has none. For each record given a
+// new number:
+//   - its photo files are COPIED to the new number's folder (the old folder
+//     is shared with the record that kept the number, so nothing is moved
+//     out from under it);
+//   - a lead that pointed at the shared number points at the new one (the
+//     later record is the one the lead was last given);
+//   - a visit that was completed under the shared number — whose Finish
+//     found the other visit's service record and stopped — gets its
+//     completion run now: service record, report, and a DRAFT invoice. Run
+//     like the admin "Run cascade" button, with the invoice-ready text
+//     skipped: nothing reaches the customer until the office presses Send.
+// Bookings are left alone: each one already lists the visit it was made for.
+async function repairDuplicateWorkOrderIds() {
+  const moved = await workOrders.splitDuplicateIds();
+  if (!moved.length) return [];
+  for (const m of moved) {
+    console.warn(`[wo-dup-ids] ${m.oldId} (${m.type}, ${m.customerName || "?"}) renumbered to ${m.newId}`);
+    for (const n of m.photoNs) {
+      for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+        const from = path.join(WO_PHOTOS_DIR, m.oldId, `${n}.${ext}`);
+        if (!fsSync.existsSync(from)) continue;
+        try {
+          await fs.mkdir(path.join(WO_PHOTOS_DIR, m.newId), { recursive: true });
+          await fs.copyFile(from, path.join(WO_PHOTOS_DIR, m.newId, `${n}.${ext}`));
+        } catch (err) { console.warn(`[wo-dup-ids] photo ${n} copy failed:`, err?.message); }
+      }
+    }
+  }
+  try {
+    const leads = await readLeads();
+    let changed = false;
+    for (const m of moved) {
+      const lead = m.leadId ? leads.find((l) => l.id === m.leadId) : null;
+      if (lead && lead.workOrderId === m.oldId) { lead.workOrderId = m.newId; changed = true; }
+    }
+    if (changed) await writeLeads(leads);
+  } catch (err) { console.warn("[wo-dup-ids] lead pointer update failed:", err?.message); }
+  for (const m of moved) {
+    // A deleted or archived record is renumbered but never invoiced.
+    if (m.status !== "completed" || !m.live || !m.propertyId) continue;
+    try {
+      if (await properties.findServiceRecordByWo(m.propertyId, m.newId)) continue;
+      const wo = await workOrders.get(m.newId);
+      if (!wo || workOrders.awaitsNewSignature(wo)) {
+        console.warn(`[wo-dup-ids] ${m.newId}: completion not run (needs a new signature)`);
+        continue;
+      }
+      const result = await serializeOn(`completion-cascade:${m.newId}`, async () =>
+        completionCascade.run((await workOrders.get(m.newId)) || wo, { skipInvoiceSms: true }));
+      const inv = result?.invoice;
+      console.warn(`[wo-dup-ids] ${m.newId}: completion run — ${inv ? `draft invoice ${inv.id} ($${Number(inv.total).toFixed(2)})` : (result?.invoiceDraftError || "no invoice")}`);
+    } catch (err) { console.warn(`[wo-dup-ids] ${m.newId}: completion failed:`, err?.message); }
+  }
+  return moved;
 }
 
 // Job journal photo storage — same shape/compression as WO photos
@@ -25004,7 +25067,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // endpoint is a way to block any slot on the calendar by asking.
       const geo = await geocode(address);
       const customerCoords = geo.coords;
-      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const [allBookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      // A customer switching times hands back their previous hold
+      // (releaseToken). Judge the new time WITHOUT that hold — it is about to
+      // be released. Counting it made a second pick on a nearly-full day read
+      // "just taken" whenever the first hold used the capacity the second
+      // needed (test-booking-hold, 2026-10-06, when today's slots were open).
+      const bookingsNow = releaseToken
+        ? allBookingsNow.filter((b) => !(b.isHold && b.holdToken === releaseToken))
+        : allBookingsNow;
       const available = await listAvailableSlots({
         serviceKey,
         customerCoords,
@@ -25068,8 +25139,35 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // releases a holder that overruns, so a wedged request can never take the
     // booking page down with it.
     await bookingReserveLock.holdUntilResponse(res);
+    const sendJsonOuter = sendJson;
     try {
       const payload = await parseRequestBody(req);
+
+      // ---- Retry safety (PJL-87) -------------------------------------------
+      // A caller that lost our reply sends the same request again with the
+      // same clientRequestId. Inside the lock, so a retry that arrives while
+      // the first is still writing waits and then finds the receipt. Reads
+      // the receipt BEFORE anti-bot/validation: the first request already
+      // passed them, and a retry must not be bounced by the rate limit it
+      // helped fill.
+      const clientRequestId = reserveReceipts.normalizeId(payload?.clientRequestId);
+      if (clientRequestId) {
+        const prior = reserveReceipts.lookup(clientRequestId);
+        if (prior) {
+          console.log("[reserve] replayed receipt for", clientRequestId);
+          return sendJsonOuter(res, prior.status, { ...prior.body, replayed: true });
+        }
+      }
+      // Every 2xx reply from this handler is filed under the id. Wrapping the
+      // one reply function means the three success paths below (bind to an
+      // existing lead, standby, fresh lead) need no edits of their own.
+      const sendJson = async (r, status, body) => {
+        if (clientRequestId && status >= 200 && status < 300) {
+          await reserveReceipts.file(clientRequestId, status, body).catch((err) =>
+            console.warn("[reserve] receipt not filed:", err?.message || err));
+        }
+        return sendJsonOuter(r, status, body);
+      };
 
       // Resolve admin session up-front. Two reasons it has to happen
       // before the anti-bot gate runs:
@@ -30354,6 +30452,27 @@ function seasonAndYearFor(date) {
   return { season, year };
 }
 
+// ---- PJL Assistant (Claude connector) ---------------------------------
+// The assistant acts AS an admin user: by PJL_ASSISTANT_USER_EMAIL when set,
+// otherwise the first enabled admin. It gets a fresh 10-minute signed
+// session for each call — the same cookie a browser login would carry — so
+// every existing admin gate, history stamp and audit line applies unchanged.
+async function assistantAdminCookie() {
+  const all = await users.list({ includeDisabled: false });
+  const want = String(process.env.PJL_ASSISTANT_USER_EMAIL || "").trim().toLowerCase();
+  const admins = all.filter((u) => u.role === "admin" && !u.disabled);
+  const user = (want && admins.find((u) => String(u.email || "").toLowerCase() === want)) || admins[0];
+  if (!user) return null;
+  const config = await readAuthConfig();
+  const encoded = encodePayload({ uid: user.id, role: "admin", exp: Date.now() + 10 * 60 * 1000 });
+  return `${AUTH_COOKIE}=${encodeURIComponent(`${encoded}.${signPayload(encoded, config.sessionSecret)}`)}`;
+}
+const assistantMcp = require("./lib/assistant-mcp").createAssistantMcp({
+  port: PORT,
+  getAdminCookie: assistantAdminCookie,
+  services: BOOKABLE_SERVICES,
+});
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // "close" fires however the response ends (finished, aborted, errored).
@@ -30386,6 +30505,18 @@ const server = http.createServer(async (req, res) => {
     });
     res.end(req.method === "HEAD" ? undefined : body);
     return;
+  }
+  // PJL Assistant (lib/assistant-mcp.js) — Patrick's Claude app talks to
+  // the CRM here. Answered before redirects/auth: the long key in the URL
+  // is the credential, and with PJL_ASSISTANT_KEY unset the path 404s.
+  if (pathname.startsWith("/mcp/")) {
+    try {
+      if (await assistantMcp.handle(req, res, pathname, (r) => parseRequestBody(r, { maxBytes: 2_000_000 }))) return;
+    } catch (err) {
+      console.warn("[assistant-mcp] request failed:", err?.message || err);
+      if (!res.headersSent) { res.writeHead(500, { "content-type": "application/json" }); res.end('{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}'); }
+      return;
+    }
   }
   // Legacy Wix URL → current page. 301 so search engines and bookmarks
   // update. Runs before auth/static dispatch so e.g. /contact never falls
@@ -30851,6 +30982,11 @@ server.listen(PORT, HOST, () => {
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
   memoryLog.start();
+
+  // Two work orders under one number (pre-2026-09-22 data): give the later
+  // one its own number and finish what its completion skipped. No-op once
+  // repaired. See repairDuplicateWorkOrderIds.
+  repairDuplicateWorkOrderIds().catch((err) => console.warn("[wo-dup-ids] repair failed:", err?.message));
 
   // The geography filter's key, checked ONCE at boot where nobody can
   // miss it. Without it every address is placed by town name only

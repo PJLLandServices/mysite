@@ -42,18 +42,23 @@ export function CheckRow({ label, checked, onToggle, last, disabled }) {
 // A question with a fixed set of answers, where every answer is complete.
 // Distinct from a checkbox on purpose: unticked means "not yet", but
 // "No" is a finished answer.
-export function ChoiceRow({ label, value, options, onChange, last }) {
+//
+// `stacked` puts each answer on its own full-width line. For answers that
+// are phrases, not words: three of "Collect payment now" / "Send invoice /
+// bill later" / "Paid in full (prepaid)" side by side were a third of the
+// width each and wrapped into one another (Patrick, 2026-10-06).
+export function ChoiceRow({ label, value, options, onChange, last, stacked = false }) {
   return (
     <View style={[styles.choice, last && styles.rowLast]}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <View style={styles.choiceOptions}>
+      <View style={[styles.choiceOptions, stacked && styles.choiceStacked]}>
         {options.map((opt) => {
           const active = value === opt.value;
           return (
             <Pressable
               key={opt.value}
               onPress={() => onChange(active ? '' : opt.value)}
-              style={[styles.opt, active && styles.optOn]}
+              style={[styles.opt, stacked && styles.optStacked, active && styles.optOn]}
               accessibilityRole="radio"
               accessibilityState={{ selected: active }}
             >
@@ -142,10 +147,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator,
   },
   choiceOptions: { flexDirection: 'row', gap: space.sm },
+  choiceStacked: { flexDirection: 'column', gap: space.sm, marginTop: space.xs },
   opt: {
     flex: 1, alignItems: 'center', paddingVertical: 11,
     borderRadius: radius.card, backgroundColor: colors.ground,
   },
+  optStacked: { flex: 0, alignSelf: 'stretch', paddingVertical: 14, paddingHorizontal: space.lg },
   optOn: { backgroundColor: colors.brand },
   optText: { fontSize: 15, fontWeight: '600', color: colors.textMuted },
   optTextOn: { color: '#fff' },
