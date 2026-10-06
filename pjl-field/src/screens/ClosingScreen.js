@@ -91,6 +91,20 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     return () => { unsubscribe(); stop(); };
   }, [fieldContext]);
 
+  // Paid in Full from the sign-off (P-PJL-22 D, admin only). Up here with
+  // the other hooks, above the early returns (scripts/test-hooks-order.mjs).
+  // Not queued:
+  // the office's record of a prepayment needs the server to say yes, so it
+  // goes straight there, and the work order the server returns becomes the
+  // phone's copy (pending edits re-apply on top of it).
+  const settlePaidInFull = useCallback(async (reference) => {
+    const { queue, key } = field.current;
+    const updated = reference
+      ? await setWorkOrderPaidInFull(workOrderId, reference)
+      : await clearWorkOrderPaidInFull(workOrderId);
+    if (updated) queue.seed(key, updated);
+  }, [workOrderId]);
+
   // SQLite commits before the screen announces success. Uploading is a
   // separate serialized operation, and its responses reapply pending edits.
   const save = useCallback(async (patch) => {
@@ -467,18 +481,6 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   // The property half of Remove zone (PJL-98): the visit is already saved.
   const removeZoneOnProperty = (number, why) =>
     removeZoneFromProperty(field.current.queue, field.current.key, { number, ...why }, removePropertyZone);
-  // Paid in Full from the sign-off (P-PJL-22 D, admin only). Not queued:
-  // the office's record of a prepayment needs the server to say yes, so it
-  // goes straight there, and the work order the server returns becomes the
-  // phone's copy (pending edits re-apply on top of it).
-  const settlePaidInFull = useCallback(async (reference) => {
-    const { queue, key } = field.current;
-    const updated = reference
-      ? await setWorkOrderPaidInFull(workOrderId, reference)
-      : await clearWorkOrderPaidInFull(workOrderId);
-    if (updated) queue.seed(key, updated);
-  }, [workOrderId]);
-
   const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, deletePhoto, movePhoto, markupPhoto, justTaken, photoOptions, removeZoneOnProperty };
   // Only a failed upload or a conflict, never the second a tap spends uploading.
   const notice = syncNoticeFor(syncState);
