@@ -1,6 +1,8 @@
 # The Project Workspace, day to day — Product Requirements
 
-**Status:** DECIDED 2026-09-25. Building in order; Tasks first.
+**Status:** All six steps BUILT and LIVE (last one, Materials Required/Ordered, deployed
+2026-10-05 as `9d36363`). Waiting on the real-job walk (R5) before any classic page is
+retired — see *Where the plan stands* at the end.
 **Opened:** 2026-09-25
 **Owner:** Patrick
 
@@ -422,8 +424,11 @@ functions — so the two cannot disagree. The screen does no arithmetic and send
 - **Daily Records:** latest *clocked* workday and its hours and crew note, effective person-hours
   (corrections applied), days logged, problems needing attention (open + monitoring, the one
   rule), the latest journal update.
-- **Materials:** lists, received, used, project balance and the tab's own warnings. No "ordered"
-  or project-wide "required" figure — the Materials tab has neither (required is per list).
+- **Materials:** lists, required, ordered, received, used, project balance and the tab's own
+  warnings — the Materials tab's own figures, copied. *(Corrected 2026-10-06. When this step
+  shipped on 2026-10-02 the card had no "required" or "ordered" figure because the tab had
+  neither; #364, deployed 2026-10-05, added both to the tab's read model and the card copies
+  them. See "Step 3, completed".)*
 - **Change Orders:** open, with the customer, signed; the signed agreement and any unsigned
   revision (`describeAgreement`); the tab's holds.
 - **Financials:** signed contract with HST, invoiced, recorded payments, outstanding (or **Not
@@ -437,8 +442,107 @@ counted clocked visits, the other every visit — now one rule, `session-hours.l
 **Not in this step:** the Projects list and Dashboard still mirror the task-progress rule in the
 browser (`format.ts`); moving them to the server is a separate change.
 
-**Money is office-only (2026-10-02).** Contract, invoice, payment, outstanding and
-reconciliation amounts — and the Financials tab — are for the office (role `admin`). A
-technician sees the same Overview without them: the Financials card says only whether the
-office has billing to deal with, the header reads "Office only", and the Financials tab is not
-offered. The server removes the figures (`lib/money-visibility.js`); the screens never decide.
+**Money is office-only (2026-10-02; description corrected 2026-10-06).** The rule is one
+function, `canSeeMoney` in `lib/money-visibility.js`: an office account (role `admin`) sees money;
+a technician (role `tech`) does not, *where the rule is applied*. The server removes the figures
+before they leave; the screens never decide. Where it is applied — checked 2026-10-06 by signing
+in as a technician on a test server:
+
+- **Refused outright (403 `office_only`):** the Financials tab (`…/financials`) and the billing
+  preview (`…/billing-preview`). The technician's tab bar does not offer Financials.
+- **Amounts removed, everything else kept:** the Projects list and Dashboard (contract values,
+  totals); the project header ("Office only" instead of the contract value; no invoice summary,
+  billing figures, quote prices or locked labour rate); the Overview (the Financials card says
+  only whether the office has billing to deal with; money next-actions and money blockers become
+  that notice; a materials price warning loses its sentence); Change Orders (agreement amounts,
+  estimates, line prices); the raw change-request list and the completion check's sentences.
+  Tasks, days, hours, problems and change-order counts are identical for both.
+
+**Not covered — a technician can still see these amounts** (the 2026-10-02 note said "every
+`/api/projects/*` read"; that was wrong for the Materials tab, and the classic-page exclusions
+were only partly listed):
+
+| Where | What a technician sees | Why it is not covered |
+|---|---|---|
+| **Materials tab** (new workspace) | each material list's dollar total ("$… this list") | material-list costs were excluded on 2026-10-02; the tab's route was not redacted |
+| Classic invoice pages + `/api/invoices` | invoice lines, totals, payments | deliberate: the field app reads an invoice's amount to take payment on site |
+| Classic Quote Folder (`/admin/quote-folder`) | proposal subtotal, HST, total | excluded 2026-10-02 (quotes), awaiting Patrick's decision |
+| Classic purchase-order pages + `/api/purchase-orders` | supplier unit prices | not listed on 2026-10-02; found 2026-10-06 |
+| Classic material-list page + `/api/material-lists` | list cost subtotals | excluded 2026-10-02 (material-list costs) |
+| Free-text fields (descriptions, notes) | any amount the office typed | deliberate: masking an editable field would let an autosave overwrite it |
+| "Open in classic" / "Open in classic CRM" | the classic project page and its links | the classic pages are outside the workspace rule |
+
+Closing any of these is a decision for Patrick, not part of this phase — nothing was changed on
+2026-10-06.
+
+## Step 3, completed — Materials Required and Ordered (#364), 2026-10-05
+
+The Materials tab and the Overview now show the two figures step 3 promised:
+
+- **Required:** one active material list → that list's units; two or more → **"Per list — N
+  lists"** and no project total (a later list may repeat an earlier one's parts; nothing in the
+  records says whether it replaces or adds). An archived list is not active. Each part still
+  shows its own required figure, or each list's figure side by side — never added together.
+- **Ordered:** units actually ordered on this job's purchase orders. Sent, partly received and
+  received orders count; a cancelled order counts only what arrived; drafts count nothing; each
+  order line counts once. One server calculation (`purchase-orders.lineCommitment`) feeds
+  Ordered, Received and still-to-order, so they cannot disagree.
+
+**Release record.**
+
+| | |
+|---|---|
+| Approved head | `060e8f1b08e1ddeffb93aa436165550378ae56e3` (PR #364) |
+| Merge commit (deployed version) | `9d36363f93cbd1b4dd87cd5779498b99417007ae`, merged 2026-10-05 11:18 UTC |
+| CI on the PR head | build-check passed — https://github.com/PJLLandServices/mysite/actions/runs/37299566107/job/111728803036 |
+| CI on main after merge | build-check passed — https://github.com/PJLLandServices/mysite/actions/runs/37302090573/job/111736959104 |
+| Production | Render auto-deploy; new build `index-g2zF6qBd.js` served from 11:28:27 UTC, old build gone; health, home, login, booking services, new-customer and sitemap all OK |
+| Downtime | about 56 seconds of 502 (11:27:34–11:28:27 UTC) during Render's restart; monitored every 3 s from merge until 2 minutes after the new build appeared |
+| Live records | none created or changed; PO-2026-0007 untouched |
+
+Tests on `060e8f1`: Required/Ordered 61/61 (fails at once on the old code); Overview with
+desktop and phone screens 420/420; app shell 48/48 (the two obsolete assertions now check the
+built Financials tab and the office/technician rules: no Financials tab, no amounts and "Office
+only" for a technician, 403 from the API for a technician and 200 for the office);
+project-materials 38/38; materials tab 26/26; line protection 69/69; purchasing matrix 563/563;
+PO/list consistency 111/111; admin gates 14/14. All 8 E2E journeys passed on the previous head
+`12e3656` (the later commits changed only the app-shell test and brought in main). Screenshots,
+desktop and phone, were shown to Patrick before he approved the merge.
+
+## Where the plan stands (2026-10-06)
+
+All six tabs are built and live: Tasks, Daily Records, Materials, Change Orders (read-only),
+Financials (read-only, office-only), Overview. What is left, each kept separate:
+
+1. **The real-job walk (R5)** — below. Not yet done. No classic page is retired until it is.
+2. **Actions still on the classic pages** — change-order send / approve / withdraw / revise,
+   and invoice send / record payment / void. Decision 3 and 4 stand: these move only after the
+   walk.
+3. **Projects list and Dashboard progress — separate follow-up.** Both still compute a job's
+   task progress in the browser (`projectPercentComplete()` in `admin-app/src/lib/format.ts`),
+   mirroring the server rule; `test-task-progress-agrees.mjs` keeps the two equal. Moving them
+   to the server is its own change, not started.
+4. **Office-only money gaps** — the table above. A decision for Patrick.
+5. **"Log an update" on the Overview does nothing yet** — the button has no action. Noted, not
+   fixed.
+
+The booking test investigation (`test-day-order`, cause unconfirmed) is unrelated to this plan
+and is recorded on its own in `docs/FLOW_REGISTER.md`.
+
+## The real-job walk (R5) — read-only checklist
+
+Signed in as the office, on an existing active job that has a signed proposal, a few logged
+days, a material list with at least one sent purchase order, and an invoice. **Look only:** no
+purchases, emails, payments or edits. Each tab below lists the buttons NOT to press.
+
+| Tab | What should be there | Must agree with | Opens a classic page | Don't press |
+|---|---|---|---|---|
+| Overview | header: Contract value, Project progress, Billing; six cards and the next action | each card = its tab (below) | "Open in classic" → classic project page; customer / property links | "Log an update" (inert) |
+| Tasks | Complete %, tasks done, days logged, person-hours, the list | Complete % = header Project progress = Overview Tasks card (= Projects list bar, browser-mirrored); days logged and person-hours = Daily Records | — | progress buttons, Complete, Edit, Remove, Add task, Restore |
+| Daily Records | each day: clock in/out, people, person-hours, photos, notes; problems | days logged, person-hours, problems open = Overview Daily Records card | photos open full size | Correct clock times, Correct crew count, Raise a problem, problem status |
+| Materials | Required (one number, or "Per list — N lists"), Ordered, Received, Used on site, Project balance; lists; project stock | the same figures on the Overview Materials card; Ordered = units on this job's sent / partly received / received POs (cancelled: only what arrived; drafts: none) | list name → classic material list; PO number → classic PO; work order number → classic work order | anything on those classic pages (send, receive, cancel, edit) |
+| Change Orders | Open, Waiting on customer, Signed; the agreement (signed version, any unsigned revision) | counts = Overview Change Orders card; signed agreement total = header Contract value = Financials Signed contract | "Act on these in the classic project page"; quote / revision links; work order links | send, approve, withdraw, generate revision |
+| Financials | Signed contract, Invoiced, Received, Owed now; invoices, payments, deposit, "If it were billed today", holds, any reconciliation warning | Overview Financials card (Signed contract, Invoiced, Payments received, Outstanding = Owed now, Not yet invoiced, Deposit); each invoice's payments = its classic invoice page | invoice numbers → classic invoice; "Record payments on the classic pages" | record payment, send, mark paid, void |
+
+Record what was walked, on which job, and any figure that disagreed, here before retiring
+anything.

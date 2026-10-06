@@ -2,6 +2,31 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06 (Project Workspace release closed out — #364 deployed; office-only money described as it actually is):**
+#364 (Materials Required/Ordered) merged as `9d36363` on 2026-10-05 and is live; release record,
+tests and downtime (about 56 s of 502 during Render's restart) are in
+`docs/PROJECT_WORKFLOW_PRD.md`, *Step 3, completed*. **Correction to the 2026-10-02 money entry
+below:** it said the rule is applied "to every `/api/projects/*` read". It is not applied to
+`GET /api/projects/:id/materials` — a technician's Materials tab shows each material list's
+dollar total — and a technician can also read supplier unit prices on the classic purchase-order
+pages and `/api/purchase-orders`, which that entry did not list. Re-checked by signing in as a
+technician on a test server: Financials and billing preview 403; list, header, Overview, Change
+Orders redacted as described; invoices, Quote Folder totals, PO prices and material-list costs
+readable. The full covered / not-covered table is in the PRD. **Nothing changed in code** — closing
+any gap is Patrick's decision. Not touched: every flow, live record and PO-2026-0007.
+
+**2026-10-06 (OPEN — `test-day-order` intermittent failure, cause unconfirmed):** recorded on its
+own so it is not mistaken for part of any release. `scripts/test-day-order.mjs` (in
+`build:check`) failed intermittently in section 3: `/api/schedule/today` returned section 1's
+three bookings (`L-TH1`, `L-NM1`, `L-NM2`) instead of the three section 3 had just written to
+`server/data/leads.json`. Seen once on CI
+(https://github.com/PJLLandServices/mysite/actions/runs/37087438815/job/111100542028, PR #367 at
+`fc15694`) and in local full checks of the #367/#375 combined code; never reproduced running the
+test alone or in replays. This is a different failure from the fixed-date one corrected on
+2026-10-01. **Hypothesis, unproven:** the boot-time sweep (`retimeCustomerBooking`) rewrites
+`leads.json` while the test writes it directly. The test is unchanged and still gates CI — not
+skipped, not weakened. No `test-day-order` failure on main since (the two red main runs on
+2026-10-05/06 were `test-wo-completedat`, a missing module, and `test-reserve-receipts`).
 **2026-10-06 (The tray still held seventeen — cancelled customers, and customers no longer
 served):** Patrick, after the 10-04 fix went live: *"they are all still there, but this is wrong
 information because we don't need them there. They have either cancelled or we aren't serving
@@ -25,8 +50,9 @@ writer — a separate decision). Coverage: `scripts/test-unplanned-settled.mjs` 
 declined rule, the tray row, the button), in `build:check`.
 **2026-10-02 (Money is office-only in the project workspace — Patrick: "Financial amounts and the Financials tab must be office-only"):**
 `lib/money-visibility.js` holds the rule (`canSeeMoney`: role `admin`) and the redactions; the
-server applies them to every `/api/projects/*` read before it leaves — a technician's browser
-is never sent the figures.
+server applies them to the `/api/projects/*` reads listed below before they leave — a technician's
+browser is never sent those figures. *(Corrected 2026-10-06: not every such read — the Materials
+tab's route is not redacted; see the 2026-10-06 entry above.)*
 - **Refused (403 `office_only`):** `…/financials`, `…/billing-preview`.
 - **Redacted for a technician:** the list and Dashboard (contract values, totals), the project
   header (`agreement`, `billing`, `invoiceSummary`, `linkedQuote`, the proposal snapshot's prices,
