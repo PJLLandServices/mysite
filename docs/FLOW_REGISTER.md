@@ -2,6 +2,23 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06, late (The route optimiser stops burning driving to avoid waiting):** Patrick, on
+the Oct 14 (R8) day card after an *after 11:00* window went onto 94 Dianawood Ridge: *"can you
+figure out why this moved around?"* — *"look at the stupid driving sequence."* The morning had been
+sent Richmond Hill (180 Valleymede) → Markham (Cynthia Tam, self-booked) → BACK to Richmond Hill
+(24 Fanshawe, a minute from Valleymede) → Woodbridge, arriving at the gate at 11:00 sharp. It was
+doing exactly what `resequence.bestConstrainedOrder` scored: with any window on the day the order
+was chosen lexicographically by (misses, **least waiting**, least driving, home), so a *not before*
+window made a time-killing detour beat sitting still for nine minutes. Now the second component is
+the day's total clock — driving + waiting + the leg home — and least driving is the tiebreak among
+orders that get home at the same minute. A detour that only kills time can never win again; a
+*not after* miss still outranks everything. The sequence re-timed the customers' placeholder
+minutes twice in two minutes (Cynthia 8:20 → 9:04 → 11:30, FLOW-43's retime, arrival window
+unchanged so nothing was sent) — that churn is the symptom, not a second bug. NOT touched: windows
+stay soft (a miss is flagged, never refused); the manual-order path; who set the window (the
+plan's `placed` record covers adds and moves, not windows — named, not built). Coverage: three
+new assertions in `scripts/test-resequence.mjs` (42) on a four-stop fixture that reproduces the
+Oct 14 shape; two of them fail on the old rule.
 **2026-10-06, night (A phone "no" has a home — and every hand-placed stop says how it got
 there):** Patrick, on Oct 7's day card: *"why the fuck is Peter Bazios on the calendar for Oct 7
 still?"* then *"don't only figure that out, but figure out why the fuck it got there, and ensure

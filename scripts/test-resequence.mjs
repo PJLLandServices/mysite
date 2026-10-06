@@ -391,6 +391,39 @@ ok("the derived timing is returned alongside, for display",
     && typeof timings["2026-09-28"].driveMinutes === "number",
   JSON.stringify(Object.keys(timings["2026-09-28"])));
 
+// ---- Waiting beats a detour --------------------------------------------
+//
+// Patrick, 2026-10-06, on an Oct 14 morning: two commercial stops a minute
+// apart in Richmond Hill, a self-booked customer out east in Markham, and
+// a fourth stop in Woodbridge with "after 11:00" on it. The optimiser sent
+// the truck Richmond Hill → Markham → BACK to Richmond Hill → Woodbridge.
+// "Look at the stupid driving sequence." It was doing exactly what its
+// scoring said: least WAITING ranked above least DRIVING, so it burned
+// drive time to arrive at the gate the minute it opened instead of
+// finishing the neighbours and waiting nine minutes.
+//
+// The clock is the thing: misses first, then the day's total time (drive
+// + wait), then driving. A detour that only kills time can never win.
+{
+  const grid = new Map([
+    ["V", prop("V", [5, 0], 3)],    // 5 from the yard
+    ["F", prop("F", [6, 0], 3)],    // next door to V
+    ["C", prop("C2", [6, 30], 3)],  // 30 east of F
+    ["W", prop("W", [40, 0], 3)]    // 34 west of F, 45 from C; gate opens 11:00
+  ]);
+  grid.get("C").code = "C"; grid.get("C").id = "C";
+  const day = { label: "T-wait", morning: ["V", "F", "C", "W"], afternoon: [], constraints: { W: { notBefore: "11:00" } } };
+  const run = await sequenceDay(day, { ...opts, propertiesByCode: grid });
+  const order = run.morning;
+  const iV = order.indexOf("V"), iF = order.indexOf("F");
+  ok("the neighbours are done back to back — no detour to kill time before a gate",
+    Math.abs(iV - iF) === 1, order.join(","));
+  ok("…the gated stop is last, reached on the clock, with a short wait rather than a long drive",
+    order[order.length - 1] === "W" && (run.timeline || []).find((t) => t.propertyCode === "W")?.arriveAt === "11:00", JSON.stringify(run.timeline));
+  // 5 + 1 + 30 + 45 legs + 40 home = 121; the detour (east first) is 136.
+  ok("…and the day drives less than the detour would", run.driveMinutes <= 125, String(run.driveMinutes));
+}
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {
