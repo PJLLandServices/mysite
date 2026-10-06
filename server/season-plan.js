@@ -262,10 +262,62 @@
       meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
       if (stop.confirmation) meta.appendChild(confirmControl(stop.confirmation));
+      else if (stop.bookingState === "unassigned") meta.appendChild(bookNowControl(stop, date));
     }
     li.appendChild(meta);
     if (windowForm) li.appendChild(windowForm);
     return li;
+  }
+
+  // BOOK THIS ONE STOP, NOW. Patrick, 2026-10-06, after dragging a chip
+  // onto a day: "it doesn't show booked, or booking or anything like
+  // that... I need to be able to just book it regardless too." A planned
+  // stop is an intent until Assign; this is Assign for one stop — the same
+  // writer, scoped to this code on this day (body { code, date }). Two
+  // presses, like every other write on the page. The customer IS told —
+  // the server sends the step-1 confirmation right after the booking,
+  // through the same gates as the Send confirmation button — and the
+  // toast says whether that went.
+  function bookNowControl(stop, date) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sp-window-btn sp-book-now";
+    button.textContent = "Book now";
+    button.title = "Create this customer's appointment on this day now, without running Assign for the whole season";
+    armTwice(button, "Press again to BOOK", async () => {
+      button.disabled = true;
+      button.textContent = "Booking…";
+      try {
+        const response = await fetch(`/api/assignments/${seasonSelect.value}/${yearSelect.value}/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: stop.code, date })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't book that stop."]).join(" "));
+        const row = data.stop || {};
+        const words = (data.outcomes || {})[row.reason] || (row.reason ? row.reason.replace(/_/g, " ") : "");
+        if (row.outcome === "created") {
+          const told = data.told || null;
+          const who = stop.customerName || stop.code;
+          if (told && told.ok) {
+            showToast(`${who} booked for ${prettyDate(date)} and told (${(told.sent || []).join(" + ") || "message queued"}).`);
+          } else {
+            showToast(`${who} booked for ${prettyDate(date)}. NOT told — ${told?.words || "the confirmation could not be sent"} Use Send confirmation on the stop when that's fixed.`, "bad");
+          }
+        } else if (row.outcome === "settled") {
+          showToast(`${stop.customerName || stop.code} already has a booking this season.`);
+        } else {
+          showToast(`Not booked — ${words || "the writer refused this stop"}.`, "bad");
+        }
+        load();   // the row now carries its booking state and confirmation controls
+      } catch (error) {
+        showToast(error.message, "bad");
+        button.disabled = false;
+        button.textContent = "Book now";
+      }
+    });
+    return button;
   }
 
   // Two SEPARATE choices, not one bracket. "After 10:00" and "Before 12:00"
@@ -2039,7 +2091,7 @@
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't add that stop."]).join(" "));
-      showToast(`${code} added to ${prettyDate(toDate)} ${toBucket}. Run Assign to book it.`);
+      showToast(`${code} added to ${prettyDate(toDate)} ${toBucket}. It's planned, not booked yet — press Book now on the stop, or run Assign.`);
       render(data.plan);
       selectDay(toDate, { flashCode: code });
       loadUnplanned();

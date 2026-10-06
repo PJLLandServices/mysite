@@ -236,7 +236,7 @@ try {
     ok("…offers 'any other date' like the move picker",
       /dayPickerFor[\s\S]{0,2000}__custom/.test(page), "no custom date on the add picker");
     ok("…and says the next step, because adding isn't booking",
-      /Run Assign to book it/.test(page), "the toast doesn't say what to do next");
+      /press Book now on the stop, or run Assign/.test(page), "the toast doesn't say what to do next");
     ok("…and names every blocked reason in plain words",
       ["no_code", "season_opt_out", "previously_assigned", "assignment_declined", "not_eligible", "missing_name"]
         .every((k) => new RegExp(`${k}:`).test(page)),
