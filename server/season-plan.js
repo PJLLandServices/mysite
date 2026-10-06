@@ -1447,7 +1447,8 @@
     season_opt_out: "opted out of this season",
     no_property_id: "corrupted record — no id",
     previously_assigned: "already has an assignment this season",
-    assignment_declined: "cancelled their assignment — a no, not a gap"
+    assignment_declined: "cancelled their assignment — a no, not a gap",
+    cancelled_this_season: "cancelled this season — a no, not a gap"
   };
 
   armTwice(el("unplannedPlaceAll"), "Press again to PLACE them all", async () => {
@@ -1507,7 +1508,8 @@
       for (const row of blocked) {
         const li = document.createElement("li");
         li.innerHTML = `<strong>${escapeHtml(row.code || row.customerName || "?")}</strong> `
-          + `${escapeHtml(row.customerName || "")} — ${escapeHtml(BLOCKED_WORDS[row.reason] || row.reason)}`;
+          + `${escapeHtml(row.customerName || "")} — ${escapeHtml(BLOCKED_WORDS[row.reason] || row.reason)}`
+          + (row.note ? ` <em>(${escapeHtml(row.note)})</em>` : "");
         unplannedBlocked.appendChild(li);
       }
     } catch (error) {
@@ -1570,6 +1572,34 @@
     });
     act.appendChild(see);
     act.appendChild(dayPickerFor(row, row.days));
+    // NOT A GAP. Patrick, 2026-10-06, on seventeen chips: "we aren't
+    // serving them anymore." A customer the plan should stop asking about
+    // is marked skip-this-season here, on the chip — the same flag the
+    // outreach page sets, honoured by the same gauntlet — and moves to
+    // the "can't be placed" list below instead of standing in for a gap.
+    // Two presses, like every other write on this page.
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.className = "pjl-btn pjl-btn-outline sp-standby-book sp-skip-season";
+    skip.textContent = "Skip this season";
+    armTwice(skip, "Press again to SKIP them", async () => {
+      skip.disabled = true;
+      try {
+        const response = await fetch("/api/outreach/opt-out-season", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ propertyId: row.propertyId, season: seasonSelect.value, year: Number(yearSelect.value), optOut: true })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't skip them."]).join(" "));
+        showToast(`${row.customerName || row.code} skipped for this season — now under "Can't be placed".`);
+        loadUnplanned();
+      } catch (error) {
+        showToast(error.message, "bad");
+        skip.disabled = false;
+      }
+    });
+    act.appendChild(skip);
     wrap.append(who, act);
     return wrap;
   }

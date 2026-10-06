@@ -2,6 +2,27 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06 (The tray still held seventeen — cancelled customers, and customers no longer
+served):** Patrick, after the 10-04 fix went live: *"they are all still there, but this is wrong
+information because we don't need them there. They have either cancelled or we aren't serving
+them anymore."* Two states the tray had no word for. **Cancelled:** `deriveBookingState` reads a
+cancelled booking as *unbooked* — deliberately, so outreach can nudge them to re-book — and the
+tray inherited that reading, so a customer who booked themselves and then cancelled was offered a
+route day as if nothing had happened (only a cancelled ASSIGNMENT was caught, by
+`priorAssignmentsFor`). Now `outreach.declinedThisSeason(records, season, year)` — one named rule,
+pure over a property's records (by `belongsToProperty`): a dead seasonal booking this season with
+nothing live or completed beside it, with its reason — is reported by `deriveBookingState` as
+`declined` and read by `unplanned`, which lists the customer under *Can't be placed* as
+**cancelled this season — a no, not a gap** with the reason they gave, never as a chip. Outreach is
+unchanged on purpose: `assessEligibility` still returns ok for them. **No longer served:** the
+system cannot know this on its own, so the chip now carries **Skip this season** (two presses):
+it sets the same per-season opt-out flag the Outreach page's bulk action sets
+(`POST /api/outreach/opt-out-season`), the gauntlet already honours it (`season_opt_out`), and the
+customer moves to *Can't be placed — opted out of this season*. Reversible only by clearing the
+flag on the property (no undo button yet — named, not built). NOT touched: `assign()` still books
+a self-cancelled customer whose code is on a plan day (their cancellation blocks the tray, not the
+writer — a separate decision). Coverage: `scripts/test-unplanned-settled.mjs` grew to 53 (the
+declined rule, the tray row, the button), in `build:check`.
 **2026-10-02 (Money is office-only in the project workspace — Patrick: "Financial amounts and the Financials tab must be office-only"):**
 `lib/money-visibility.js` holds the rule (`canSeeMoney`: role `admin`) and the redactions; the
 server applies them to every `/api/projects/*` read before it leaves — a technician's browser
