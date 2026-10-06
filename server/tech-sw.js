@@ -431,7 +431,13 @@
 // Bumped 2026-09-26 (v52 -> v53): re-signing after a priced-scope change —
 // work-order-tech.js/.html show the sign-off form again when the server
 // says a new signature is needed. TECH_BUILD_VERSION "tech-v53" alongside.
-const CACHE_VERSION = "pjl-tech-v53";
+// Bumped 2026-10-06 (v53 -> v54): P-PJL-22 (#383) — the payment question
+// reads "Collect payment now / Send invoice / bill later", and a visit the
+// office settled as Paid in Full shows "Payment: handled by the office"
+// instead. Touches work-order-tech.js + .html (both in STATIC_ASSETS); #383
+// shipped without this bump, so cached phones kept the old page.
+// TECH_BUILD_VERSION "tech-v54" alongside.
+const CACHE_VERSION = "pjl-tech-v54";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
