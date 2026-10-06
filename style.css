@@ -4154,6 +4154,108 @@ html[data-pjl-season="off"] .area-hero-v2--seasonal .area-hero-v2__bg {
   }
 }
 
+/* ── Services options panel ──
+   Tapping Services slides up a small panel just above the bar with the
+   three core services. A light backdrop covers the page; tapping it,
+   pressing Escape, or tapping Services again closes the panel. */
+.bottom-nav-sheet,
+.bottom-nav-backdrop { display: none; }
+.bottom-nav-sheet[hidden],
+.bottom-nav-backdrop[hidden] { display: none !important; }
+
+@media (max-width: 1024px) {
+  .bottom-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(15, 31, 20, 0.35);
+    animation: bnavFade 0.18s ease;
+  }
+  .bottom-nav-sheet {
+    display: block;
+    position: fixed;
+    left: 50%;
+    bottom: calc(var(--bnav-space) + 10px);
+    z-index: 1002;
+    width: min(calc(100% - 20px), 420px);
+    max-height: calc(100vh - var(--bnav-space) - 40px);
+    overflow-y: auto;
+    padding: 14px 10px 10px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-50%);
+    animation: bnavSheetUp 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .bottom-nav-sheet__title {
+    margin: 0 8px 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .bottom-nav-sheet__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .bottom-nav-sheet__link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 54px;
+    padding: 8px 12px;
+    border-radius: var(--r);
+    color: var(--green);
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.15s ease;
+  }
+  .bottom-nav-sheet__link:active { background: var(--green-pale); }
+  @media (hover: hover) {
+    .bottom-nav-sheet__link:hover { background: var(--green-pale); }
+  }
+  .bottom-nav-sheet__link:focus-visible {
+    outline: 3px solid var(--amber);
+    outline-offset: -3px;
+  }
+  .bottom-nav-sheet__link[aria-current="page"] { color: var(--amber-ink); }
+  .bottom-nav-sheet__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--green-pale);
+    font-size: 18px;
+  }
+  .bottom-nav-sheet__label { flex: 1; min-width: 0; }
+  .bottom-nav-sheet__chevron {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+  .bottom-nav__services[aria-expanded="true"] { color: var(--amber-ink); background: var(--green-pale); }
+
+  @keyframes bnavFade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes bnavSheetUp {
+    from { opacity: 0; transform: translate(-50%, 16px); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-sheet,
+  .bottom-nav-backdrop { animation: none; }
+}
+
 @media (max-width: 767px) {
   /* Phone savings card is shorter (see chat-widget.css). */
   html body.has-savings-float:has(.bottom-nav) .pjl-chat-launcher {
@@ -4171,5 +4273,7 @@ html[data-pjl-season="off"] .area-hero-v2--seasonal .area-hero-v2__bg {
 }
 
 @media print {
-  .bottom-nav { display: none !important; }
+  .bottom-nav,
+  .bottom-nav-sheet,
+  .bottom-nav-backdrop { display: none !important; }
 }

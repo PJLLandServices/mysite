@@ -39,6 +39,11 @@ if (nav) {
   window.addEventListener('load', updateNavState);
 }
 
+// Set by the blocks below so the slide-out menu and the bottom bar's
+// Services panel can close each other (only one is open at a time).
+let closeMainMenu = () => {};
+let closeServicesSheet = () => {};
+
 // ── Mobile hamburger ──
 const hamburger = document.querySelector('.nav-hamburger');
 const mobileNav = document.querySelector('.nav-mobile');
@@ -67,6 +72,7 @@ if (hamburger && mobileNav) {
     hamburger.setAttribute('aria-expanded', String(isOpen));
     syncBottomMenu(isOpen);
     if (isOpen) {
+      closeServicesSheet();
       spans[0].style.transform = 'rotate(45deg) translate(5px, 5px)';
       spans[1].style.opacity = '0';
       spans[2].style.transform = 'rotate(-45deg) translate(5px, -5px)';
@@ -75,6 +81,7 @@ if (hamburger && mobileNav) {
     }
   };
 
+  closeMainMenu = closeMobileNav;
   hamburger.addEventListener('click', toggleMobileNav);
   if (bottomMenuBtn) bottomMenuBtn.addEventListener('click', toggleMobileNav);
 
@@ -179,9 +186,10 @@ document.querySelectorAll('.nav-links a, .nav-mobile a, .nav-mobile__link').forE
   }
 });
 
-// ── Bottom quick-action bar: highlight the current section ──
+// ── Bottom quick-action bar ──
 const bottomNav = document.querySelector('.bottom-nav');
 if (bottomNav) {
+  // Highlight the current section.
   const page = (window.location.pathname.split('/').pop() || 'index.html').replace(/\.html$/, '');
   const servicePages = /^(sprinkler-|drip-irrigation$|commercial-irrigation$|landscape-lighting$|pricing$|process$|warranty$|water-promise$|coverage-map$)/;
   let section = null;
@@ -192,7 +200,78 @@ if (bottomNav) {
     const item = bottomNav.querySelector(`[data-bnav="${section}"]`);
     if (item) {
       item.classList.add('is-active');
-      item.setAttribute('aria-current', 'page');
+      // Services is a button that opens a panel, not a link to this page.
+      if (item.tagName === 'A') item.setAttribute('aria-current', 'page');
+    }
+  }
+
+  // Services → panel with Spring Opening / Fall Closing / Repairs.
+  const servicesBtn = bottomNav.querySelector('.bottom-nav__services');
+  const sheet = document.getElementById('bottom-nav-services');
+  const backdrop = document.querySelector('.bottom-nav-backdrop');
+  if (servicesBtn && sheet) {
+    const tabletQuery = window.matchMedia('(max-width: 1024px)');
+    sheet.querySelectorAll('a').forEach(a => {
+      if ((a.getAttribute('href') || '').replace(/\.html$/, '') === page) a.setAttribute('aria-current', 'page');
+      a.addEventListener('click', () => closeServicesSheet());
+    });
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeServicesSheet(true);
+    };
+    closeServicesSheet = (returnFocus = false) => {
+      if (sheet.hidden) return;
+      sheet.hidden = true;
+      if (backdrop) backdrop.hidden = true;
+      servicesBtn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('keydown', onKey);
+      if (returnFocus) servicesBtn.focus();
+    };
+    const openServicesSheet = (fromKeyboard) => {
+      closeMainMenu();
+      sheet.hidden = false;
+      if (backdrop) backdrop.hidden = false;
+      servicesBtn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('keydown', onKey);
+      if (fromKeyboard) {
+        const first = sheet.querySelector('a');
+        if (first) first.focus();
+      }
+    };
+    servicesBtn.addEventListener('click', (e) => {
+      // e.detail is 0 when the button was "clicked" with Enter/Space.
+      if (sheet.hidden) openServicesSheet(e.detail === 0);
+      else closeServicesSheet();
+    });
+    if (backdrop) backdrop.addEventListener('click', () => closeServicesSheet());
+    window.addEventListener('resize', () => { if (!tabletQuery.matches) closeServicesSheet(); });
+    window.addEventListener('orientationchange', () => closeServicesSheet());
+    // Coming back to a page from the browser cache must not show a stale panel.
+    window.addEventListener('pageshow', (e) => { if (e.persisted) closeServicesSheet(); });
+  }
+
+  // Book → booking page pre-set to the current season's service. The
+  // season is decided only by js/season.js (window.PJLSeason) — the same
+  // answer the town pages' "Book Fall Closing" buttons use — so the bar
+  // flips Fall → off-season → Spring on its own. The href in the markup is
+  // the fall fallback used if the script can't load.
+  const bookBtn = bottomNav.querySelector('.bottom-nav__book');
+  if (bookBtn) {
+    const applySeason = () => {
+      const S = window.PJLSeason;
+      if (!S || typeof S.copyFor !== 'function') return;
+      try {
+        const copy = S.copyFor(S.season, S.calcSeason, '');
+        if (copy && copy.ctaHref) bookBtn.setAttribute('href', copy.ctaHref);
+      } catch (e) { /* keep the fallback href */ }
+    };
+    if (window.PJLSeason) {
+      applySeason();
+    } else {
+      const script = document.createElement('script');
+      script.src = 'js/season.js';
+      script.async = true;
+      script.onload = applySeason;
+      document.head.appendChild(script);
     }
   }
 }
