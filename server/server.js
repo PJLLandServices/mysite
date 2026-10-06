@@ -13786,6 +13786,15 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete bookings."] });
       const id = decodeURIComponent(bookingMatch[1]);
+      // Why the delete, when the page asks. A deleted SEASONAL booking
+      // leaves no record — unlike a cancellation — so the plan, the tray
+      // and outreach went on treating the customer as open. Patrick,
+      // 2026-10-06, on a stop that would not leave Oct 7: "I personally
+      // deleted his appointment." `saidNo: true` gives the no a home: the
+      // property's skip-this-season flag, the one every reader honours.
+      // Absent or false (booked by mistake), the delete is what it was.
+      const deleteBody = await parseRequestBody(req).catch(() => ({}));
+      const saidNo = deleteBody && deleteBody.saidNo === true;
       // Fetch the canonical record BEFORE remove() so we can resolve
       // its leadId for the lead.booking cleanup below — the legacy
       // embedded lead.booking shape doesn't carry the canonical BK- id,
@@ -13831,7 +13840,22 @@ async function handleApi(req, res, pathname) {
       } catch (e) {
         console.warn("[booking delete] lead.booking cleanup failed:", e?.message);
       }
-      return sendJson(res, 200, { ok: true, deletedId: result.deletedId });
+      let skippedSeason = null;
+      if (saidNo && bookingToDelete?.propertyId && bookingToDelete.scheduledFor) {
+        const key = String(bookingToDelete.serviceKey || "");
+        const season = Object.entries(outreach.SEASONAL_SERVICE_PREFIXES)
+          .find(([, prefix]) => key.startsWith(prefix))?.[0] || null;
+        if (season) {
+          const year = new Date(bookingToDelete.scheduledFor).getFullYear();
+          try {
+            await outreach.setOptOutForSeason(bookingToDelete.propertyId, season, year, true);
+            skippedSeason = { season, year };
+          } catch (e) {
+            console.warn("[booking delete] skip-this-season after delete failed:", e?.message);
+          }
+        }
+      }
+      return sendJson(res, 200, { ok: true, deletedId: result.deletedId, skippedSeason });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete booking."] });
     }
@@ -27426,7 +27450,9 @@ async function orderDayForDriving(rows) {
         ...resolvePlanStop(byCode, woType, code),
         stopNumber: stopNumbers.get(code) || null,
         notBefore: (windows[code] && windows[code].notBefore) || null,
-        notAfter: (windows[code] && windows[code].notAfter) || null
+        notAfter: (windows[code] && windows[code].notAfter) || null,
+        // Who put this stop here, when and how; null means the import.
+        placed: (day && day.placed && day.placed[code]) || null
       };
       const c = confirm ? confirmationFor(confirm.stopBookingId(code, date)) : null;
       if (c) stop.confirmation = c;
@@ -28604,6 +28630,10 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // How a stop got onto a day, as the page reports it. Stored on the plan
+  // day (season-plans.recordPlaced) so the stop can say so later.
+  const PLAN_VIAS = new Set(["drag", "picker", "preview", "place-all", "move", "custom-date", "api"]);
+  const planVia = (raw, fallback) => (PLAN_VIAS.has(String(raw || "")) ? String(raw) : fallback);
   const seasonPlanMoveMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/move$/);
   if (seasonPlanMoveMatch && req.method === "PATCH") {
     try {
@@ -28615,7 +28645,7 @@ async function orderDayForDriving(rows) {
         propertyCode: normalizeString(body.propertyCode, 40),
         toDate: normalizeString(body.toDate, 10),
         toBucket: normalizeString(body.toBucket, 10)
-      }, { actor: session?.email || session?.name || "admin" });
+      }, { actor: session?.email || session?.name || "admin", via: planVia(body.via, "move") });
       // A move changes a day's stop set, which is exactly when the order
       // has to be recomputed — otherwise the new stop simply lands at the
       // end of whichever bucket it was dropped into.
@@ -28873,7 +28903,7 @@ async function orderDayForDriving(rows) {
         const toDate = row.best.date;
         const toBucket = assignments.lighterBucket(livePlan?.days?.[toDate]);
         try {
-          await seasonPlans.addStop(season, year, { propertyCode: row.code, toDate, toBucket }, { actor });
+          await seasonPlans.addStop(season, year, { propertyCode: row.code, toDate, toBucket }, { actor, via: "place-all" });
           placed += 1;
           results.push({ code: row.code, ok: true, date: toDate, bucket: toBucket, addedDriveMinutes: row.best.addedDriveMinutes });
         } catch (err) {
@@ -28912,7 +28942,7 @@ async function orderDayForDriving(rows) {
         propertyCode: normalizeString(body.propertyCode, 40),
         toDate: normalizeString(body.toDate, 10),
         toBucket: normalizeString(body.toBucket, 10)
-      }, { actor });
+      }, { actor, via: planVia(body.via, "api") });
       const stored = await seasonPlans.getPlan(season, year);
       if (stored) {
         await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), { actor });

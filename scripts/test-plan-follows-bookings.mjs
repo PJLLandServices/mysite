@@ -134,32 +134,76 @@ const state = (rows, over = {}) => lib("planStopState")({ ...ctx, bookingsForPro
 
 // ---- 3. drivenPlan end to end, on fixtures ------------------------------
 {
-  const plan = { days: { "2026-10-06": { label: "Newmarket", morning: ["A1", "A2"], afternoon: ["A3", "NOPROP"] } } };
+  const plan = { days: { "2026-10-06": { label: "Newmarket", morning: ["A1", "A2", "A5"], afternoon: ["A3", "NOPROP", "A4"] } } };
   const props = [
     { id: "p1", code: "A1", customerName: "Alfie Muzzin", address: "12 Oak St, Newmarket" },
     { id: "p2", code: "A2", customerName: "Bravo" },
-    { id: "p3", code: "A3", customerName: "Charlie" }
+    { id: "p3", code: "A3", customerName: "Charlie" },
+    // Peter said no by phone (2026-10-06): skip-this-season on the
+    // property, never booked. The board must drop him like a cancellation.
+    { id: "p4", code: "A4", customerName: "Peter Bazios", address: "16905 McCowan Rd, Cedar Valley",
+      seasonalOutreach: { "2026:fall": { optOutThisSeason: true, touches: [] } } },
+    // Skipped on paper, but a LIVE booking on the day: the visit exists,
+    // so the stop stays — the flag stops the asking, not the appointment.
+    { id: "p5", code: "A5", customerName: "Echo", seasonalOutreach: { "2026:fall": { optOutThisSeason: true, touches: [] } } }
   ];
   const rows = [
     assigned({ id: "BK-1", propertyId: "p1", status: "cancelled", cancelledAt: "2026-09-12T13:00:00Z", cancellationReason: "Selling the house" }),
     assigned({ id: "BK-2", propertyId: "p2" }),
-    assigned({ id: "BK-3", propertyId: "p3", scheduledFor: at("2026-10-09", 13), rescheduleCount: 1 })
+    assigned({ id: "BK-3", propertyId: "p3", scheduledFor: at("2026-10-09", 13), rescheduleCount: 1 }),
+    assigned({ id: "BK-5", propertyId: "p5" })
   ];
   const deps = { getPlan: async () => plan, listProperties: async () => props, listBookings: async () => rows };
   let driven;
   try { driven = await lib("drivenPlan")("fall", 2026, deps); } catch (err) { driven = { error: err.message }; }
   ok("drivenPlan answers with stored, plan and gone", driven && driven.stored && driven.plan && driven.gone, j(driven));
-  ok("Alfie's cancelled stop is off the morning; Bravo stays", j(driven?.plan?.days?.["2026-10-06"]?.morning) === j(["A2"]), j(driven?.plan?.days?.["2026-10-06"]?.morning));
+  ok("Alfie's cancelled stop is off the morning; Bravo stays, and so does skipped-but-BOOKED Echo",
+    j(driven?.plan?.days?.["2026-10-06"]?.morning) === j(["A2", "A5"]), j(driven?.plan?.days?.["2026-10-06"]?.morning));
+  ok("Peter — skip-this-season, never booked — is OFF the day as skipped",
+    !(driven?.plan?.days?.["2026-10-06"]?.afternoon || []).includes("A4")
+    && (driven?.gone?.["2026-10-06"] || []).some((x) => x.code === "A4" && x.state === "skipped" && /Bazios/.test(x.customerName)),
+    j(driven?.gone?.["2026-10-06"]));
+  ok("the skipped-this-season rule has a name the readers share",
+    typeof assignments.skippedThisSeason === "function"
+    && assignments.skippedThisSeason(props[3], "fall", 2026) === true
+    && assignments.skippedThisSeason(props[0], "fall", 2026) === false
+    && assignments.skippedThisSeason(props[3], "spring", 2027) === false, "skippedThisSeason missing or wrong");
+  ok("skipped counts as gone", assignments.GONE_STATES?.has("skipped") === true);
   ok("Charlie moved to the 9th and is off the 6th; a code with no property stays (unassigned)",
     j(driven?.plan?.days?.["2026-10-06"]?.afternoon) === j(["NOPROP"]), j(driven?.plan?.days?.["2026-10-06"]?.afternoon));
   const g = driven?.gone?.["2026-10-06"] || [];
   ok("the gone list carries the customer's name and address for the screen",
     g.some((x) => x.code === "A1" && x.customerName === "Alfie Muzzin" && /Oak St/.test(x.address) && /Selling/.test(x.reason)), j(g));
   ok("…and the moved one names its new day", g.some((x) => x.code === "A3" && x.state === "moved" && x.toDate === "2026-10-09"), j(g));
-  ok("the stored plan comes back as written", j(driven?.stored?.days?.["2026-10-06"]?.morning) === j(["A1", "A2"]), j(driven?.stored));
+  ok("the stored plan comes back as written", j(driven?.stored?.days?.["2026-10-06"]?.morning) === j(["A1", "A2", "A5"]), j(driven?.stored));
   let none;
   try { none = await lib("drivenPlan")("fall", 2026, { ...deps, getPlan: async () => null }); } catch (err) { none = { error: err.message }; }
   ok("no plan → null, not a crash", none === null, j(none));
+}
+
+// ---- 3b. A deleted seasonal booking can carry the customer's no ----------
+// Patrick, 2026-10-06: "I personally deleted his appointment." A delete
+// leaves no record — unlike a cancellation — so nothing told the plan,
+// the tray or outreach that the customer had said no. The delete route
+// now takes { saidNo: true } and sets the property's skip-this-season
+// flag (the one flag every reader honours); both admin delete buttons
+// ask the question for a seasonal booking and send the answer.
+{
+  const server = read("server/server.js");
+  const schedule = read("server/schedule.js");
+  const booking = read("server/booking.js");
+  ok("the delete route reads saidNo from the body",
+    /bookingMatch && req\.method === "DELETE"[\s\S]{0,1500}const saidNo = deleteBody && deleteBody\.saidNo === true/.test(server), "no saidNo on the route");
+  ok("…and, for a seasonal booking, sets skip-this-season on the property after the delete",
+    /saidNo && bookingToDelete\?\.propertyId[\s\S]{0,900}outreach\.setOptOutForSeason\(bookingToDelete\.propertyId, season, year, true\)/.test(server), "the no has no home");
+  ok("…naming the season from the service key, never guessing",
+    /outreach\.SEASONAL_SERVICE_PREFIXES[\s\S]{0,200}key\.startsWith\(prefix\)/.test(server), "season not derived from the key");
+  ok("the Schedule page asks 'was this a no?' for a seasonal delete and sends the answer",
+    /async function askIfCustomerSaidNo/.test(schedule) && /confirmLabel: "Yes — they said no", cancelLabel: "No — booked by mistake"/.test(schedule)
+    && /askIfCustomerSaidNo\(\{ \.\.\.summary, serviceKey: pendingAction\.serviceKey \}\)/.test(schedule) && /body: JSON\.stringify\(\{ saidNo \}\)/.test(schedule), "schedule delete doesn't ask");
+  ok("the booking page asks the same question and sends the same answer",
+    /Was this a no\?/.test(booking) && /body: JSON\.stringify\(\{ saidNo \}\)/.test(booking), "booking delete doesn't ask");
+  ok("a repair's delete asks nothing", /const seasonal = key\.startsWith\("spring_open_"\) \|\| key\.startsWith\("fall_close_"\);/.test(booking) && /if \(!seasonal\) return false;/.test(schedule));
 }
 
 // ---- 4. Every reader holds the DRIVEN plan --------------------------------

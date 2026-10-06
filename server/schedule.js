@@ -1612,6 +1612,25 @@ actionCancelBtn?.addEventListener("click", async () => {
 });
 
 // Hard delete uses a native confirm() — bulletproof + Patrick's
+// A deleted SEASONAL booking leaves no record, so the Season Plan, the
+// tray and outreach would go on treating the customer as open — Patrick,
+// 2026-10-06: "I personally deleted his appointment", and the stop stayed
+// on Oct 7. So a seasonal delete asks one more thing: did they say no?
+// Yes marks the property skip-this-season (off the plan, no messages, not
+// offered a day). No means booked by mistake — they stay a customer to plan.
+async function askIfCustomerSaidNo(summary) {
+  const key = String(summary?.serviceKey || "");
+  const seasonal = key.startsWith("spring_open_") || key.startsWith("fall_close_");
+  if (!seasonal) return false;
+  const what = key.startsWith("spring_open_") ? "spring opening" : "fall closing";
+  return pjlDialog.confirm(
+    `Did ${summary?.customer || "this customer"} say NO to their ${what} this season?\n\n`
+    + `Yes — they're marked "skip this season": off the Season Plan, no messages, not offered a day.\n`
+    + `No — it was booked by mistake; they stay a customer to plan.`,
+    { title: "Was this a no?", icon: "warning", confirmLabel: "Yes — they said no", cancelLabel: "No — booked by mistake" }
+  );
+}
+
 // preferred level of friction. No HTML dialog to fail-to-wire-up.
 actionDeleteBtn?.addEventListener("click", async () => {
   if (!pendingAction) return;
@@ -1636,8 +1655,13 @@ actionDeleteBtn?.addEventListener("click", async () => {
       : ""
   ].filter(Boolean).join("\n");
   if (!(await pjlDialog.confirm(lines, { title: "Permanently delete booking", icon: "delete", destructive: true, confirmLabel: "Delete Permanently" }))) return;
+  const saidNo = await askIfCustomerSaidNo({ ...summary, serviceKey: pendingAction.serviceKey });
   try {
-    const r = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, { method: "DELETE" });
+    const r = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ saidNo })
+    });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       const msg = (data.errors || ["Couldn't delete."]).join(" ");

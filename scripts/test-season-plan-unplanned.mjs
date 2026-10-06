@@ -124,6 +124,25 @@ try {
       /import the plan first/.test((await addStop("spring", 2027, { propertyCode: "P-11", toDate: "2027-04-06", toBucket: "morning" })).error || ""));
   }
 
+  // ---- 4b. A hand-placed stop says who, when and how ---------------------
+  // Patrick, 2026-10-06, on a stop nobody could account for: "figure out
+  // why the fuck it got there." The import leaves no record (none needed);
+  // every add and move does, and the record travels with the stop.
+  {
+    const r = await addStop("fall", 2026, { propertyCode: "P-12", toDate: "2026-10-06", toBucket: "afternoon" }, { actor: "tester", via: "drag" });
+    const rec = r.plan?.days?.["2026-10-06"]?.placed?.["P-12"];
+    ok("an added stop records who put it there, how, and when",
+      rec && rec.by === "tester" && rec.via === "drag" && /^\d{4}-\d{2}-\d{2}T/.test(rec.at || ""), j(r.plan?.days?.["2026-10-06"]));
+    const again = await seasonPlans.getPlan("fall", 2026);
+    ok("…and the record survives a re-read (validate keeps it)", again?.days?.["2026-10-06"]?.placed?.["P-12"]?.via === "drag", j(again?.days?.["2026-10-06"]?.placed));
+    ok("a stop from the import carries no record", !again?.days?.["2026-10-05"]?.placed?.["P-1"], j(again?.days?.["2026-10-05"]?.placed));
+    const mv = await seasonPlans.moveStop("fall", 2026, { propertyCode: "P-12", toDate: "2026-10-05", toBucket: "morning" }, { actor: "tester", via: "custom-date" });
+    const moved = mv.plan?.days?.["2026-10-05"]?.placed?.["P-12"];
+    ok("a move carries the record to the new day and names where from",
+      moved && moved.via === "custom-date" && moved.from === "2026-10-06" && moved.by === "tester", j(mv.plan?.days?.["2026-10-05"]?.placed));
+    ok("…and the old day no longer holds it", !mv.plan?.days?.["2026-10-06"]?.placed?.["P-12"], j(mv.plan?.days?.["2026-10-06"]?.placed));
+  }
+
   // ---- 5. plannedCodes is the one answer to "is it on the plan?" -------
   {
     const plan = await seasonPlans.getPlan("fall", 2026);
@@ -222,6 +241,13 @@ try {
     ok("there is an add route", /season-plans[\s\S]{0,40}\/add\$/.test(server), "no add route");
     ok("…and an add re-sequences the day, like a move does",
       /seasonPlanAddMatch[\s\S]{0,1200}resequencePlanForStorage/.test(server), "an added stop lands unsequenced");
+    ok("the add, move and place routes record HOW the stop got there",
+      /addStop\(season, year, \{[\s\S]{0,200}\}, \{ actor, via: planVia\(body\.via, "api"\) \}\)/.test(server)
+      && /via: planVia\(body\.via, "move"\)/.test(server) && /\{ actor, via: "place-all" \}/.test(server), "a route forgot its via");
+    const pageSrc = read("server/season-plan.js");
+    ok("…the page says which door it used", /addToDay\(drag\.id, date, bucket \|\| lighterBucketOf\(day\), null, "drag"\)/.test(pageSrc) && /"preview"\);/.test(pageSrc) && /"custom-date"\);/.test(pageSrc), "the page sends no via");
+    ok("…and the stop shows it on the day card", /sp-tag is-placed/.test(pageSrc) && /function placedWords/.test(pageSrc), "no provenance tag");
+    ok("…read from the plan payload", /placed: \(day && day\.placed && day\.placed\[code\]\) \|\| null/.test(server), "payload has no placed");
 
     const html = read("server/season-plan.html");
     ok("the toolbar has a button for it, wearing a count",

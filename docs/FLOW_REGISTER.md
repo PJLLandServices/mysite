@@ -2,6 +2,42 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06, night (A phone "no" has a home — and every hand-placed stop says how it got
+there):** Patrick, on Oct 7's day card: *"why the fuck is Peter Bazios on the calendar for Oct 7
+still?"* then *"don't only figure that out, but figure out why the fuck it got there, and ensure
+that it doesn't happen with anyone else."* Read live: Peter (P-2026-0009) has NO fall booking this
+year — nothing was ever booked or cancelled in the system; he told Patrick no by phone. A phone
+"no" had exactly two homes in the system — a cancelled booking (he never booked) or the
+skip-this-season flag (never set, and the only place to set it was the Outreach page or, since
+#390, a tray chip; a planned stop had NO button for it). So every surface kept treating him as an
+open customer: the outreach list, the tray (before #390), Place all, and the day card, which
+stood him up with a Book now button. And nothing recorded how his code reached Oct 7 (an
+unlabelled, hand-made day): the admin action log keeps only method + path, the plan keeps only
+codes. **Three changes.** (1) `assignments.skippedThisSeason(property, season, year)` — the
+opt-out flag, named — is honoured by the BOARD: `drivenPlan.stateFor` turns an `unassigned` stop
+on a skipped property into `skipped` (new `GONE_STATES` member), so it leaves the day and reads
+*Off this day: … skipped this season (marked by you)*; a live or finished visit on the day still
+shows (the flag stops the asking, not an appointment). (2) **Skip this season** now sits on every
+planned, unbooked stop beside Book now (`skipSeasonControl`, the one control the tray chip also
+uses; same `POST /api/outreach/opt-out-season`). (3) **Provenance.** `season-plans.addStop` and
+`moveStop` write `day.placed[code] = { at, by, via, from? }` (`recordPlaced`; `validate` keeps
+it; a move carries it and names where from); the add/move/place routes pass `via` (drag, picker,
+preview, place-all, move, custom-date, api — `planVia` whitelist); the plan payload carries
+`placed` per stop and the day card shows *added Oct 6 · dragged from the tray* with who, in the
+tooltip. A stop with no tag came in with the import. NOT touched: the stored plan still holds a
+skipped code (the flag is reversible on the property; clear it and the stop is back); an inbound
+SMS "no" still does not set the flag (Twilio STOP is a different thing) — named, not built.
+**The actual cause, from Patrick minutes later:** *"I personally deleted his appointment."* A
+DELETE erases the record; a cancellation keeps one. Every reader of a "no" (`planStopState`,
+`declinedThisSeason`, the tray, outreach) reads records, so a deleted seasonal booking said
+nothing and the planned stop stood. (4) **A seasonal delete now asks "Was this a no?"** on both
+admin delete buttons (Schedule canvas, booking page): *Yes — they said no* sends `{ saidNo: true }`
+and the route sets the property's skip-this-season flag (season from the service key, year from
+the appointment), so the plan, tray, outreach and cadence all read the same no; *No — booked by
+mistake* deletes as before. A repair's delete asks nothing. Coverage: `test-plan-follows-bookings`
+(52: skipped state, booked-but-skipped stays, the named rule, the delete route and both pages),
+`test-season-plan-unplanned` (49: placed record on add, survives re-read, travels on move,
+import has none; route/page/payload guards), `test-place-tray` guard updated.
 **2026-10-06, evening (A cancelled SELF-booking now leaves its plan day):** Patrick: *"why are
 there cancelled appointments in the current booking seasonal plan?"* The board's per-stop rule
 (`planStopState`) knew a cancelled ASSIGNMENT as a no (the stop leaves the day, listed under *Off
