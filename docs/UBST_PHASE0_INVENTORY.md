@@ -118,7 +118,7 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
 | R1 | Availability / capacity | `activeBookings()` (`server.js:~5400-5470`) | lead pass (S2) ∪ canonical pass (S1, dedup by leadId+start) ∪ holds | shared `bookingHoldsItsSlot` | — | **Yes** when only the canonical status changed (W8 PATCH on a lead-backed booking) or after a re-stamp changed one store's start and not the other |
 | R2 | Field app Today / today-map / MCP `day_schedule` | `GET /api/schedule/today` (`server.js:26050-26300`) | lead pass (S2, WO via `workOrderForLeadBooking` 26129) ∪ canonical extras (S1, WO via `workOrdersForVisit` 26211) ∪ `mergeDaySchedule` WO rows (S4) ∪ `removedToday` (S2 only) | shared | by lead envelope / `workOrderIds` | Yes for a property-only WO whose Booking was cancelled elsewhere (WO row survives); "came off today" misses lead-less bookings |
 | R3 | Admin Schedule canvas | `server/schedule.js:184-250` (client-side) | `/api/quotes` leads (S2; cancelled drawn struck) ∪ `/api/bookings` (S1; skips completed/no_show, keeps cancelled) ∪ blocks | hand-rolled, display-only (allow-listed) | — | Yes: a deleted canonical record whose lead envelope survived; two rows when lead start ≠ canonical start |
-| R4 | Season Plan board / map / route line / preview / probe | `GET /api/season-plans/:s/:y` 27594 → `resolveSeasonPlan` → `assignments.drivenPlan` → `planStopState` (`lib/assignments.js:~730-760`); `gatherBookedRows` for self-booked customers (`belongsToProperty`, `lib/bookings.js:455`) | S3 codes + S1 by property (id → lead link → address) | shared `holdsItsSlot`; states `on_day / done / unassigned / moved / cancelled / no_show` | annotates `bookingId` at read time | **Yes — a hard-deleted booking returns the stop to `unassigned`** (drawn, numbered, Book now offered). A `completed` stop is kept as `done`. |
+| R4 | Season Plan board / map / route line / preview / probe | `GET /api/season-plans/:s/:y` 27594 → `resolveSeasonPlan` (27469) → `assignments.drivenPlan` (824-853) → `planStopState` (739-787); booked rows from `gatherBookedRows` (30359-30410) over `activeBookings()` | S3 codes + S1 grouped **by `b.propertyId` only** (assignments.js:835 — records with no `propertyId` stamp are invisible to the stop state, unlike `unplanned`/`deriveBookingState`, which use `belongsToProperty`) | shared `holdsItsSlot`; states `on_day / done / unassigned / moved / cancelled / no_show`; `done` only when `booking.status==="completed"` (747), never from the WO | annotates `bookingId` at read time; the plan never reads WOs | **Yes — a hard-deleted booking returns the stop to `unassigned`** (drawn, numbered, Book now offered). A WO-completed assignment visit stays `on_day`, not `done`. A cancelled self-booking with no `propertyId` stamp stays `unassigned`. |
 | R5 | Customer Portal header / Next visit / Book a service / booking-actions | `customerPortalSections()` (`server.js:4495`); `/booking-actions` 16009 (`currentRecordForLead`) | `envelopeUpcoming` (S2, **no status check**, 4737) ∥ `woUpcoming` (S4 open WOs) ∥ `deriveBookingState` (S5 `serviceRecords` first, then S1 by `belongsToProperty`, then `declined`) | mixed | `workOrdersForVisit` | Yes: a soft-cancelled future lead booking still reads "scheduled"; a completed visit with no `serviceRecord` reads "scheduled" |
 | R6 | Portal calendar.ics | `server.js:8311` | lead envelope only; refuses season-plan visits | — | — | follows the envelope |
 | R7 | Appointment page `/a/:token` | 29796 + `/api/appointment/:token` (`appointment-actions.summarize`) | S1 by token | names cancelled vs completed (allow-listed) | — | No |
@@ -135,6 +135,42 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
 | R18 | Geo day shapes for availability | `dayShapesForSeason` / `lib/geo-filter.js` | S3 (driven plan) + S1 | via `drivenPlan` | — | a deleted booking's stop is back in the day's shape |
 | R19 | Open bucket panel | `GET /api/standby` 29227 | `lead.standby` | — | — | n/a |
 | R20 | MCP `list_bookings` / `get_booking` | `/api/bookings` | S1 | — | — | No |
+
+### 3.3 Additional findings from the reader cross-check (verified, origin/main)
+
+1. **Today's `bookingId` per row is the first bookings.json record for that lead in file order,
+   whatever its status or date** (`server.js:26073-26080`). Follow-up records (W19) are unshifted to
+   index 0 with the same `leadId`, so the Field app's "Not today" can cancel the follow-up instead of
+   the visit on screen, and the cancel route then mirrors that status onto the primary `lead.booking`
+   with no start-time match (`13892-13906`).
+2. **Admin/tech cancel (W7) leaves the Work Order `scheduled`**, and `mergeDaySchedule`
+   (`lib/day-schedule.js:124-143`) re-adds it to Today as a `source:"work_order"` row the moment the
+   booking row drops. Only the portal cancel (W11) cascades (`16214-16231`).
+3. **Season-wide Assign re-books a self-booked-then-cancelled customer.** `preflight`/`assign` read the
+   stored plan and `assessEligibility`, which ignores `declined`; `priorAssignmentsFor` counts only
+   `source:"assignment"` records (`lib/assignments.js:363-371, 586-593`). The board drops that stop
+   (#397) and the tray blocks them (463-468) — three answers to one question.
+4. **Open WO has no booking-status check** (`26582-26655`); `workOrders.listByLead` (1728-1731) does not
+   filter deleted/archived WOs but `list()` does, so a finished visit whose WO was archived can get a
+   fresh WO.
+5. **Admin Schedule canvas treats a lead-side `no_show` as a live event** (`schedule.js:410, 617, 628,
+   1459-1461` hide actions only on `cancelled`).
+6. **Appointment page `summarize` has no `no_show` branch** (`appointment-actions.js:81-85`): a
+   no-show stamped before the bucket time reads "open" with Confirm/Cancel enabled.
+7. **Early-completed assignment visits keep receiving cadence steps up to the day-before SMS**
+   (`assignment-cadence.js:633-637`), stay in the iCal feed, hold capacity, and read
+   "Scheduled/Confirmed" on the Bookings list — all because W20 never flips the Booking.
+8. **Plan mislabel:** an assignment booking moved to another day and completed there is reported in
+   the original day's `dropped` strip as "customer cancelled" (`assignments.js:777-786`).
+9. **`lead.booking.workOrder.status` is frozen at `"scheduled"`** (written once at 25573; no writer
+   since); the CRM lead card (`admin.js:956`) and the portal payload (`server.js:5081`) show it.
+10. **Booking detail lists every linked WO, not this visit's** (`booking.js:279`); the customer page
+    drops follow-up bookings because they carry no `customerId` (`server.js:10431` vs 15279-15300).
+11. **Hand-rolled liveness copies still in readers:** `appointment-actions.js:81-85`,
+    `booking-reminders.js:65`, `assignment-cadence.js:637`, `ical-feed.js:350`,
+    `job-finder.js:105-113/125/157-159` (lead verdict has no status check), `schedule.js:219`,
+    `work-order.js:999-1001`, `crm-reschedule.js:128-131`, `admin.js:1840`, `day-schedule.js:56`,
+    `server.js:16035-16037, 27500-27502`, `assignments.js:283, 895, 1038, 1103`.
 
 ---
 
@@ -220,7 +256,7 @@ stubbed, tripwires), run from `build:check`, each confirmed failing on `origin/m
 
 | Test | Fixture | Assertions that **fail today** | Already green (regression guard) |
 |---|---|---|---|
-| T1 `test-ubst-cancel-everywhere.mjs` (Peter) | property + fall plan stop + assignment booking with a step-1 touch; the same visit expressed as a lead booking | After each of the six cancel doors (W5, W6, W7, W8, W11, W12): a canonical record **still exists** with a terminal status + `cancelledAt` (fails W5/W6: gone; W8: no `cancelledAt`); plan GET lists the stop under `dropped`, not in `morning` (fails W5/W6: `unassigned`, numbered); `unplanned`/preflight report `cancelled_this_season`, not a free property (fails W5/W6); a re-run of Assign creates **zero** records and sends nothing (fails W5/W6); `activeBookings` frees the slot for a lead-backed booking (fails W8); Today's `removed` names an assignment booking taken off by "Not today" (fails W7 for lead-less); W7 and W11 cascade identically to the WO (fails: W7 does not) | Today has no row; iCal, reminders, cadence exclude it; history kept for W7/W11/W12 |
+| T1 `test-ubst-cancel-everywhere.mjs` (Peter) | property + fall plan stop + assignment booking with a step-1 touch; the same visit expressed as a lead booking (with its WO opened); a self-booked-then-cancelled customer on a plan day | After each of the six cancel doors (W5, W6, W7, W8, W11, W12): a canonical record **still exists** with a terminal status + `cancelledAt` (fails W5/W6: gone; W8: no `cancelledAt`); plan GET lists the stop under `dropped`, not in `morning` (fails W5/W6: `unassigned`, numbered); `unplanned`/preflight report `cancelled_this_season`, not a free property (fails W5/W6, and fails for the self-cancelled customer under season-wide Assign, §3.3.3); a re-run of Assign creates **zero** records and sends nothing (fails W5/W6 and §3.3.3); `activeBookings` frees the slot for a lead-backed booking (fails W8); Today's `removed` names an assignment booking taken off by "Not today" (fails W7 for lead-less); Today shows **no `work_order` row** for the cancelled visit (fails W7/W8: §3.3.2); W7 and W11 cascade identically to the WO (fails: W7 does not); "Not today" on the visit shown acts on that visit's record when a follow-up exists (fails: §3.3.1) | iCal, reminders, cadence exclude it; history kept for W7/W11/W12 |
 | T2 `test-ubst-returning-customer.mjs` (PJL-73/97) | lead with completed spring booking + WO; fall booked three ways: reserve with `leadId`, season Assign for the property, MCP book with `leadId` | spring Booking is `completed` **at WO completion time**, not only when the customer re-books (fails); fall WO carries `bookingId` = fall Booking (fails: field absent); spring record untouched by the fall reschedule | new BK id; fall record links only the fall WO; Today/open-wo pick the fall WO (PJL-97/93 fixes) |
 | T3 `test-ubst-crm-wo-binds-one-booking.mjs` (PJL-93) | lead with a closed spring record and a live fall record; property with a live assignment booking and no lead | property-only `POST /api/work-orders` binds to the live assignment Booking (fails: no link at all); WO gets `bookingId` (fails); a WO raised against a cancelled assignment booking is refused (fails: guard reads `lead.booking` only) | lead path attaches to `recordForLeadBooking` only |
 | T4 `test-ubst-completion-reconciles.mjs` (PJL-107) | assignment booking + WO; lead booking + WO | WO → completed ⇒ `booking.status === "completed"`, `completedAt` set, history entry (fails); portal `deriveBookingState().completed` true **without** reading `serviceRecords` (fails by construction today); plan stop reads `done`; cadence sends nothing further; WO cancelled/no_show ⇒ Booking reconciled (fails) | portal header says "season done" via serviceRecords |
