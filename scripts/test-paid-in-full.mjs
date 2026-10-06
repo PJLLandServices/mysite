@@ -152,6 +152,16 @@ try {
   const closing = fs.readFileSync(path.join(ROOT, "pjl-field/src/screens/ClosingScreen.js"), "utf8");
   const app = fs.readFileSync(path.join(ROOT, "pjl-field/App.js"), "utf8");
   ok(/paidInFull/.test(closing) && /JOB\.PAID_IN_FULL/.test(app), "D4. the app lands on a Paid in Full screen, with no payment buttons");
+  // An admin can choose it at sign-off too (2026-10-06, Patrick in the field):
+  // a third choice offered only when role === 'admin', going to the
+  // admin-only settlement route. A tech never sees the option.
+  const signoff = fs.readFileSync(path.join(ROOT, "pjl-field/src/screens/closing/SignOffStage.js"), "utf8");
+  const api = fs.readFileSync(path.join(ROOT, "pjl-field/src/api.js"), "utf8");
+  ok(/const canSettle = role === 'admin'/.test(signoff) && /\.\.\.\(canSettle \? \[\{ value: 'prepaid'/.test(signoff),
+    "D2. the sign-off offers Paid in full (prepaid) to an admin only");
+  ok(/settlePaidInFull=\{settlePaidInFull\}/.test(closing) && /role=\{role\}/.test(closing) && /<ClosingScreen[\s\S]{0,400}role=\{role\}/.test(app),
+    "D2. the closing passes the role and the settle action to the sign-off");
+  ok(/\/settlement`, 'PUT', \{ type: 'paid_in_full', reference \}/.test(api), "D2. it uses the admin-only settlement route");
 } catch (err) {
   failed += 1;
   console.error(`  FAIL: crashed: ${err?.stack || err}\n${srv.logs().slice(-1500)}`);

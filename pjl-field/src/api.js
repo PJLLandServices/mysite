@@ -306,6 +306,13 @@ export const invoicePaymentLink = (id) =>
 // invoice / bill later" is opened for payment on site — still a draft,
 // nothing emailed — so Tap to Pay and Take payment now work at once. The
 // server keeps every guard and refuses a tech.
+// Paid in Full (P-PJL-22 D), from the phone: admin only — the server
+// refuses a tech. Online only; set before the visit completes.
+export const setWorkOrderPaidInFull = (id, reference) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/settlement`, 'PUT', { type: 'paid_in_full', reference }).then((d) => d.workOrder);
+export const clearWorkOrderPaidInFull = (id) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/settlement`, 'DELETE').then((d) => d.workOrder);
+
 export const collectNowInvoice = (id) =>
   sendJson(`/api/invoices/${encodeURIComponent(id)}/collect-now`, 'POST', {}).then((d) => d.invoice);
 
