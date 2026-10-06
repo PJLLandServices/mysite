@@ -25004,7 +25004,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // endpoint is a way to block any slot on the calendar by asking.
       const geo = await geocode(address);
       const customerCoords = geo.coords;
-      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const [allBookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      // A customer switching times hands back their previous hold
+      // (releaseToken). Judge the new time WITHOUT that hold — it is about to
+      // be released. Counting it made a second pick on a nearly-full day read
+      // "just taken" whenever the first hold used the capacity the second
+      // needed (test-booking-hold, 2026-10-06, when today's slots were open).
+      const bookingsNow = releaseToken
+        ? allBookingsNow.filter((b) => !(b.isHold && b.holdToken === releaseToken))
+        : allBookingsNow;
       const available = await listAvailableSlots({
         serviceKey,
         customerCoords,
