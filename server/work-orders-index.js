@@ -105,7 +105,9 @@ function applyFilters(items) {
     // Field-Readiness §6.6.
     // A no-charge visit (PJL-100 #7) has no invoice BY DESIGN — the server
     // marks it noCharge — so it is finished, not stranded.
-    result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id) && w.noCharge !== true);
+    // Paid in Full (P-PJL-22 D) has none either: the customer prepaid.
+    result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id) && w.noCharge !== true
+      && w.settlement?.type !== "paid_in_full");
   } else if (currentStatus === "no_charge") {
     // "No charge" (Patrick, 2026-09-26) — completed visits that billed
     // nothing. They carry no invoice, no payment and nothing in QuickBooks
@@ -190,7 +192,7 @@ function render() {
           <span class="crm-cell ml-card-head">
             <span class="crm-identity">
             <span class="crm-cell-primary">${escapeHtml(customer)}</span>
-            <span class="crm-cell-sub">${escapeHtml(wo.id)}${wo.locked ? " &middot; \uD83D\uDD12 locked" : ""}${wo.noCharge ? " &middot; No charge" : ""}${wo.followupOfWoId ? ` &middot; \u21AA ${escapeHtml(wo.followupOfWoId)}` : ""}${photoCount ? ` &middot; ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}${wo.intakeGuarantee && wo.intakeGuarantee.applies ? " &middot; AI guarantee" : ""}</span></span>
+            <span class="crm-cell-sub">${escapeHtml(wo.id)}${wo.locked ? " &middot; \uD83D\uDD12 locked" : ""}${wo.noCharge ? " &middot; No charge" : ""}${wo.settlement?.type === "paid_in_full" ? " &middot; Paid in full (prepaid)" : ""}${wo.followupOfWoId ? ` &middot; \u21AA ${escapeHtml(wo.followupOfWoId)}` : ""}${photoCount ? ` &middot; ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}${wo.intakeGuarantee && wo.intakeGuarantee.applies ? " &middot; AI guarantee" : ""}</span></span>
           </span>
           <span class="crm-cell wo-cell-type">
             <span>${escapeHtml(typeLabel)}</span>

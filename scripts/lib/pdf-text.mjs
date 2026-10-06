@@ -102,7 +102,11 @@ export function readPdf(buf) {
     const annots = /\/Annots\s*\[([^\]]*)\]/.exec(body);
     for (const a of (annots ? annots[1].match(/\d+(?= 0 R)/g) : []) || []) {
       const ab = objs.get(Number(a)) || "";
-      const uri = /\/URI\s*\(((?:[^)\\]|\\.)*)\)/.exec(ab);
+      // The URI sits in the annotation's action, inline (/A << … >>) or —
+      // as PDFKit writes it — in its own object (/A 12 0 R).
+      const actionRef = /\/A\s+(\d+) 0 R/.exec(ab);
+      const action = actionRef ? (objs.get(Number(actionRef[1])) || "") : ab;
+      const uri = /\/URI\s*\(((?:[^)\\]|\\.)*)\)/.exec(action);
       const rect = /\/Rect\s*\[([^\]]*)\]/.exec(ab);
       if (uri) links.push({ uri: uri[1].replace(/\\(.)/g, "$1"), rect: rect ? rect[1].trim().split(/\s+/).map(Number) : null });
     }

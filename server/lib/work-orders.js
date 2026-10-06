@@ -38,6 +38,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const partAlias = require("./part-alias");
+const woSettlement = require("./wo-settlement");
 const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
@@ -519,6 +520,11 @@ function blankWorkOrder() {
     // are here at no charge to fix X"), so it freezes with the rest of
     // the scope once they sign.
     warrantyClaim: null,
+    // How the visit was settled when not by an invoice (P-PJL-22 D,
+    // lib/wo-settlement.js): null, or { type: "paid_in_full", reference,
+    // by, at }. Set only by an admin (setSettlement), never by the
+    // generic update (not in allowedTop).
+    settlement: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
     //   false — "No, invoice to follow" (default — Patrick's stated
     //           real-world default. "we are highly unlikely to recieve
@@ -659,6 +665,7 @@ function hydrate(w) {
     // Warranty-claim provenance. hydrate() rebuilds this record key by
     // key and readAll() writes the hydrated result back, so a key missing
     // from here is not merely hidden — it is erased on the next read.
+    settlement: woSettlement.normalizeSettlement(w?.settlement),
     warrantyClaim: (w?.warrantyClaim && typeof w.warrantyClaim === "object" && w.warrantyClaim.claimId)
       ? {
           claimId: String(w.warrantyClaim.claimId),
@@ -1477,6 +1484,53 @@ async function stampDeferredIds(id, stamps) {
   records[idx] = next;
   await writeAll(records);
   return next;
+}
+
+// Paid in Full (P-PJL-22 D). An admin records that the visit was paid for
+// in advance; the history keeps who and when. Only before the visit
+// completes: the cascade decides at completion whether there is an
+// invoice, and a visit already invoiced is changed through the invoice
+// (void / credit), not by relabelling it here.
+async function setSettlement(id, { type, reference, by = "admin" } = {}) {
+  if (!woSettlement.TYPES.has(type)) {
+    return { ok: false, status: 400, code: "bad_type", errors: ["Unknown settlement — the only one is paid_in_full."] };
+  }
+  const ref = String(reference || "").trim();
+  if (ref.length < 3) {
+    return { ok: false, status: 400, code: "reference_required", errors: ["Say what paid for this visit (for example: 2026 prepaid plan, receipt #)."] };
+  }
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Work order not found."] };
+  const current = records[idx];
+  if (current.status === "completed" || current.status === "cancelled") {
+    return { ok: false, status: 409, code: "already_closed", errors: [`This visit is ${current.status}. Paid in Full is set before the visit completes; change a finished visit through its invoice.`] };
+  }
+  const now = new Date().toISOString();
+  const next = { ...current, settlement: { type, reference: ref.slice(0, 300), by: String(by || "admin"), at: now }, updatedAt: now };
+  next.history = [...(Array.isArray(current.history) ? current.history : []),
+    { ts: now, action: "settlement_paid_in_full", by: String(by || "admin"), note: `Paid in full (prepaid) — ${ref.slice(0, 300)}` }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, workOrder: next };
+}
+
+async function clearSettlement(id, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Work order not found."] };
+  const current = records[idx];
+  if (!current.settlement) return { ok: true, workOrder: current, unchanged: true };
+  if (current.status === "completed" || current.status === "cancelled") {
+    return { ok: false, status: 409, code: "already_closed", errors: [`This visit is ${current.status}; its settlement stays on the record.`] };
+  }
+  const now = new Date().toISOString();
+  const next = { ...current, settlement: null, updatedAt: now };
+  next.history = [...(Array.isArray(current.history) ? current.history : []),
+    { ts: now, action: "settlement_cleared", by: String(by || "admin"), note: "Paid in full removed — the visit is billed as usual." }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, workOrder: next };
 }
 
 async function appendHistory(id, entry) {
@@ -2780,6 +2834,8 @@ module.exports = {
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
   patchReportSnapshot: withStoreLock(patchReportSnapshot),
   appendHistory: withStoreLock(appendHistory),
+  setSettlement: withStoreLock(setSettlement),
+  clearSettlement: withStoreLock(clearSettlement),
   stampDeferredIds: withStoreLock(stampDeferredIds),
   list,
   get,

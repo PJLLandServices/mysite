@@ -679,10 +679,11 @@
         <div class="tech-payment-grid-total"><dt>Total</dt><dd id="techPayTotal">$0.00</dd></div>
       </dl>
       <fieldset class="tech-payment-captured">
-        <legend>Payment captured on-site?</legend>
-        <label><input type="radio" name="techPayCaptured" value="yes" id="techPayCapturedYes"> <span>Yes</span></label>
-        <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo"> <span>No — invoice to follow</span></label>
+        <legend>How are they paying?</legend>
+        <label><input type="radio" name="techPayCaptured" value="yes" id="techPayCapturedYes"> <span>Collect payment now</span></label>
+        <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo"> <span>Send invoice / bill later</span></label>
       </fieldset>
+      <p class="tech-payment-handled" id="techPaymentHandled" hidden>Payment: handled by the office — nothing to collect.</p>
       <!-- Labour hours (v35, Patrick 2026-05-13). Internal accounting field
            — tracked for service_visit / spring_opening / fall_closing WOs
            where the flat fee already includes labour in the quoted price

@@ -1,20 +1,59 @@
 # Invoice delivery & Tap to Pay: flows, state model, wording (P-PJL-22)
 
-Status: **PROPOSED, nothing implemented.** Written 2026-10-05 from Patrick's
-requirements A–E. The four regression suites below fail on main at
-`9d36363f` where the defect or missing state is, and pass where an existing
-guard already holds (pinned so the fix cannot loosen it). Implementation
-starts after Patrick approves §1 (state model) and §2 (wording).
+Status: **BUILT on PR #383, not merged.** Requirements A–E were written
+2026-10-05. The regression suites came first and failed on main at
+`9d36363f` where the defect or the missing state was (counts below). They
+then passed where an existing guard already held, pinned so the fix could
+not loosen it.
 
-| Req | Linear | Flow ID | Suite | On main today |
+A–D are now built and all four suites pass. They are in `build:check`.
+**Nothing merges until Patrick approves §1 (state model) and §2 (wording)
+and answers §4.** The wording sits in one constant block at the top of each
+suite, so a change he asks for is a one-line edit plus the matching string
+in the code.
+
+| Req | Linear | Flow ID | Suite | On main `9d36363f` (before the build) |
 |---|---|---|---|---|
 | A | PJL-126 | INV-SEND-01 | `scripts/test-invoice-first-send.mjs` | 8 fail (DRAFT, OVERDUE, part-paid DRAFT, project email) / 19 pass |
 | B | PJL-127 | INV-LINK-01 | `scripts/test-invoice-pdf-pay-link.mjs` | 6 fail (no link) / 12 pass (no new way to charge) |
 | C | PJL-128 | TTP-COLLECT-01 | `scripts/test-collect-payment-now.mjs` | 19 fail (labels, switch, one rule) / 8 pass |
 | D | PJL-129 | SETTLE-PIF-01 | `scripts/test-paid-in-full.mjs` | 15 fail (no such state) / 17 pass (No Charge unchanged) |
 
-E (the suites themselves) is PJL-130. Run all four: `npm run test:invoice-delivery`. They are **not** in `build:check`
-yet. Each joins it in the same PR that makes it pass.
+E (the suites themselves) is PJL-130. Run all four: `npm run test:invoice-delivery`, or as part of `build:check`.
+
+**How it was built** (where it lives):
+
+- **A**
+  - `invoice-pdf.js`:
+    - `resolveStatus` gives every status its own words and has no OVERDUE.
+    - `customerCopy()` is the customer's copy of a draft being sent.
+  - Callers that render it: `/send`, `deposits.sendInvoiceNow`, and the project-completion email. The project-completion email now awaits the Buffer.
+- **B**
+  - `invoice-pdf.js` `normalize().payUrl` builds the link from `resolvePublicBaseUrl()`.
+  - `drawBottomSplit` draws one link annotation plus the printed address.
+  - The paid, void and no-token wording follows §2.
+- **C**
+  - The labels, on all three surfaces and in the blockers.
+  - `invoices.onSiteRefusal()` holds the guards, shared by Take payment now, Tap to Pay and the switch.
+  - `invoices.switchToCollectNow()` with admin-only `POST /api/invoices/:id/collect-now`.
+  - `pjl-field/src/invoice-actions.mjs`, used by `InvoiceScreen`.
+  - The Take payment now instead button.
+- **D**
+  - `server/lib/wo-settlement.js` holds the rule, the normaliser and `techView`.
+  - `work-orders.setSettlement` / `clearSettlement` (before completion only), with history.
+  - Admin-only `PUT|DELETE /api/work-orders/:id/settlement`.
+  - Every JSON reply to a tech session passes through `techView` (`sendJson`).
+  - The cascade drafts no invoice and records the settlement plus the real totals on the service record.
+  - Finish replies `paidInFull` (techs see `nothingToCollect`).
+  - `create-invoice` returns 409 `paid_in_full`.
+  - The report has an Account section. The completion email and admin alert say so.
+  - The customer summary is prepaid with no amounts.
+  - The portal history says PAID IN FULL.
+  - Needs invoice excludes it, and the service history reads "Paid in full (prepaid)".
+  - The office work-order page has the control (D-D2: office page only for now).
+  - The app's sign-off shows "Payment: handled by the office" and the Paid in Full landing screen.
+- **Not changed:** `payBlockReason`, the charge path, finalize, the ledger, QuickBooks, and No Charge.
+- **The Tap to Pay lane:** its `InvoiceScreen` carries the Tap to Pay button, which main's does not. When main is next merged into the lane, the button takes `invoiceActions().tapToPay`, as the suite's C6 already pins for the rule.
 
 ---
 
@@ -75,7 +114,7 @@ yet. Each joins it in the same PR that makes it pass.
 
 ---
 
-## 1. Proposed state model
+## 1. State model (built; awaiting approval)
 
 ### 1.1 Invoice: unchanged statuses, one customer-stamp rule
 
@@ -229,7 +268,7 @@ not be "season plan", which is the route plan.
 
 ---
 
-## 2. Customer- and tech-facing wording (PROPOSED — Patrick to approve each)
+## 2. Customer- and tech-facing wording (built as below; Patrick to approve each)
 
 | Where | Today | Proposed |
 |---|---|---|

@@ -650,7 +650,7 @@ function renderServiceHistory(items) {
     // visual weight as "Service report (PDF)" beside it.
     const invMeta = w.invoice
       ? `<span class="portal-history-invoice">Invoice ${escapeHtml(w.invoice.id)} · ${escapeHtml(money.format(Number(w.invoice.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(w.invoice.status))} · ${escapeHtml(isoDay(w.invoice.createdAt))}</span>`
-      : "";
+      : w.paidInFull ? `<span class="portal-history-invoice">PAID IN FULL — prepaid</span>` : "";
     const invDownload = w.invoice
       ? `<a class="portal-history-link" href="${escapeHtml(w.invoice.pdfUrl)}" target="_blank" rel="noopener">Download invoice (PDF)</a>`
       : "";

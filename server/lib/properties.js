@@ -585,7 +585,10 @@ async function addServiceRecord(propertyId, payload) {
     warrantyMonths: Number.isFinite(Number(payload?.warrantyMonths)) ? Number(payload.warrantyMonths) : 12,
     warrantyExpiresAt: payload?.warrantyExpiresAt || null,
     invoiceId: payload?.invoiceId || null,
-    promotedPhotoIds: Array.isArray(payload?.promotedPhotoIds) ? payload.promotedPhotoIds : []
+    promotedPhotoIds: Array.isArray(payload?.promotedPhotoIds) ? payload.promotedPhotoIds : [],
+    // Paid in Full (P-PJL-22 D): the visit was satisfied by prepayment.
+    // Kept on the service history so it never reads as No Charge.
+    ...(payload?.settlement ? { settlement: { ...payload.settlement } } : {})
   };
   if (!Array.isArray(target.serviceRecords)) target.serviceRecords = [];
   target.serviceRecords.unshift(entry);

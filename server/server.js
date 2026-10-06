@@ -66,6 +66,7 @@ const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const pricingLib = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
+const woSettlement = require("./lib/wo-settlement");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
@@ -170,7 +171,7 @@ const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
 const quoteNarratives = require("./lib/quote-narratives");
-const { generateInvoicePdf } = require("./lib/invoice-pdf");
+const { generateInvoicePdf, customerCopy } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDerivatives } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
 const { warrantyForWorkOrder } = require("./lib/warranty");
@@ -734,7 +735,15 @@ function sendRecoveryRequired(res, err) {
 }
 
 function sendJson(res, status, payload) {
-  const body = JSON.stringify(payload, null, 2);
+  // A technician's session never receives a visit's settlement (P-PJL-22
+  // D): set at the auth gate, applied to every JSON reply, so no route can
+  // leak it by returning a work order.
+  // Only walked when the reply mentions one, so ordinary replies pay
+  // nothing for it.
+  let body = JSON.stringify(payload, null, 2);
+  if (res.__techView && /"paid_in_full"|"paidInFull": true/.test(body)) {
+    body = JSON.stringify(woSettlement.techView(payload), null, 2);
+  }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store"
@@ -1678,6 +1687,9 @@ function needsAuth(method, pathname) {
   // routes above). MUST stay ABOVE the generic /api/work-orders rule:
   // needsAuth returns on first match.
   if (/^\/api\/work-orders\/[^/]+\/service-fee-waiver$/.test(pathname)) return "admin";
+  // Paid in Full (P-PJL-22 D) is the office's to record; a tech can
+  // neither set nor see it. Above the generic rule, like the waiver.
+  if (/^\/api\/work-orders\/[^/]+\/settlement$/.test(pathname)) return "admin";
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
@@ -3570,7 +3582,8 @@ async function readRawBody(req, { maxBytes = 1_000_000 } = {}) {
 // record has lines, no invoice, and a $0 total. A missing record or a
 // failed invoice draft is NOT no-charge — that visit still owes money.
 function isNoChargeServiceRecord(record) {
-  return Boolean(record) && !record.invoiceId
+  // Paid in Full is never No Charge (P-PJL-22 D) — it was paid for.
+  return Boolean(record) && !record.invoiceId && !woSettlement.isPaidInFull(record)
     && Array.isArray(record.lineItems) && record.lineItems.length > 0
     // From the LINES, not record.total — a failed draft also leaves total 0.
     && !(invoices.totalsForLines(record.lineItems).total > 0);
@@ -4482,7 +4495,9 @@ async function customerPortalSections(lead) {
         reportUrl: (w.status === "completed" || (Array.isArray(w.reportSnapshots) && w.reportSnapshots.length))
           ? `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(w.id)}`
           : null,
-        invoice: inv ? invoiceView(inv) : null
+        invoice: inv ? invoiceView(inv) : null,
+        // P-PJL-22 D: a prepaid visit says so, with no amount.
+        paidInFull: !inv && woSettlement.isPaidInFull(w)
       };
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
@@ -11510,7 +11525,10 @@ async function handleApi(req, res, pathname) {
         quickbooksInvoiceId: qbInvoiceId || inv.quickbooksInvoiceId,
         paymentToken: paymentToken || inv.paymentToken
       };
-      const pdfBuffer = await generateInvoicePdf(renderInv);
+      // P-PJL-22 A: the customer's copy, never the draft. A first send is
+      // drawn as sent, dated now; the record flips to sent only after the
+      // email below goes, so a failed email still leaves a draft.
+      const pdfBuffer = await generateInvoicePdf(customerCopy(renderInv));
 
       // Build the public payment URL the customer clicks from the email.
       // resolvePublicBaseUrl() — env-var-authoritative, then the canonical
@@ -15421,6 +15439,11 @@ async function handleApi(req, res, pathname) {
         const wo = await workOrders.get(id);
         if (!wo) return [404, { ok: false, errors: ["Work order not found."] }];
         if (!wo.propertyId) return [422, { ok: false, errors: ["WO has no linked property — link a property first."] }];
+        // Paid in Full (P-PJL-22 D): the customer prepaid; there is nothing
+        // to invoice. Clear the settlement first if that was a mistake.
+        if (woSettlement.isPaidInFull(wo)) {
+          return [409, { ok: false, code: "paid_in_full", errors: ["Paid in full — this visit was prepaid, so there is no invoice to draft."] }];
+        }
         // Re-signing: no new bill for a revised scope the customer hasn't signed.
         if (workOrders.awaitsNewSignature(wo)) {
           return [409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order before invoicing it."] }];
@@ -16368,6 +16391,49 @@ async function handleApi(req, res, pathname) {
   // ADMIN ONLY, like the connection token and the payment link: starting a
   // charge is an admin action. /api/invoices is fenced at "user", so the
   // route checks the role itself.
+  // POST /api/invoices/:id/collect-now — "Take payment now instead"
+  // (P-PJL-22 C). Admin only: a Bill-later draft is opened for payment on
+  // site — still a draft, not emailed — so Tap to Pay and Take payment now
+  // work without sending the invoice first. invoices.switchToCollectNow
+  // keeps every on-site guard (price, signature, reconciliation, $0).
+  // PUT    /api/work-orders/:id/settlement  { type: "paid_in_full", reference }
+  // DELETE /api/work-orders/:id/settlement
+  // Paid in Full (P-PJL-22 D). Admin only (needsAuth + here). The work
+  // order's history keeps who set it and when; work-orders.setSettlement
+  // refuses a visit that has already completed.
+  const woSettlementMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/settlement$/);
+  if (woSettlementMatch && (req.method === "PUT" || req.method === "DELETE")) {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const id = decodeURIComponent(woSettlementMatch[1]);
+      const by = await actorLabel(req);
+      const r = req.method === "PUT"
+        ? await (async () => {
+          const payload = await parseRequestBody(req).catch(() => ({}));
+          return workOrders.setSettlement(id, { type: payload?.type, reference: payload?.reference, by });
+        })()
+        : await workOrders.clearSettlement(id, { by });
+      if (!r.ok) return sendJson(res, r.status || 409, { ok: false, code: r.code, errors: r.errors });
+      return sendJson(res, 200, { ok: true, workOrder: r.workOrder });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't change the settlement."] });
+    }
+  }
+
+  const collectNowMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/collect-now$/);
+  if (collectNowMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const r = await invoices.switchToCollectNow(decodeURIComponent(collectNowMatch[1]), { by: session.uid || "admin" });
+      if (!r.ok) return sendJson(res, r.status || 409, { ok: false, code: r.code, errors: r.errors });
+      return sendJson(res, 200, { ok: true, invoice: r.invoice, unchanged: Boolean(r.unchanged) });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't open this invoice for payment."] });
+    }
+  }
+
   const terminalIntentMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent$/);
   if (terminalIntentMatch && req.method === "POST") {
     try {
@@ -18686,16 +18752,14 @@ async function handleApi(req, res, pathname) {
             try {
               const invoicePdf = require("./lib/invoice-pdf");
               if (invoicePdf && typeof invoicePdf.generateInvoicePdf === "function") {
-                const pdfDoc = invoicePdf.generateInvoicePdf(invoice);
-                const chunks = [];
-                await new Promise((resolve, reject) => {
-                  pdfDoc.on("data", (c) => chunks.push(c));
-                  pdfDoc.on("end", resolve);
-                  pdfDoc.on("error", reject);
-                });
+                // generateInvoicePdf resolves to a Buffer. This used to read
+                // it as a stream; the TypeError was caught below and every
+                // project-completion email went without its invoice
+                // (P-PJL-22 A5). The customer's copy, never "DRAFT".
+                const pdfBuffer = await invoicePdf.generateInvoicePdf(invoicePdf.customerCopy(invoice));
                 attachments.push({
                   filename: `PJL-Invoice-${invoice.id}.pdf`,
-                  content: Buffer.concat(chunks),
+                  content: pdfBuffer,
                   contentType: "application/pdf"
                 });
               }
@@ -22131,8 +22195,9 @@ async function handleApi(req, res, pathname) {
           }
         }
         // Payment method — promoted to pre-sign per the brief.
-        if (merged.paidOnSite !== true && merged.paidOnSite !== false) {
-          fails.push({ key: "payment", label: "Choose payment method (paid on site or bill later)" });
+        // A visit the office settled as Paid in Full has nothing to choose.
+        if (merged.paidOnSite !== true && merged.paidOnSite !== false && !woSettlement.isPaidInFull(merged)) {
+          fails.push({ key: "payment", label: "Choose: Collect payment now, or Send invoice / bill later" });
         }
         // Return-visit decision (Patrick 2026-05-12). Forces the tech
         // to explicitly answer "Yes — coming back" or "No — done today"
@@ -22478,6 +22543,7 @@ async function handleApi(req, res, pathname) {
             email: wo.customerEmail || "",
             address: wo.address || "",
             notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})${invoices.isPriceUnconfirmed(invoice) ? " — SUGGESTED price, confirm it on the invoice before it goes out" : ""}`
+              : woSettlement.isPaidInFull(serviceRecord) ? ` · Paid in full (prepaid) — ${serviceRecord.settlement.reference}`
               : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length ? " · No charge" : " · No invoice drafted — price this visit")}`
           },
           // The alert shell prints "Requested" items and an "Estimated
@@ -22489,6 +22555,8 @@ async function handleApi(req, res, pathname) {
             ? (invoice.lineItems || []).map((l) => ({ label: l.label, qty: Number(l.qty) || 1, price: Number(l.unitPrice) || 0, quoteType: "fixed" }))
             // No lines at all is NOT "no charge" — a custom-quote size
             // (16+ / 9+ commercial) seeds none and needs Patrick to price it.
+            : woSettlement.isPaidInFull(serviceRecord)
+              ? [{ label: `Paid in full (prepaid) — nothing to invoice · ${serviceRecord.settlement.reference}`, qty: 1, price: 0, quoteType: "fixed" }]
             : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length
               ? [{ label: "No charge — nothing to invoice", qty: 1, price: 0, quoteType: "fixed" }]
               : [{ label: "No invoice drafted — price this visit (custom-quote size or no fee line)", qty: 1, price: 0, quoteType: "custom" }]),
@@ -22535,7 +22603,10 @@ async function handleApi(req, res, pathname) {
         // PJL-96: a price Patrick has not confirmed (a custom size, or a
         // commercial account without its own price) is never shown to the
         // customer — the draft carries only a suggestion.
-        const totalLine = invoice && invoices.isPriceUnconfirmed(invoice)
+        // Paid in Full (P-PJL-22 D): no amount, no "invoice will follow".
+        const totalLine = woSettlement.isPaidInFull(serviceRecord)
+          ? `<p style="margin: 0 0 14px;"><strong>PAID IN FULL</strong> — this visit was prepaid. There is nothing to pay.</p>`
+          : invoice && invoices.isPriceUnconfirmed(invoice)
           ? `<p style="margin: 0 0 14px;">PJL will confirm the price for today's visit and send your invoice.</p>`
           : invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
@@ -22691,7 +22762,10 @@ async function handleApi(req, res, pathname) {
           propertyEditsApplied: !!cascadeResult.propertyEditsApplied,
           // No charge: nothing to pay, no invoice — the app shows "No charge
           // — done" instead of an invoice screen (fall-closing fix #8).
-          noCharge: cascadeResult.noCharge === true || isNoChargeServiceRecord(cascadeResult.serviceRecord)
+          noCharge: cascadeResult.noCharge === true || isNoChargeServiceRecord(cascadeResult.serviceRecord),
+          // Paid in Full (P-PJL-22 D): nothing to collect, no invoice. A
+          // tech's copy of this reply says only nothingToCollect (techView).
+          paidInFull: cascadeResult.paidInFull === true || woSettlement.isPaidInFull(cascadeResult.serviceRecord)
         };
       } else if (cascadeError) {
         // Cascade threw — signed/locked/completed all persisted, but
@@ -22747,7 +22821,8 @@ async function handleApi(req, res, pathname) {
             ran: true, alreadyRan: false, invoiceId, invoiceTotal,
             invoiceDraftError: retryCascade.invoiceDraftError || null,
             propertyEditsApplied: !!retryCascade.propertyEditsApplied,
-            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord)
+            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord),
+            paidInFull: retryCascade.paidInFull === true || woSettlement.isPaidInFull(retryCascade.serviceRecord)
           };
         } else {
           responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
@@ -30495,6 +30570,7 @@ const server = http.createServer(async (req, res) => {
       if (fieldOwner && String(fieldOwner) !== String(session.uid)) {
         return sendJson(res, 403, { ok: false, error: "owner_mismatch", errors: ["Sign in with the account that recorded this work."] });
       }
+      if (session.role !== "admin") res.__techView = true;   // P-PJL-22 D (sendJson)
 
       // Admin action log. This gate is the ONE place every guarded request
       // passes through with its session already resolved, which is why the

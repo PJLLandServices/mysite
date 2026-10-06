@@ -8541,7 +8541,7 @@ second passes (Patrick, 2026-10-05). Shrink quality 0.75 is approved for testing
 
 ---
 
-## 2026-10-05 — INV-SEND-01 · INV-LINK-01 · TTP-COLLECT-01 · SETTLE-PIF-01: invoice delivery, Tap to Pay, Paid in Full — **UNMAPPED → documented, BROKEN at named hops, nothing implemented** (P-PJL-22: PJL-126…130)
+## 2026-10-05 — INV-SEND-01 · INV-LINK-01 · TTP-COLLECT-01 · SETTLE-PIF-01: invoice delivery, Tap to Pay, Paid in Full — **documented, then BUILT on PR #383 (not merged; awaiting Patrick's approval of the state model and wording)** (P-PJL-22: PJL-126…130)
 
 Patrick, 2026-10-05, from two houses in the field: the customer's invoice PDF said DRAFT, and Tap to
 Pay would not come up until the invoice had been emailed. His requirements A–E are mapped hop by hop
@@ -8563,7 +8563,17 @@ and Patrick approves it before any implementation.
   - Re-verified by the pinned B2–B4 / C2–C5 checks, and one walked payment through a PDF link.
 - **No Charge** (FLOW-31 #8) is pinned unchanged by D6.
 
-Run `npm run test:invoice-delivery`. Each suite joins `build:check` in the PR that makes it pass.
+Run `npm run test:invoice-delivery`. All four suites now pass and are in `build:check`. The build is
+described in `docs/INVOICE_DELIVERY_TTP.md` ("How it was built").
+
+**Patrick's acceptance walk, after he approves and it merges:**
+1. Send a real invoice to yourself. The PDF says PAYMENT DUE, not DRAFT, and **View and pay online** opens
+   the pay page.
+2. Pay it through that link. The same link then reads Paid and offers no card form.
+3. On a "Send invoice / bill later" closing, Take payment now is hidden.
+4. Press **Take payment now instead** and pay without sending.
+5. Mark a test visit Paid in full on the office page and finish it on the phone. There is no invoice. The
+   report and email say PAID IN FULL with no amounts, and the tech login never shows the words.
 ## 2026-10-05 — CADENCE-04: the send-time re-check used the wall clock, not the sweep's (FLOW-35 touched; no PASS flow)
 
 `sendStepForBooking` re-reads the booking just before sending and asks again whether the step is

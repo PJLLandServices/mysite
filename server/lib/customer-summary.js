@@ -93,6 +93,19 @@ async function customerSummaryFor(wo, deps = {}) {
       amountPaid: pending ? null : Number(active.amountPaid) || 0,
       balanceDue: pending ? null : (active.balanceDue == null ? Number(active.total) || 0 : Number(active.balanceDue) || 0)
     };
+  } else if (require("./wo-settlement").isPaidInFull(wo)) {
+    // Paid in Full (P-PJL-22 D): the work is listed, with no amount, no
+    // subtotal, HST, total or balance — the customer prepaid.
+    const bill = await billing.billingFor(wo);
+    money = {
+      source: "preview",
+      invoiceId: null,
+      invoiceStatus: null,
+      pricePending: false,
+      prepaid: true,
+      lines: customerLines(invoices.draftLinesFrom(bill.lines), true),
+      subtotal: null, hst: null, total: null, amountPaid: null, balanceDue: null
+    };
   } else {
     const bill = await billing.billingFor(wo);
     const normalized = invoices.draftLinesFrom(bill.lines);

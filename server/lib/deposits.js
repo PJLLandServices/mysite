@@ -120,8 +120,10 @@ async function sendInvoiceNow(invoiceId, { resend = false } = {}) {
       quickbooksInvoiceId: qbInvoiceId || inv.quickbooksInvoiceId,
       paymentToken: paymentToken || inv.paymentToken
     };
-    const { generateInvoicePdf } = require("./invoice-pdf");
-    const pdfBuffer = await generateInvoicePdf(renderInv);
+    const { generateInvoicePdf, customerCopy } = require("./invoice-pdf");
+    // The customer's copy (P-PJL-22 A): a first send is drawn as sent;
+    // the record flips only after the email below succeeds.
+    const pdfBuffer = await generateInvoicePdf(customerCopy(renderInv));
     const { resolvePublicBaseUrl } = require("./public-base-url");
     const viewLink = paymentToken
       ? `${resolvePublicBaseUrl()}/pay/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(paymentToken)}`
