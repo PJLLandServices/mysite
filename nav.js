@@ -45,6 +45,11 @@ const mobileNav = document.querySelector('.nav-mobile');
 if (hamburger && mobileNav) {
   const tabletNavQuery = window.matchMedia('(max-width: 1024px)');
   const spans = hamburger.querySelectorAll('span');
+  // Bottom quick-action bar's Menu button opens the same slide-out menu.
+  const bottomMenuBtn = document.querySelector('.bottom-nav__menu');
+  const syncBottomMenu = (isOpen) => {
+    if (bottomMenuBtn) bottomMenuBtn.setAttribute('aria-expanded', String(isOpen));
+  };
   const resetHamburger = () => {
     spans[0].style.transform = '';
     spans[1].style.opacity = '';
@@ -53,12 +58,14 @@ if (hamburger && mobileNav) {
   const closeMobileNav = () => {
     mobileNav.classList.remove('open');
     hamburger.setAttribute('aria-expanded', 'false');
+    syncBottomMenu(false);
     resetHamburger();
   };
 
   const toggleMobileNav = () => {
     const isOpen = mobileNav.classList.toggle('open');
     hamburger.setAttribute('aria-expanded', String(isOpen));
+    syncBottomMenu(isOpen);
     if (isOpen) {
       spans[0].style.transform = 'rotate(45deg) translate(5px, 5px)';
       spans[1].style.opacity = '0';
@@ -69,6 +76,7 @@ if (hamburger && mobileNav) {
   };
 
   hamburger.addEventListener('click', toggleMobileNav);
+  if (bottomMenuBtn) bottomMenuBtn.addEventListener('click', toggleMobileNav);
 
   // Keyboard support — hamburger is a div with role=button, so we wire
   // Enter and Space to behave like a real button.
@@ -170,3 +178,21 @@ document.querySelectorAll('.nav-links a, .nav-mobile a, .nav-mobile__link').forE
     a.style.opacity = '1';
   }
 });
+
+// ── Bottom quick-action bar: highlight the current section ──
+const bottomNav = document.querySelector('.bottom-nav');
+if (bottomNav) {
+  const page = (window.location.pathname.split('/').pop() || 'index.html').replace(/\.html$/, '');
+  const servicePages = /^(sprinkler-|drip-irrigation$|commercial-irrigation$|landscape-lighting$|pricing$|process$|warranty$|water-promise$|coverage-map$)/;
+  let section = null;
+  if (page === 'index' || page === '') section = 'home';
+  else if (page === 'book' || page === 'estimate' || page === 'quote') section = 'book';
+  else if (servicePages.test(page)) section = 'services';
+  if (section) {
+    const item = bottomNav.querySelector(`[data-bnav="${section}"]`);
+    if (item) {
+      item.classList.add('is-active');
+      item.setAttribute('aria-current', 'page');
+    }
+  }
+}

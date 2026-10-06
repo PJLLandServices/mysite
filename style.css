@@ -3996,3 +3996,180 @@ html[data-pjl-season="off"] .area-hero-v2--seasonal .area-hero-v2__bg {
   .sprk-zone__readout { padding: 30px 22px; }
 }
 
+
+/* ─── BOTTOM QUICK-ACTION BAR (phones + tablets) ─────────────────────
+   App-style tab bar pinned to the bottom of the screen: Home · Services ·
+   Call · Book · Menu. Markup lives in _partials/nav.html, so every page
+   with the shared nav gets it. Shown at ≤1024px — the same point where
+   the top menu collapses into the hamburger — and hidden on desktop,
+   where the full top menu is already on screen.
+
+   While the bar is on screen it also:
+   • pads the page bottom so the footer is never hidden behind it
+   • stops the slide-out menu at the bar's top edge so the menu's own
+     Call / Estimate buttons stay reachable
+   • lifts the chat launcher and the homepage savings card above it
+   • hides the floating "Call (905)…" pill on blog pages (the bar's Call
+     button replaces it; desktop keeps the pill)
+   Overrides use `html body:has(.bottom-nav)` so they only apply on pages
+   that actually carry the bar, and outrank chat-widget.css and the
+   pages' inline styles regardless of load order. */
+.bottom-nav { display: none; }
+
+@media (max-width: 1024px) {
+  :root {
+    --bnav-h: 64px;
+    --bnav-space: calc(var(--bnav-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bottom-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1001; /* above the top nav (1000) + slide-out menu (999), below chat (99998+) */
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    height: var(--bnav-space);
+    /* Centre the five buttons on wide tablets instead of stretching them. */
+    padding: 0 max(6px, calc((100% - 640px) / 2)) env(safe-area-inset-bottom, 0px);
+    background: var(--white);
+    border-top: 1px solid var(--border);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -6px 24px rgba(15, 31, 20, 0.12);
+  }
+
+  .bottom-nav__item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: var(--touch-target);
+    margin: 0;
+    padding: 6px 2px;
+    background: none;
+    border: 0;
+    border-radius: 12px;
+    color: var(--green);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+  .bottom-nav__label {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .bottom-nav__icon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+
+  /* Touch feedback (phones can't hover) + hover only on real pointers. */
+  .bottom-nav__item:active { background: var(--green-pale); }
+  .bottom-nav__item:active .bottom-nav__icon { transform: scale(0.92); }
+  @media (hover: hover) {
+    .bottom-nav__item:hover { background: var(--green-pale); }
+  }
+  .bottom-nav__item:focus-visible {
+    outline: 3px solid var(--amber);
+    outline-offset: -3px;
+  }
+
+  /* Current page: amber text + small marker on the bar's top edge. */
+  .bottom-nav__item.is-active { color: var(--amber-ink); }
+  .bottom-nav__item.is-active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 26px;
+    height: 3px;
+    border-radius: 0 0 3px 3px;
+    background: var(--amber);
+    transform: translateX(-50%);
+  }
+
+  /* Call — raised amber circle in the centre slot. */
+  .bottom-nav__item--call { color: var(--amber-ink); font-weight: 700; }
+  .bottom-nav__call-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    margin-top: -24px;
+    border: 4px solid var(--white);
+    border-radius: 50%;
+    background: var(--amber);
+    color: var(--white);
+    box-shadow: 0 6px 16px rgba(224, 123, 36, 0.45);
+    transition: transform 0.15s ease, background-color 0.15s ease;
+  }
+  .bottom-nav__call-badge .bottom-nav__icon { width: 20px; height: 20px; }
+  .bottom-nav__item--call:active { background: none; }
+  .bottom-nav__item--call:active .bottom-nav__call-badge { transform: scale(0.94); }
+  @media (hover: hover) {
+    .bottom-nav__item--call:hover { background: none; }
+    .bottom-nav__item--call:hover .bottom-nav__call-badge { background: var(--amber-light); }
+  }
+
+  /* Menu button swaps to an X while the slide-out menu is open. */
+  .bottom-nav__icon--close { display: none; }
+  .bottom-nav__menu[aria-expanded="true"] { color: var(--amber-ink); }
+  .bottom-nav__menu[aria-expanded="true"] .bottom-nav__icon--open { display: none; }
+  .bottom-nav__menu[aria-expanded="true"] .bottom-nav__icon--close { display: block; }
+
+  /* ── Make room for the bar ── */
+  html body:has(.bottom-nav) { padding-bottom: var(--bnav-space); }
+  html body:has(.bottom-nav) .nav.nav-v2 ~ .nav-mobile { bottom: var(--bnav-space); }
+
+  html body:has(.bottom-nav) .post-sticky-cta,
+  html body:has(.bottom-nav) .blog-sticky-cta { display: none; }
+
+  html body:has(.bottom-nav) .savings-float {
+    bottom: calc(var(--bnav-space) + 16px);
+  }
+  html body:has(.bottom-nav) .pjl-chat-launcher {
+    bottom: calc(var(--bnav-space) + 16px);
+  }
+  html body.has-savings-float:has(.bottom-nav) .pjl-chat-launcher {
+    bottom: calc(var(--bnav-space) + 16px + 132px + 16px);
+  }
+  /* Tablet chat panel floats — keep it clear of the bar. */
+  html body:has(.bottom-nav) .pjl-chat-panel {
+    bottom: calc(var(--bnav-space) + 16px);
+    max-height: calc(100vh - var(--bnav-space) - 40px);
+  }
+}
+
+@media (max-width: 767px) {
+  /* Phone savings card is shorter (see chat-widget.css). */
+  html body.has-savings-float:has(.bottom-nav) .pjl-chat-launcher {
+    bottom: calc(var(--bnav-space) + 16px + 96px + 14px);
+  }
+  /* Phone chat panel is full-screen and covers the bar — restore that. */
+  html body:has(.bottom-nav) .pjl-chat-panel {
+    bottom: 0;
+    max-height: 100vh;
+  }
+}
+
+@media (max-width: 380px) {
+  .bottom-nav__item { font-size: 11px; }
+}
+
+@media print {
+  .bottom-nav { display: none !important; }
+}
