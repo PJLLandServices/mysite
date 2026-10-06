@@ -2798,6 +2798,69 @@ async function listBuildWosForProject(projectId) {
   return records.filter((w) => w.type === "build" && w.parentProjectId === projectId);
 }
 
+// Two records under one work-order number (2026-10-06, Rina Sinapi,
+// WO-2SYJCAW6). Before create() refused a taken id (4a1eee80, 2026-09-22),
+// a returning customer's fall closing was minted under the lead's spring
+// envelope id, so the store held two records with one number. get() and
+// update() answer whichever comes first, and the cascade's "already ran"
+// test and the one-invoice-per-WO rule both key on the number — so
+// finishing the fall visit found spring's service record, handed back
+// spring's PAID invoice, and drafted nothing for the closing.
+//
+// The earliest-created record keeps the number: every invoice, service
+// record and report written under it before the second record existed is
+// its. Each later record gets a fresh number and a history line saying
+// what it was. Returns what moved; [] when the store has no duplicates,
+// so it is safe to run on every boot.
+async function splitDuplicateIds() {
+  const records = await readAll();
+  const byId = new Map();
+  records.forEach((r, i) => {
+    if (!r?.id) return;
+    if (!byId.has(r.id)) byId.set(r.id, []);
+    byId.get(r.id).push(i);
+  });
+  const taken = new Set(records.map((r) => r?.id).filter(Boolean));
+  const now = new Date().toISOString();
+  const moved = [];
+  for (const [id, idxs] of byId) {
+    if (idxs.length < 2) continue;
+    const ordered = [...idxs].sort((a, b) =>
+      String(records[a].createdAt || "").localeCompare(String(records[b].createdAt || "")) || a - b);
+    const keep = records[ordered[0]];
+    const keepLabel = TEMPLATES[keep.type]?.label || keep.type || "work order";
+    for (const i of ordered.slice(1)) {
+      let newId;
+      do { newId = makeWorkOrderId(); } while (taken.has(newId));
+      taken.add(newId);
+      const rec = { ...records[i], id: newId, updatedAt: now };
+      rec.history = [...(Array.isArray(rec.history) ? rec.history : []), {
+        ts: now,
+        action: "renumbered",
+        by: "system",
+        note: `Was ${id}, a number it shared with the ${keepLabel} created ${String(keep.createdAt || "").slice(0, 10)}. Given its own number so this visit is invoiced and recorded on its own.`,
+        before: { id },
+        after: { id: newId }
+      }];
+      records[i] = rec;
+      moved.push({
+        oldId: id,
+        newId,
+        type: rec.type,
+        status: rec.status,
+        live: !rec.deletedAt && !rec.archivedAt,
+        propertyId: rec.propertyId || null,
+        leadId: rec.leadId || null,
+        customerName: rec.customerName || "",
+        createdAt: rec.createdAt || null,
+        photoNs: (Array.isArray(rec.photos) ? rec.photos : []).map((p) => p?.n).filter((n) => n != null)
+      });
+    }
+  }
+  if (moved.length) await writeAll(records);
+  return moved;
+}
+
 module.exports = {
   TEMPLATES,
   versionMatches,
@@ -2851,6 +2914,7 @@ module.exports = {
   listDeleted,
   listArchived,
   purgeDeleted: withStoreLock(purgeDeleted),
+  splitDuplicateIds: withStoreLock(splitDuplicateIds),
   // Brief 2 — build-mode operations
   blankDailyLog,
   startSession: withStoreLock(startSession),

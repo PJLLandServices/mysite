@@ -3000,6 +3000,64 @@ async function deleteWorkOrderPhotoFile(woId, n) {
   return false;
 }
 
+// Work orders that share a number (workOrders.splitDuplicateIds), repaired
+// once at boot — a no-op once the store has none. For each record given a
+// new number:
+//   - its photo files are COPIED to the new number's folder (the old folder
+//     is shared with the record that kept the number, so nothing is moved
+//     out from under it);
+//   - a lead that pointed at the shared number points at the new one (the
+//     later record is the one the lead was last given);
+//   - a visit that was completed under the shared number — whose Finish
+//     found the other visit's service record and stopped — gets its
+//     completion run now: service record, report, and a DRAFT invoice. Run
+//     like the admin "Run cascade" button, with the invoice-ready text
+//     skipped: nothing reaches the customer until the office presses Send.
+// Bookings are left alone: each one already lists the visit it was made for.
+async function repairDuplicateWorkOrderIds() {
+  const moved = await workOrders.splitDuplicateIds();
+  if (!moved.length) return [];
+  for (const m of moved) {
+    console.warn(`[wo-dup-ids] ${m.oldId} (${m.type}, ${m.customerName || "?"}) renumbered to ${m.newId}`);
+    for (const n of m.photoNs) {
+      for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+        const from = path.join(WO_PHOTOS_DIR, m.oldId, `${n}.${ext}`);
+        if (!fsSync.existsSync(from)) continue;
+        try {
+          await fs.mkdir(path.join(WO_PHOTOS_DIR, m.newId), { recursive: true });
+          await fs.copyFile(from, path.join(WO_PHOTOS_DIR, m.newId, `${n}.${ext}`));
+        } catch (err) { console.warn(`[wo-dup-ids] photo ${n} copy failed:`, err?.message); }
+      }
+    }
+  }
+  try {
+    const leads = await readLeads();
+    let changed = false;
+    for (const m of moved) {
+      const lead = m.leadId ? leads.find((l) => l.id === m.leadId) : null;
+      if (lead && lead.workOrderId === m.oldId) { lead.workOrderId = m.newId; changed = true; }
+    }
+    if (changed) await writeLeads(leads);
+  } catch (err) { console.warn("[wo-dup-ids] lead pointer update failed:", err?.message); }
+  for (const m of moved) {
+    // A deleted or archived record is renumbered but never invoiced.
+    if (m.status !== "completed" || !m.live || !m.propertyId) continue;
+    try {
+      if (await properties.findServiceRecordByWo(m.propertyId, m.newId)) continue;
+      const wo = await workOrders.get(m.newId);
+      if (!wo || workOrders.awaitsNewSignature(wo)) {
+        console.warn(`[wo-dup-ids] ${m.newId}: completion not run (needs a new signature)`);
+        continue;
+      }
+      const result = await serializeOn(`completion-cascade:${m.newId}`, async () =>
+        completionCascade.run((await workOrders.get(m.newId)) || wo, { skipInvoiceSms: true }));
+      const inv = result?.invoice;
+      console.warn(`[wo-dup-ids] ${m.newId}: completion run — ${inv ? `draft invoice ${inv.id} ($${Number(inv.total).toFixed(2)})` : (result?.invoiceDraftError || "no invoice")}`);
+    } catch (err) { console.warn(`[wo-dup-ids] ${m.newId}: completion failed:`, err?.message); }
+  }
+  return moved;
+}
+
 // Job journal photo storage — same shape/compression as WO photos
 // (savePhotosForWorkOrder/readWorkOrderPhotoFile/deleteWorkOrderPhotoFile
 // above), just rooted under <projectId>/<entryId> instead of <woId> since
@@ -30924,6 +30982,11 @@ server.listen(PORT, HOST, () => {
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
   memoryLog.start();
+
+  // Two work orders under one number (pre-2026-09-22 data): give the later
+  // one its own number and finish what its completion skipped. No-op once
+  // repaired. See repairDuplicateWorkOrderIds.
+  repairDuplicateWorkOrderIds().catch((err) => console.warn("[wo-dup-ids] repair failed:", err?.message));
 
   // The geography filter's key, checked ONCE at boot where nobody can
   // miss it. Without it every address is placed by town name only
