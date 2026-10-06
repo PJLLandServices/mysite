@@ -323,6 +323,7 @@
   background: #fff; color: var(--pjl-text-muted);
 }
 .sp-window-btn:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-window-btn.is-armed { background: var(--pjl-amber); border-color: var(--pjl-amber); color: #fff; }
 .sp-window-btn.is-set {
   background: var(--pjl-amber-pale); border-color: var(--pjl-amber); color: var(--pjl-amber);
   font-weight: 700;
