@@ -5,7 +5,46 @@ Project P-PJL-39 · parent PJL-131 · written 2026-10-06 against `origin/main` @
 Read-only: no code, data or production record was changed to produce this.
 
 > The local `main` checkout in `C:\Users\patri\Downloads\pjl-land-services-v39` is **361 commits
-> behind** `origin/main`. Every line number below is from `origin/main`, not from that checkout.
+> behind** `origin/main`. Every line number below is from `origin/main` @ `af1ef28`, not from that
+> checkout.
+
+## 0. Landed after this inventory was cut: PR #398 (merged 2026-10-06 22:44Z, `305d7e3`)
+
+A parallel session (claude.ai/code `session_01KuxEPrdL79fr4cZ3xWNGGF`) shipped #398 for the same
+Peter Bazios symptom while this inventory was being written. Patrick confirmed the cause to that
+session in words: *"I personally deleted his appointment."* That matches §4 exactly (door W6).
+`server.js` line numbers below `13786` are unchanged; below that they shift by up to +40.
+
+What #398 changed:
+
+1. `assignments.skippedThisSeason(property, season, year)` reads the property's
+   `seasonalOutreach[season].optOutThisSeason`; `drivenPlan` turns an `unassigned` stop on a
+   skipped property into a new `skipped` state (added to `GONE_STATES`), so it leaves the day card.
+2. "Skip this season" is now a button on every planned, unbooked stop (same
+   `POST /api/outreach/opt-out-season` as the tray chip).
+3. `season-plans.addStop`/`moveStop` record `day.placed[code] = {at, by, via, from?}`; the day
+   card shows how a stop got there.
+4. `DELETE /api/bookings/:id` accepts `{ saidNo: true }` from a "Was this a no?" prompt on the
+   Schedule canvas and the booking page; when true it **still hard-deletes** and then sets the
+   property's skip flag for the season derived from the service key.
+
+How it relates to this project:
+
+* It solves the **never-booked** case correctly and in line with the TRD: a phone "no" from a
+  customer with no appointment is a property preference, not an appointment, and the plan reads
+  it only when no Booking exists (`unassigned` only). That part should stay.
+* It does **not** change the architecture for the **booked-then-removed** case, which is what
+  actually happened to Peter. The record is still erased; the "no" lives in a third store (the
+  property flag), and a delete answered "booked by mistake" behaves exactly as before. Unassign
+  (W5) is untouched and still deletes messaged bookings silently. An inbound SMS "no" is still not
+  recorded. The flag is reversible on the property, which brings the stop back with no trace.
+* PJL-134/135 should absorb it: the admin delete of a seasonal booking becomes
+  `cancelBooking(reason: "customer_declined")`, which produces the cancelled record every reader
+  already honours (`planStopState` → `cancelled`, `declinedThisSeason`, outreach), and the
+  property flag stays only as the answer for customers who were never booked. The `placed`
+  provenance is a step toward stop identity and should become `{bookingId, placed}` in Phase 2.
+* The same session has PR #399 open (`lib/resequence.js` only, optimiser scoring). No overlap with
+  booking identity, but it is the same person's lane on the Season Plan; coordinate before Phase 2.
 
 ---
 
@@ -87,7 +126,7 @@ stores by hand (drift risk, not a second identity); **N** = Booking-only.
 | W3 | reserve, standby branch (`server.js:25780`) | open-bucket request | — | `lead.standby{…}` (no date, no booking) | Y (undated request) | — | decide: `Booking.status = "standby"` or explicitly out of scope; today it is invisible to every Booking reader |
 | W4 | `assignments.assign` (`lib/assignments.js:~500-640`; route `POST /api/assignments/:s/:y/assign` 28359; `only={code,date}` = **Book now**, #395) | Season Plan Assign / Book now | plan, properties, bookings (`priorAssignmentsFor`), eligibility (`outreach.assessEligibility`, `deriveBookingState`, `declinedThisSeason`), opt-out | `bookings.createDirect({source:"assignment", assignment:{season,year,batchId,date,bucket,code}})`; then `syncAssignedTimes` | Y — the **plan code** stays as the intent; the stop carries no booking id | one assignment booking per property per season (`priorAssignmentsFor`), `duplicate_in_plan`; Book now overrules a cancelled assignment by design | `createBooking` + write `bookingId` onto the plan stop |
 | W5 | `assignments.unassign` (`lib/assignments.js:964-1000`; route 28407) | Season Plan "Unassign" (press twice) | bookings | **`bookings.remove`** for every assignment booking that is confirmed, rescheduleCount 0, no WO | **Y** — stop reverts to `unassigned`; `property.seasonalOutreach.touches` keep saying the customer was told | none | `cancelBooking(id, reason:"unassigned", actor)`; hard delete only for never-messaged records, or removed from the UI |
-| W6 | `DELETE /api/bookings/:id` (`server.js:13790-13846`) | Schedule page "Delete Permanently" (admin) | this visit's WOs (`workOrdersForVisit`) | `bookings.remove`; best-effort `delete lead.booking` + `writeLeads` | **Y** — plan stop reverts to `unassigned`; WO keeps `leadId/propertyId` and `scheduledFor` (still on Today via `mergeDaySchedule`); if the lead cleanup fails the heal sweep (W16) **re-creates** the record | none | `cancelBooking(reason:"deleted_by_admin")`; physical delete reserved for test-data purge |
+| W6 | `DELETE /api/bookings/:id` (`server.js:13790-13846`; since #398 also reads `{saidNo}` and sets the property skip flag after deleting) | Schedule page "Delete Permanently" and booking page Delete (admin); both now ask "Was this a no?" for seasonal services | this visit's WOs (`workOrdersForVisit`) | `bookings.remove`; best-effort `delete lead.booking` + `writeLeads`; with `saidNo` also `property.seasonalOutreach[season].optOutThisSeason = true` | **Y** — the record is still erased; plan stop reads `skipped` (via the property flag) or `unassigned` (booked by mistake / flag cleared); WO keeps `leadId/propertyId` and `scheduledFor` (still on Today via `mergeDaySchedule`); if the lead cleanup fails the heal sweep (W16) **re-creates** the record | none | `cancelBooking(reason:"customer_declined" \| "entered_in_error")`; physical delete reserved for test-data purge; property flag only for never-booked customers |
 | W7 | `POST /api/bookings/:id/cancel` (`server.js:13848-13940`) | Schedule page Cancel; Field app "Not today" (reasonCode → `cancelled`/`no_show`); CRM; MCP `cancel_booking` | booking, lead | `bookings.cancel` (status from reason) → **mirror** `lead.booking.status/cancelledAt/reason/removalCode/removedBy`; customer email; **no WO cascade** | mirror | 409 on re-cancel | `cancelBooking()` single write; lead envelope becomes a projection; WO reconciliation inside the op |
 | W8 | `PATCH /api/bookings/:id` (`server.js:13768`) | `/admin/booking/:id` Status dropdown + prep notes (`server/booking.js:181`); property cascade (address/name sync); `retimeCustomerBooking` for lead-less rows | — | `bookings.update(payload)` — any of `status, scheduledFor, serviceKey…`; history `status:<x>` only | **Y** — status flips with no `cancelledAt`, no lead mirror, no WO cascade, no email, no `removalCode`; a lead-backed booking cancelled here **keeps its slot** in `activeBookings`' lead pass and stays on Today's lead pass; `completed` here fires nothing | none | `update()` refuses `status` and `scheduledFor`; only lifecycle ops may change them |
 | W9 | `POST /api/bookings/:id/reschedule` (13962) + `rescheduleBooking()` (`server.js:5748-5890`) | admin Schedule, CRM `crm-reschedule.js`, MCP `reschedule_booking`, portal `/reschedule` (15942), appointment page `/reschedule` (27865) | booking, lead, this visit's WOs, availability | `bookings.reschedule` (scheduledFor, rescheduleCount, history) → **mirror** `lead.booking.start/end/bucket*` (5870) → `wo.scheduledFor` for this visit's WOs → emails → `syncRoutedTimes` | mirror × 3 stores, sequential, non-atomic | no-op if same start | `rescheduleBooking(id, newSchedule, actor)`; WO date and lead envelope derived or written inside the op |
