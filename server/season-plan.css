@@ -65,7 +65,8 @@
 /* Assignment actions — two-press arming so one stray thumb tap can't
    book (or delete) a season. */
 .sp-assign-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.sp-assign-actions .pjl-btn.is-armed {
+.sp-assign-actions .pjl-btn.is-armed,
+.sp-standby-act .pjl-btn.is-armed {
   background: var(--pjl-amber); border-color: var(--pjl-amber); color: #fff;
 }
 

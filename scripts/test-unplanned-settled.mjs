@@ -101,20 +101,24 @@ const booking = (id, extra = {}) => ({
 //   P-DONE   booking stamped with the id, status completed  ("completed" — was listed)
 //   P-NONE   nothing at all                                 (the one real gap)
 //   P-REPAIR a sprinkler repair in October is not a closing (stays a gap)
+//   P-CANCEL booked themselves, then cancelled              ("cancelled" — was listed)
 fs.writeFileSync(PROPERTIES, JSON.stringify([
   property("P-ID", "PR-0001", "Stamped", "10 Stamp St, Newmarket, ON"),
   property("P-LEAD", "PR-0002", "Linked Later", "20 Link Ave, Aurora, ON", { leadIds: ["lead-20"] }),
   property("P-ADDR", "PR-0003", "Same House", "30 House Rd, Newmarket, ON"),
   property("P-DONE", "PR-0004", "Already Done", "40 Done Cres, Aurora, ON"),
   property("P-NONE", "PR-0005", "Still Waiting", "50 Gap Blvd, Newmarket, ON"),
-  property("P-REPAIR", "PR-0006", "Had A Repair", "60 Fix Lane, Newmarket, ON")
+  property("P-REPAIR", "PR-0006", "Had A Repair", "60 Fix Lane, Newmarket, ON"),
+  property("P-CANCEL", "PR-0007", "Said No", "70 Nope Way, Aurora, ON")
 ], null, 2));
 fs.writeFileSync(BOOKINGS, JSON.stringify([
   booking("BK-ID", { propertyId: "P-ID" }),
   booking("BK-LEAD", { leadId: "lead-20", address: "20 Link Ave, Aurora, ON" }),
   booking("BK-ADDR", { address: "30 House Rd, Newmarket, ON" }),
   booking("BK-DONE", { propertyId: "P-DONE", status: "completed", scheduledFor: at(10, 1) }),
-  booking("BK-REPAIR", { propertyId: "P-REPAIR", serviceKey: "sprinkler_repair", serviceLabel: "Sprinkler repair" })
+  booking("BK-REPAIR", { propertyId: "P-REPAIR", serviceKey: "sprinkler_repair", serviceLabel: "Sprinkler repair" }),
+  booking("BK-CANCEL", { propertyId: "P-CANCEL", status: "cancelled", cancelledAt: at(10, 2),
+    cancellationReason: "", removalCode: "another_company" })
 ], null, 2));
 
 const props = JSON.parse(fs.readFileSync(PROPERTIES, "utf8"));
@@ -152,6 +156,24 @@ const byId = Object.fromEntries(props.map((p) => [p.id, p]));
   ok("nothing → nothing", none.hasBooking === false && none.completed === false, j(none));
   const repair = await state("P-REPAIR");
   ok("an October repair is not a fall closing", repair.hasBooking === false && repair.completed === false, j(repair));
+  // 2026-10-06: "They have either cancelled or we aren't serving them
+  // anymore." A cancelled booking is still UNBOOKED here (outreach may
+  // nudge), but the state now says who declined, and why.
+  const cancel = await state("P-CANCEL");
+  ok("cancelled → not booked, not completed, but DECLINED is named",
+    cancel.hasBooking === false && cancel.completed === false
+    && cancel.declined?.bookingId === "BK-CANCEL" && cancel.declined?.reasonCode === "another_company", j(cancel));
+  ok("never booked → declined is null", none.declined === null, j(none));
+  ok("booked → declined is not reported", (await state("P-ID")).declined == null, j(await state("P-ID")));
+  ok("the rule has a name: outreach.declinedThisSeason", typeof outreach.declinedThisSeason === "function", "missing");
+  if (typeof outreach.declinedThisSeason === "function") {
+    const live = { serviceKey: "fall_close_4z", scheduledFor: at(10, 15), status: "confirmed", id: "L" };
+    const dead = { serviceKey: "fall_close_4z", scheduledFor: at(10, 15), status: "cancelled", id: "D", cancelledAt: at(10, 1) };
+    ok("…a cancellation beside a live re-booking is not a no", outreach.declinedThisSeason([dead, live], "fall", 2026) === null);
+    ok("…a no-show counts as a no too", outreach.declinedThisSeason([{ ...dead, status: "no_show" }], "fall", 2026)?.status === "no_show");
+    ok("…last spring's cancellation says nothing about this fall",
+      outreach.declinedThisSeason([{ ...dead, serviceKey: "spring_open_4z", scheduledFor: at(4, 20) }], "fall", 2026) === null);
+  }
 }
 
 // ---- 3. Settled is ONE question, with two honest answers -----------------
@@ -174,6 +196,8 @@ const byId = Object.fromEntries(props.map((p) => [p.id, p]));
     done.ok === false && done.reason === "already_done" && done.bookingId === "BK-DONE", j(done));
   const none = await verdict("P-NONE");
   ok("the real gap is still eligible", none.ok === true, j(none));
+  ok("outreach may still nudge a customer who cancelled — the gauntlet does not settle them",
+    (await verdict("P-CANCEL")).ok === true, j(await verdict("P-CANCEL")));
   ok("verdictIsSettled names both answers and nothing else",
     typeof outreach.verdictIsSettled === "function"
     && outreach.verdictIsSettled(lead) && outreach.verdictIsSettled(done)
@@ -198,6 +222,11 @@ const byId = Object.fromEntries(props.map((p) => [p.id, p]));
   ok("a customer whose closing is done is not in the tray", !placeable.includes("PR-0004"), j(placeable));
   ok("…and none of them is reported as a PROBLEM either — settled is silent",
     !blocked.some((b) => /^PR-000[1-4]:/.test(b)), blocked.join(" "));
+  ok("a customer who cancelled is NOT offered a day", !placeable.includes("PR-0007"), j(placeable));
+  const cancelRow = (r?.blocked || []).find((x) => x.code === "PR-0007");
+  ok("…and is named under can't-be-placed, with why",
+    cancelRow?.reason === "cancelled_this_season" && cancelRow?.bookingId === "BK-CANCEL"
+    && /another company/i.test(cancelRow?.note || ""), j(cancelRow));
 
   // The preflight reads the same verdict: the done customer is settled
   // on the board, not skipped with a reason the screen cannot explain.
@@ -229,6 +258,16 @@ const byId = Object.fromEntries(props.map((p) => [p.id, p]));
   const ui = read("server/outreach.js");
   ok("the outreach screen shows a completed customer as Done, not Not booked",
     /bookingState\?\.completed[\s\S]{0,200}Done</.test(ui), "no Done badge");
+  ok("unplanned reads the declined rule over the property's OWN records (belongsToProperty)",
+    /outreach\.declinedThisSeason\(\s*allBookings\.filter\(\(b\) => bookings\.belongsToProperty\(b, property\)\)/.test(assignSrc),
+    "unplanned has its own cancelled test");
+  ok("deriveBookingState reports declined through the same rule",
+    /declined: declinedThisSeason\(mine, season, year\)/.test(outreachSrc), "deriveBookingState grew its own");
+  const plan = read("server/season-plan.js");
+  ok("the tray explains a cancellation", /cancelled_this_season: "cancelled this season/.test(plan));
+  ok("…with the reason given", /row\.note \? ` <em>\(\$\{escapeHtml\(row\.note\)\}\)<\/em>`/.test(plan));
+  ok("a chip has a Skip-this-season button that sets the outreach opt-out flag (two presses)",
+    /armTwice\(skip, "Press again to SKIP them"[\s\S]{0,600}\/api\/outreach\/opt-out-season[\s\S]{0,300}optOut: true/.test(plan), "no skip button");
 }
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
