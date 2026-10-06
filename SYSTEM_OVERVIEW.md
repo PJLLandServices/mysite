@@ -1917,7 +1917,41 @@ STRIPE_API_VERSION    = (optional pin, e.g. 2025-06-30.basil; unset =
                                    account default)
 RECAPTCHA_SITE_KEY    = (optional — reCAPTCHA v3 on the pay page)
 RECAPTCHA_SECRET_KEY  = (optional — server-side verify; unset skips)
+PJL_ASSISTANT_KEY     = (optional, 24+ random chars — turns on the PJL
+                                   Assistant Claude connector at
+                                   POST /mcp/<key>. Unset = the path 404s.
+                                   The key in the URL IS the credential;
+                                   rotate it to cut the connector off.)
+PJL_ASSISTANT_USER_EMAIL = (optional — which admin account the assistant
+                                   acts as; default = first enabled admin)
 ```
+
+### PJL Assistant (Claude connector) — `server/lib/assistant-mcp.js`
+
+A stateless MCP ("Model Context Protocol") endpoint Patrick adds to his
+Claude app as a custom connector: `https://www.pjllandservices.com/mcp/<PJL_ASSISTANT_KEY>`.
+It gives Claude tools to read the day schedule, find jobs, search and open
+customers, list bookings / leads / invoices, read any other `/api/` GET
+(`read_crm`), check real open times, and **book, reschedule and cancel**.
+Every tool calls this server's OWN admin API over loopback with a
+10-minute signed admin session — no business rule is duplicated, so the
+booking lock, slot re-check, booking gate, notifications and history all
+apply exactly as in the CRM. Write tools carry MCP annotations
+(`destructiveHint` on cancel) and the server instructions tell Claude to
+read every change back to Patrick and wait for a yes, and to say which
+customer message goes out (reschedule ALWAYS notifies). `read_crm` is a
+path whitelist (business records only — never users or integration
+status). Test: `scripts/test-assistant-mcp.mjs`.
+
+### Reserve receipts (retry safety, PJL-87) — `server/lib/reserve-receipts.js`
+
+`POST /api/booking/reserve` accepts an optional `clientRequestId` (≤ 80
+chars). A successful reply is filed under it in `data/reserve-receipts.json`
+for 24 h; a repeat of the same id returns the original reply with
+`replayed: true` and writes nothing. Refusals are never filed, so a retry
+after a 4xx is judged afresh. The assistant always sends one
+(`assistant:<operationId>`); the Field app's Add Stop should send one too to
+close PJL-87. Test: `scripts/test-reserve-receipts.mjs`.
 
 ## Hard accuracy rules (DO NOT VIOLATE)
 
