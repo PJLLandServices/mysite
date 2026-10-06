@@ -749,7 +749,29 @@ function planStopState({ date, bookingsForProperty, season, year }) {
 
   const assigned = rows.filter((b) => b.source === "assignment" && b.assignment
     && b.assignment.season === season && Number(b.assignment.year) === Number(year));
-  if (!assigned.length) return { state: "unassigned" };
+  if (!assigned.length) {
+    // No assignment ever — but the customer may have booked THEMSELVES
+    // this season and then cancelled (or no-showed). That is the same no
+    // the tray honours (outreach.declinedThisSeason, one rule): the stop
+    // leaves the day with its reason, instead of standing as a planned,
+    // bookable intent. Patrick, 2026-10-06: "why are there cancelled
+    // appointments in the current booking seasonal plan?" A live
+    // re-booking beside the cancellation makes declined null, and the
+    // stop reads unassigned as before.
+    const declined = outreach.declinedThisSeason(rows, season, year);
+    if (declined) {
+      return {
+        state: declined.status === "no_show" ? "no_show" : "cancelled",
+        bookingId: declined.bookingId,
+        status: declined.status,
+        reason: declined.reason || "",
+        reasonCode: declined.reasonCode || null,
+        at: declined.at || null,
+        selfBooked: true
+      };
+    }
+    return { state: "unassigned" };
+  }
   const live = assigned.find((b) => bookingHoldsItsSlot(b.status));
   if (live) return { state: "moved", bookingId: live.id, status: live.status, toDate: localDateKey(live.scheduledFor) };
   const last = assigned.slice().sort((a, b) =>
