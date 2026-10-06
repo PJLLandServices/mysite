@@ -76,6 +76,24 @@ const state = (rows, over = {}) => lib("planStopState")({ ...ctx, bookingsForPro
     rebooked.state === "on_day" && rebooked.bookingId === "BK-2", j(rebooked));
   const otherSeason = state([assigned({ assignment: { season: "spring", year: 2026 }, scheduledFor: at("2026-04-10", 9) })]);
   ok("another season's assignment is not this season's answer", otherSeason.state === "unassigned", j(otherSeason));
+  // 2026-10-06, "why are there cancelled appointments in the current
+  // booking seasonal plan?": a customer who booked THEMSELVES this fall
+  // and cancelled is a no — the stop leaves the day like a cancelled
+  // assignment does, through the tray's own rule (declinedThisSeason).
+  const selfCancelled = state([{ id: "BK-self", source: "booking", status: "cancelled", propertyId: "p1", serviceKey: "fall_close_4z",
+    scheduledFor: at("2026-10-09", 14), cancelledAt: at("2026-10-04", 16), cancellationReason: "Going a different route", removalCode: null }]);
+  ok("a SELF-booking cancelled this season → cancelled, with the reason, off the day",
+    selfCancelled.state === "cancelled" && selfCancelled.bookingId === "BK-self" && /different route/.test(selfCancelled.reason || "") && selfCancelled.selfBooked === true, j(selfCancelled));
+  const selfNoShow = state([{ id: "BK-ns", source: "booking", status: "no_show", propertyId: "p1", serviceKey: "fall_close_4z", scheduledFor: at("2026-10-02", 9) }]);
+  ok("a SELF-booking no-show this season → no_show", selfNoShow.state === "no_show", j(selfNoShow));
+  const selfRebooked = state([
+    { id: "BK-old", source: "booking", status: "cancelled", propertyId: "p1", serviceKey: "fall_close_4z", scheduledFor: at("2026-10-02", 9), cancelledAt: at("2026-10-01", 9) },
+    { id: "BK-live", source: "booking", status: "confirmed", propertyId: "p1", serviceKey: "fall_close_4z", scheduledFor: at("2026-10-20", 9) }
+  ]);
+  ok("…but a live self re-booking beside the cancellation keeps the stop unassigned (the plan is still the intent)",
+    selfRebooked.state === "unassigned", j(selfRebooked));
+  const springOnly = state([{ id: "BK-spr", source: "booking", status: "cancelled", propertyId: "p1", serviceKey: "spring_open_4z", scheduledFor: at("2026-04-20", 9) }]);
+  ok("…and last spring's cancellation says nothing about this fall", springOnly.state === "unassigned", j(springOnly));
   const twice = state([
     assigned({ id: "BK-old", status: "cancelled", cancelledAt: "2026-09-10T10:00:00Z", cancellationReason: "first" }),
     assigned({ id: "BK-new", status: "cancelled", cancelledAt: "2026-09-12T10:00:00Z", cancellationReason: "second" })

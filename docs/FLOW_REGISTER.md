@@ -2,6 +2,23 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-06, evening (A cancelled SELF-booking now leaves its plan day):** Patrick: *"why are
+there cancelled appointments in the current booking seasonal plan?"* The board's per-stop rule
+(`planStopState`) knew a cancelled ASSIGNMENT as a no (the stop leaves the day, listed under *Off
+this day* with the reason) but judged every other source only by what sat ON the day: a customer
+who booked themselves this season and then cancelled — a property Patrick had dragged onto a day
+from the tray back when the tray still offered cancelled customers — stood on the day card as a
+planned, bookable stop, Book now and all. Now, when a property has no assignment booking this
+season, `planStopState` asks `outreach.declinedThisSeason(rows)` — the tray's own rule, one copy —
+and a dead seasonal booking with nothing live or completed beside it reads `cancelled` /
+`no_show` (with `selfBooked: true`, the reason and the code), so the stop leaves the day the same
+way an assignment cancellation does and the day card says *Off this day: … customer cancelled —
+<reason>*. A live self re-booking beside the cancellation leaves the stop `unassigned` as before;
+last spring's cancellation says nothing about this fall. Readers: the day card, the day shapes
+the customer calendar reads, the route line and the preflight all read `drivenPlan`, so all of
+them drop the stop together; the stored plan is untouched. NOT touched: the Today/day schedule
+(it already removed cancelled bookings, Leslie Persaud's Oct 7 cancel read `removed` there).
+Coverage: four new cases in `scripts/test-plan-follows-bookings.mjs` (43), in `build:check`.
 **2026-10-06, later (Book now — one planned stop becomes an appointment without a season-wide
 Assign):** Patrick: *"I dragged an appointment into the season plan, but it doesn't show booked, or
 booking or anything like that... but it's in the seasonal plan."* — *"I need to be able to just book
