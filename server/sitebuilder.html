@@ -6162,7 +6162,7 @@ function loadParts(){
   if(PARTS_MAP) return Promise.resolve(PARTS_MAP);
   if(!partsLoading){
     partsLoading=fetch('/api/parts').then(r=>r.json())
-      .then(j=>{ PARTS_MAP=(j&&j.parts)||{}; return PARTS_MAP; })
+      .then(j=>{ PARTS_MAP=(j&&j.parts)||{}; PARTS_MERGED=(j&&j.merged)||{}; canonicalizeBomOverrides(); return PARTS_MAP; })
       .catch(()=>{ PARTS_MAP={}; return PARTS_MAP; });
   }
   return partsLoading;
@@ -6245,6 +6245,18 @@ function wirePicker(){
 
 // ── Interactive BOM: manual swaps / qty / removals / added lines ──
 let bomOverrides = { edits:{}, removed:{}, custom:[] };   // edits[sku]={sku?,qty?}
+// Part numbers that were merged into another part (/api/parts `merged`:
+// { retired: canonical }). A design saved before a merge may still name the
+// retired number in its BOM overrides; it reads as the canonical part.
+let PARTS_MERGED = {};
+function canonSku(s){ return (s && Object.prototype.hasOwnProperty.call(PARTS_MERGED,s)) ? PARTS_MERGED[s] : s; }
+function canonicalizeBomOverrides(){
+  const o=bomOverrides; if(!o) return;
+  const edits={}; Object.keys(o.edits||{}).forEach(k=>{ const e=Object.assign({},o.edits[k]); if(e.sku) e.sku=canonSku(e.sku); edits[canonSku(k)]=e; });
+  const removed={}; Object.keys(o.removed||{}).forEach(k=>{ removed[canonSku(k)]=o.removed[k]; });
+  const custom=(o.custom||[]).map(c=>Object.assign({},c,{sku:canonSku(c.sku)}));
+  bomOverrides={edits,removed,custom};
+}
 async function bomAddLine(){
   const btn=el('bomAddBtn'), sku=btn&&btn.dataset.sku, qty=Math.max(1,parseInt(el('bomAddQty')&&el('bomAddQty').value,10)||1);
   if(!sku){ await pjlDialog.alert('Pick a component to add first.', { title: 'Pick a component first' }); return; }
@@ -7245,6 +7257,7 @@ function restoreState(blob){
     bomOverrides = (blob.bomOverrides && typeof blob.bomOverrides==='object')
       ? {edits:blob.bomOverrides.edits||{}, removed:blob.bomOverrides.removed||{}, custom:Array.isArray(blob.bomOverrides.custom)?blob.bomOverrides.custom:[]}
       : {edits:{},removed:{},custom:[]};
+    canonicalizeBomOverrides();
     if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
     valveGroupModes = {};
     if(blob.valveGroupModes && typeof blob.valveGroupModes==='object')

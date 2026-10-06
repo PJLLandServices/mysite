@@ -21,9 +21,10 @@ import {
   ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import {
-  AuthRequiredError, finalizeTerminalPayment, getInvoice, invoicePaymentLink, recordInvoicePayment, resendInvoice,
-  sendInvoice, startTerminalPayment,
+  AuthRequiredError, collectNowInvoice, finalizeTerminalPayment, getInvoice, invoicePaymentLink, recordInvoicePayment,
+  resendInvoice, sendInvoice, startTerminalPayment,
 } from '../api';
+import { invoiceActions } from '../invoice-actions.mjs';
 import { READER, useTapToPay } from '../taptopay/useTapToPay';
 import { useTapToPayLocation } from '../taptopay/TapToPayProvider';
 import { money as formatMoney } from '../format';
@@ -48,7 +49,7 @@ import { colors, radius, space, type } from '../theme';
 // "nothing owing", which is the opposite of "we don't know".
 const money = (value, currency = 'CAD') => formatMoney(value, currency) ?? '—';
 
-export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
+export default function InvoiceScreen({ invoiceId, onBack, onSignIn, role = null }) {
   const [invoice, setInvoice] = useState(null);
   const [state, setState] = useState('loading');
   const [busy, setBusy] = useState(false);
@@ -114,6 +115,29 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
             setSentAt(new Date());
           } catch (err) {
             Alert.alert("Didn't send", err?.message || 'Nothing was sent. Try again.');
+          } finally {
+            setBusy(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  // "Take payment now instead" (admin): the visit was signed off "Send
+  // invoice / bill later" but the customer is here and ready to pay. The
+  // server opens the draft for payment on site — nothing is emailed — and
+  // the re-read invoice then offers Take payment now.
+  const takePaymentInstead = () => {
+    Alert.alert('Take payment now instead?', 'Tap to Pay and Take payment now open for this visit. Nothing is emailed.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Take payment now',
+        onPress: async () => {
+          setBusy(true);
+          try {
+            setInvoice(await collectNowInvoice(invoiceId));
+          } catch (err) {
+            Alert.alert("Couldn't open it for payment", err?.message || 'Nothing changed. Try again.');
           } finally {
             setBusy(false);
           }
@@ -266,9 +290,10 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   const paid = invoice?.status === 'paid'
     || (Number(invoice?.amountPaid) > 0 && Number.isFinite(owing) && owing <= 0.01);
   const partPaid = !paid && Number.isFinite(owing) && owing > 0 && Number(invoice?.amountPaid) > 0;
-  // A draft signed off "Bill later" waits for Patrick's review; the server
-  // refuses to open it for payment, so the button is not offered.
-  const payableHere = !(invoice?.status === 'draft' && invoice?.paidOnSiteAtCompletion !== true);
+  // What may be offered, from the one rule the server mirrors
+  // (src/invoice-actions.mjs): a "Send invoice / bill later" draft takes no
+  // payment until it is sent or an admin switches it.
+  const actions = invoiceActions(invoice, { role });
   // A price PJL sets after the visit (PJL-96: a custom size, or a commercial
   // account without its own price). The server says so; the amount on the
   // draft is only a suggestion for the office, so it is not shown here and
@@ -327,7 +352,7 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
               icon, the cheapest way to meet the SF Symbol rule. Only offered
               where the server would take payment on site (Bill later waits
               for Patrick, and the server refuses it anyway). */}
-          {payableHere && tap.supported !== false ? (
+          {actions.tapToPay && tap.supported !== false ? (
             <Pressable
               style={[styles.button, styles.buttonTap]}
               onPress={tapToPay}
@@ -354,7 +379,7 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
           {/* The reader could not start. Stripe's or Apple's own words,
               because "couldn't start the reader" does not say whether to
               update iOS, sign in, or use the link instead. */}
-          {payableHere && (tap.state === READER.FAILED || tokenError) ? (
+          {actions.tapToPay && (tap.state === READER.FAILED || tokenError) ? (
             <Text style={styles.tapError}>{tap.error || tokenError}</Text>
           ) : null}
 
@@ -390,12 +415,16 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
               {busy ? 'Working…' : already ? 'Send again' : 'Send invoice'}
             </Text>
           </Pressable>
-          {payableHere ? (
+          {actions.takePayment ? (
             <Pressable style={[styles.button, busy && styles.off]} onPress={takePayment} disabled={busy}>
               <Text style={styles.buttonText}>Take payment now</Text>
             </Pressable>
+          ) : actions.takePaymentInstead ? (
+            <Pressable style={[styles.button, busy && styles.off]} onPress={takePaymentInstead} disabled={busy}>
+              <Text style={styles.buttonText}>Take payment now instead</Text>
+            </Pressable>
           ) : (
-            <Text style={styles.note}>Signed off as “Bill later” — Patrick reviews this one before it goes to the customer.</Text>
+            <Text style={styles.note}>Send invoice / bill later was chosen — the office sends this one.</Text>
           )}
 
           {/* For money collected some other way. Opening the sheet fills the

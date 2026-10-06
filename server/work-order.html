@@ -762,11 +762,27 @@
            when it lands. -->
       <section class="wo-paid-on-site" id="woPaidOnSiteSection">
         <fieldset>
-          <legend>Payment captured on-site?</legend>
-          <label><input type="radio" name="woPaidOnSite" value="yes" id="woPaidOnSiteYes"> <span>Yes — paid in the field</span></label>
-          <label><input type="radio" name="woPaidOnSite" value="no" id="woPaidOnSiteNo"> <span>No — invoice to follow</span></label>
+          <legend>How are they paying?</legend>
+          <label><input type="radio" name="woPaidOnSite" value="yes" id="woPaidOnSiteYes"> <span>Collect payment now</span></label>
+          <label><input type="radio" name="woPaidOnSite" value="no" id="woPaidOnSiteNo"> <span>Send invoice / bill later</span></label>
         </fieldset>
         <p class="wo-paid-on-site-help">Reshapes the customer email at completion. Invoice still drafts in <em>draft</em> status — Patrick reviews before sending or marking paid.</p>
+      </section>
+
+      <!-- Paid in Full (P-PJL-22 D). Admin only — this page is the office's,
+           and the route refuses a tech. A prepaid customer's visit completes
+           with no invoice; the customer's report and email say PAID IN FULL
+           and show no amounts. Set before the visit completes. -->
+      <section class="wo-paid-in-full" id="woPaidInFullSection">
+        <h3 class="wo-paid-in-full-title">Paid in full (prepaid)</h3>
+        <p class="wo-paid-on-site-help" id="woPaidInFullState">Not set — this visit is billed as usual.</p>
+        <div id="woPaidInFullForm">
+          <label>What paid for it
+            <input type="text" id="woPaidInFullRef" maxlength="300" placeholder="e.g. 2026 prepaid plan — receipt #1234">
+          </label>
+          <button type="button" class="btn" id="woPaidInFullSet">Mark paid in full</button>
+        </div>
+        <button type="button" class="btn btn-ghost" id="woPaidInFullClear" hidden>Remove paid in full</button>
       </section>
 
       <!-- Service / Inspection Report PDF (Service Report brief, 2026-05-19).

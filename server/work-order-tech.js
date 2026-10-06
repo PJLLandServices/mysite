@@ -1128,6 +1128,8 @@ function populateStateFromWO(wo) {
   state.followupOfWoId = wo.followupOfWoId || null;
   state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
   state.paidOnSite = wo.paidOnSite === true ? true : false;
+  // P-PJL-22 D: the office settled this visit; a tech is told only that.
+  state.paymentHandledByOffice = wo.paymentHandledByOffice === true || wo.settlement?.type === "paid_in_full";
   state.needsReturnVisit = wo.needsReturnVisit === true ? true
     : wo.needsReturnVisit === false ? false
     : null;
@@ -3066,7 +3068,7 @@ const SIGN_GATE_META = {
   drawn:            { label: "Have the customer sign on the pad", jumpTo: "#techSignoffCanvas" },
   bonus:            { label: "Mark the AI intake diagnosis as Matched or Didn't Match", jumpTo: "#techIntakeGuarantee" },
   customerNotes:    { label: "Add a note about what you did at this visit", jumpTo: "#techCustomerNotesSection" },
-  payment:          { label: "Choose payment method (paid on site or bill later)", jumpTo: "#techPaymentSection" },
+  payment:          { label: "Choose: Collect payment now, or Send invoice / bill later", jumpTo: "#techPaymentSection" },
   returnVisit:      { label: "Answer: does this job need a return visit?", jumpTo: "#techReturnGateSection" },
   materials:        { label: "Confirm materials packed", jumpTo: "#techMaterialsSection" },
   materialsConfirm: { label: "Confirm materials packed", jumpTo: "#techMaterialsSection" },
@@ -3134,7 +3136,7 @@ function signGateBlockers() {
     }
   }
   // Payment method.
-  if (state.paidOnSite !== true && state.paidOnSite !== false) blockers.push(signGate("payment"));
+  if (!state.paymentHandledByOffice && state.paidOnSite !== true && state.paidOnSite !== false) blockers.push(signGate("payment"));
   // Return-visit decision.
   if (state.needsReturnVisit !== true && state.needsReturnVisit !== false) blockers.push(signGate("returnVisit"));
   // Materials packing — only when the section is visible (follow-up visit).
@@ -3215,7 +3217,7 @@ function renderPreSignChecklist({ name, ack, drawn, bonusGateOk }) {
     cfOk = !document.querySelectorAll('#techCarryForwardList [data-deferred-id]').length;
   }
   // Payment + materials gates promoted from post-sign per the brief.
-  const paymentOk = state.paidOnSite === true || state.paidOnSite === false;
+  const paymentOk = state.paymentHandledByOffice || state.paidOnSite === true || state.paidOnSite === false;
   // Materials gate only applies when the materials section is currently
   // visible (i.e. this is a follow-up visit with a packing list). When
   // hidden, treat the gate as satisfied so non-followup WOs aren't
@@ -5912,6 +5914,10 @@ function renderPaymentBlock() {
   const noRadio = document.getElementById("techPayCapturedNo");
   if (yesRadio) yesRadio.checked = state.paidOnSite === true;
   if (noRadio)  noRadio.checked  = state.paidOnSite === false;
+  const payFieldset = document.querySelector("#techPaymentSection .tech-payment-captured");
+  const handledNote = document.getElementById("techPaymentHandled");
+  if (payFieldset) payFieldset.hidden = Boolean(state.paymentHandledByOffice);
+  if (handledNote) handledNote.hidden = !state.paymentHandledByOffice;
   // v35 — labour hours field. Reflect persisted value into the input.
   // The hint line below the input shows the auto-suggestion derived
   // from (departedAt - arrivedAt) when both are set — tech can use it

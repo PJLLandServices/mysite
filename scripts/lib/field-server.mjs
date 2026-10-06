@@ -130,7 +130,15 @@ export async function bootServer({ port, env = {}, seedData = null, preload = []
       return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : [];
     },
     writeData: (name, value) => fs.writeFileSync(path.join(DATA, `${name}.json`), JSON.stringify(value, null, 2)),
-    outbox: () => fs.readFileSync(OUTBOX, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)),
+    // Every entry is one line ending "\n" (stub-outbound's log). A read can
+    // land while the server is mid-append, so a final piece with no "\n" yet
+    // is an entry still being written: leave it for the next read rather than
+    // parse half a line (journey-2 crashed on exactly that, 2026-10-05).
+    outbox: () => {
+      const lines = fs.readFileSync(OUTBOX, "utf8").split("\n");
+      lines.pop(); // "" after the last complete entry, or the one still being written
+      return lines.filter(Boolean).map((l) => JSON.parse(l));
+    },
     // The signed-in session's cookie, for a client the test drives itself
     // (scripts/perf-field-sync.mjs runs the app's own transport).
     cookie: () => cookie,

@@ -35,6 +35,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const partAlias = require("./part-alias");
 const { withPurchasingLock, atomicWrite, assertNotHeld, holdFor, PurchasingError } = require("./purchasing-store");
 
 const FILE = path.join(__dirname, "..", "data", "material-lists.json");
@@ -123,6 +124,39 @@ function hydrateLine(line) {
     frozenPriceCents,
     notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : ""
   };
+}
+
+// ---- Retired part numbers (Patrick, 2026-10-05) -----------------------
+//
+// A duplicate catalog part merged into its canonical part is no longer a
+// part, but a browser tab opened before the merge still has it and can
+// send a line carrying the retired number. Every incoming line is passed
+// through part-alias.canonical() on the way IN, so the list stores the
+// canonical part — never "Unknown SKU".
+//   * A line already stored with purchasing provenance is history and is
+//     NEVER rewritten (it could not hold a retired number anyway: the
+//     number was unreferenced when it was retired).
+//   * If the save also carries a plain editable Need line for the canonical
+//     part, the two become one line and their quantities add.
+function canonicalizeIncomingLines(lines, storedLines = []) {
+  if (!Array.isArray(lines)) return lines;
+  const protectedIds = new Set((storedLines || []).map(hydrateLine).filter(isPurchasingProtected).map((l) => l.id));
+  const plainNeed = (l) => l && (l.status == null || l.status === "need") && !l.poId && l.frozenPriceCents == null;
+  const out = [];
+  for (const line of lines) {
+    const sku = typeof line?.sku === "string" ? line.sku.trim() : "";
+    const to = partAlias.canonical(sku);
+    if (!sku || to === sku || protectedIds.has(line.id)) { out.push(line); continue; }
+    const rewritten = { ...line, sku: to };
+    const twin = plainNeed(rewritten) ? out.find((l) => (typeof l?.sku === "string" ? l.sku.trim() : "") === to && plainNeed(l) && !protectedIds.has(l.id)) : null;
+    if (twin) {
+      twin.qty = Math.min(9999, (Math.floor(Number(twin.qty)) || 1) + (Math.floor(Number(rewritten.qty)) || 1));
+      if (!twin.notes && rewritten.notes) twin.notes = rewritten.notes;
+      continue;
+    }
+    out.push(rewritten);
+  }
+  return out;
 }
 
 function blankList() {
@@ -274,7 +308,7 @@ async function create({
   rec.address = String(address || "").trim().slice(0, 400);
   rec.notes = String(notes || "").slice(0, 4000);
   rec.createdBy = String(createdBy || "admin").slice(0, 80);
-  rec.lineItems = Array.isArray(lineItems) ? lineItems.map(hydrateLine) : [];
+  rec.lineItems = Array.isArray(lineItems) ? canonicalizeIncomingLines(lineItems).map(hydrateLine) : [];
   rec.status = deriveStatus(rec.lineItems, rec.status);
   rec.history = [{ ts: nowIso(), action: "created", by: rec.createdBy, note: rec.name || "" }];
   records.unshift(rec);
@@ -432,6 +466,9 @@ async function update(id, patch = {}) {
   }
 
   let lineItemsChanged = false;
+  // Retired part numbers resolve to their canonical part before anything
+  // else looks at the lines (canonicalizeIncomingLines).
+  if (Array.isArray(patch.lineItems)) patch = { ...patch, lineItems: canonicalizeIncomingLines(patch.lineItems, current.lineItems) };
   if (Array.isArray(patch.lineItems)) {
     // A lineItems write is the whole list, so it could silently drop a
     // line's `status`, `poId` and `frozenPriceCents` — the record that
@@ -652,6 +689,7 @@ module.exports = {
   resolveLineUnitPriceCents,
   protectedLineViolations,
   isPurchasingProtected,
+  canonicalizeIncomingLines,
   purchasingTransitionError,
   purchasingClaims,
   hydrateLine,

@@ -25,6 +25,7 @@ const PDFDocument = require("pdfkit");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const { INVOICE_DISCLAIMERS } = require("./invoices");
+const { resolvePublicBaseUrl } = require("./public-base-url");
 
 // ---- Brand palette (matches _design/invoice-pdf-preview.html) -------
 const GREEN = "#1B4D2E";
@@ -45,7 +46,6 @@ const PDF_METHOD_LABELS = {
   other: "Payment"
 };
 const AMBER = "#E07B24";
-const DANGER = "#B23A3A";
 const SUCCESS = "#2F7A4A";
 
 const HST_RATE = 0.13;
@@ -291,6 +291,13 @@ function normalize(raw) {
     noteToCustomer,
     disclaimers,
     portalToken: inv.portalToken || null,
+    // PJL's own pay page for this invoice (P-PJL-22 B): the PDF's
+    // clickable link. Never a processor URL — the page decides what it
+    // will take (invoices.payBlockReason): a card while payable, "Paid"
+    // once paid, nothing for a draft, held or reconciliation invoice.
+    payUrl: inv.paymentToken && inv.id
+      ? `${resolvePublicBaseUrl()}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
+      : null,
     eTransferEmail: inv.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
     // Price revision (invoice-revise, Sep 2026). When the invoice has
     // been revised after sending, the PDF carries a REVISED marker in the
@@ -309,19 +316,33 @@ function normalize(raw) {
   };
 }
 
-// ---- Status pill styling --------------------------------------------
-// Resolve the visible status label + colour. "Overdue" is derived from
-// status=sent + today > dueAt — never stored.
+// ---- Status stamp ---------------------------------------------------
+// THE rule for what the stamp under the totals says (P-PJL-22 A). Every
+// status has its own words; nothing falls through to "Draft" (a part-paid
+// invoice used to). "Overdue" is gone from the stamp: invoices store no
+// due date, so "due on completion" made every copy drawn after the
+// creation instant read OVERDUE — every resend, and the first send once
+// it rendered as sent. DRAFT is only ever the office's preview: every
+// path that emails a PDF renders customerCopy() first.
 function resolveStatus(inv) {
-  const dueAt = new Date(inv.dueAt);
-  const isOverdue = inv.status === "sent"
-    && dueAt instanceof Date && !Number.isNaN(dueAt.getTime())
-    && Date.now() > dueAt.getTime();
-  if (isOverdue) return { label: "Overdue", color: DANGER, dateIso: inv.dueAt };
-  if (inv.status === "paid")  return { label: "Paid",  color: SUCCESS, dateIso: inv.paidAt || inv.sentAt || inv.dueAt };
-  if (inv.status === "sent")  return { label: "Sent",  color: GREEN,   dateIso: inv.sentAt || inv.issuedAt };
-  if (inv.status === "void")  return { label: "Void",  color: TEXT_MUTED, dateIso: inv.issuedAt };
+  if (inv.status === "paid") return { label: "Paid", color: SUCCESS, dateIso: inv.paidAt || inv.sentAt || inv.issuedAt };
+  if (inv.status === "void") return { label: "Void", color: TEXT_MUTED, dateIso: inv.issuedAt };
+  if (inv.status === "partially_paid") {
+    const last = (inv.payments || []).map((p) => p.receivedAt).filter(Boolean).sort().pop();
+    return { label: "Part paid", color: GREEN, dateIso: last || inv.sentAt || inv.issuedAt };
+  }
+  if (inv.status === "sent") return { label: "Payment due", color: GREEN, dateIso: inv.sentAt || inv.issuedAt };
   return { label: "Draft", color: TEXT_MUTED, dateIso: inv.issuedAt };
+}
+
+// The invoice as the customer's copy shows it (P-PJL-22 A). A draft
+// being emailed is drawn as what it is about to be — sent, dated now —
+// while the record itself stays a draft until the email has gone (the
+// caller commits status=sent only after sendMail succeeds, so a failed
+// email leaves it unsent). Anything already out of draft is unchanged.
+function customerCopy(inv, { at = new Date().toISOString() } = {}) {
+  if (!inv || (inv.status || "draft") !== "draft") return inv;
+  return { ...inv, status: "sent", sentAt: inv.sentAt || at };
 }
 
 // ---- Renderer -------------------------------------------------------
@@ -711,16 +732,38 @@ function drawBottomSplit(doc, inv) {
   doc.text("Ways to pay", leftX, startY);
   let ly = doc.y + 4;
 
+  // P-PJL-22 B: the "link below" is a real link now, to PJL's own pay
+  // page (inv.payUrl). One annotation; the full address is printed small
+  // beneath it for a paper copy. No token yet (an office preview) → no
+  // link and no promise of one.
+  const settled = inv.status === "paid";
+  const voided = inv.status === "void";
   doc.font(fontBody()).fontSize(10).fillColor(TEXT);
-  doc.text("All major credit cards accepted via the secure payment link below.",
-    leftX, ly, { width: leftW });
-  ly = doc.y + 4;
-
-  doc.font(fontBodyBold()).fontSize(10).fillColor(TEXT);
-  doc.text("E-Transfer: ", leftX, ly, { continued: true });
-  doc.font(fontBody()).fillColor(TEXT);
-  doc.text(inv.eTransferEmail, { width: leftW });
-  ly = doc.y + 14;
+  if (voided) {
+    doc.text("This invoice has been voided. There is nothing to pay.", leftX, ly, { width: leftW });
+    ly = doc.y + 14;
+  } else {
+    doc.text(settled ? "Payment received — thank you."
+      : inv.payUrl ? "All major credit cards accepted via the secure payment link below."
+        : "Pay online from the link in your invoice email.", leftX, ly, { width: leftW });
+    ly = doc.y + 4;
+    if (inv.payUrl) {
+      doc.font(fontBodyBold()).fontSize(10.5).fillColor(GREEN);
+      doc.text(settled ? "View this invoice online" : "View and pay online", leftX, ly,
+        { width: leftW, link: inv.payUrl, underline: true });
+      ly = doc.y + 1;
+      doc.font(fontBody()).fontSize(7).fillColor(TEXT_MUTED);
+      doc.text(inv.payUrl, leftX, ly, { width: leftW });
+      ly = doc.y + 4;
+    }
+    if (!settled) {
+      doc.font(fontBodyBold()).fontSize(10).fillColor(TEXT);
+      doc.text("E-Transfer: ", leftX, ly, { continued: true });
+      doc.font(fontBody()).fillColor(TEXT);
+      doc.text(inv.eTransferEmail, { width: leftW });
+    }
+    ly = doc.y + 14;
+  }
 
   // Note to customer
   doc.font(fontHeading(doc)).fontSize(13).fillColor(GREEN);
@@ -800,12 +843,13 @@ function drawBottomSplit(doc, inv) {
   ry += 8;
   const status = resolveStatus(inv);
   doc.font(fontHeading(doc)).fontSize(15).fillColor(status.color);
+  // 125 wide, one line: "PAYMENT DUE" must not wrap under its date.
   doc.text(status.label.toUpperCase(), rightX, ry, {
-    characterSpacing: 1.2, width: 90
+    characterSpacing: 1.2, width: 125, lineBreak: false
   });
   doc.font(fontBody()).fontSize(9).fillColor(TEXT_MUTED);
-  doc.text(fmtDate(status.dateIso), rightX + 90, ry + 2, {
-    width: rightW - 90, align: "right", features: ["tnum"]
+  doc.text(fmtDate(status.dateIso), rightX + 125, ry + 2, {
+    width: rightW - 125, align: "right", features: ["tnum"]
   });
 
   // Move cursor below whichever column ended lower.
@@ -843,4 +887,4 @@ function drawFooter(doc) {
   doc.page.margins.bottom = restoreBottom;
 }
 
-module.exports = { generateInvoicePdf };
+module.exports = { generateInvoicePdf, customerCopy };

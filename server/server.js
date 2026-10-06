@@ -42,6 +42,9 @@ const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+// [mem] log lines — so an out-of-memory restart can be traced to a climb
+// or to a request. Measures only; see lib/memory-log.js.
+const memoryLog = require("./lib/memory-log").createMemoryLog();
 const woPhotoEdits = require("./lib/wo-photo-edits");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
@@ -63,6 +66,7 @@ const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const pricingLib = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
+const woSettlement = require("./lib/wo-settlement");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
@@ -137,6 +141,8 @@ const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
 const changeOrdersView = require("./lib/change-orders-view");
 const financialsView = require("./lib/financials-view");
+const projectOverview = require("./lib/project-overview");
+const moneyVisibility = require("./lib/money-visibility");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -165,7 +171,7 @@ const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
 const quoteNarratives = require("./lib/quote-narratives");
-const { generateInvoicePdf } = require("./lib/invoice-pdf");
+const { generateInvoicePdf, customerCopy } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDerivatives } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
 const { warrantyForWorkOrder } = require("./lib/warranty");
@@ -181,6 +187,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
+const partAlias = require("./lib/part-alias");
 const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
 // Send / receive / cancel: the PO and its list lines in one commit.
@@ -563,6 +570,12 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   }
   // Merge catalog overrides onto baseline → assigns to PARTS.parts.
   PARTS.parts = partsLib.mergeOverrides(BASELINE_PARTS, catalogOverrides);
+  // Retired duplicates: { retiredSku: canonicalSku }. Published to
+  // lib/part-alias so every door that takes a part number (Material List
+  // saves, work-order materials, PO/RFQ planning, project materials)
+  // resolves it the same way.
+  PARTS.merged = partsLib.aliasMap(catalogOverrides);
+  partAlias.publish(PARTS.merged);
   // Layer supplier assignments on top. mergeIntoCatalog mutates in place
   // and also normalises missing supplierIds to [].
   partSuppliers.mergeIntoCatalog(PARTS.parts, supplierOverrides);
@@ -595,6 +608,35 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
     for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
   }
   if (!initial) CATALOG_VERSION++;
+}
+
+// Every stored record that names a part number, by store. Used before a
+// duplicate part is retired: a number that a Material List, purchase order,
+// RFQ, project design, work order or invoice still points at is history
+// and must keep meaning what it meant. Reads the JSON stores directly and
+// matches the number as a whole quoted value, so "405-007" never matches
+// "1405-0071".
+function findPartReferences(sku) {
+  const needle = JSON.stringify(String(sku));
+  const stores = { materialLists: "material-lists.json", purchaseOrders: "purchase-orders.json", quoteRequests: "quote-requests.json", projects: "projects.json", workOrders: "work-orders.json", invoices: "invoices.json" };
+  const out = { total: 0 };
+  for (const [name, file] of Object.entries(stores)) {
+    let ids = [];
+    try {
+      const p = path.join(__dirname, "data", file);
+      if (fsSync.existsSync(p)) {
+        const records = JSON.parse(fsSync.readFileSync(p, "utf8") || "[]");
+        ids = (Array.isArray(records) ? records : []).filter((r) => JSON.stringify(r).includes(needle)).map((r) => r && r.id).filter(Boolean);
+      }
+    } catch (err) {
+      // An unreadable store can't prove the number is unreferenced.
+      throw new Error(`Couldn't read ${file} to check references (${err.message}).`);
+    }
+    out[name] = ids;
+    out.total += ids.length;
+  }
+  out.summary = Object.entries(out).filter(([k, v]) => Array.isArray(v) && v.length).map(([k, v]) => `${v.length} in ${k}`).join(", ") || "none";
+  return out;
 }
 
 // One-time seed of per-supplier prices from quote requests that were
@@ -693,7 +735,15 @@ function sendRecoveryRequired(res, err) {
 }
 
 function sendJson(res, status, payload) {
-  const body = JSON.stringify(payload, null, 2);
+  // A technician's session never receives a visit's settlement (P-PJL-22
+  // D): set at the auth gate, applied to every JSON reply, so no route can
+  // leak it by returning a work order.
+  // Only walked when the reply mentions one, so ordinary replies pay
+  // nothing for it.
+  let body = JSON.stringify(payload, null, 2);
+  if (res.__techView && /"paid_in_full"|"paidInFull": true/.test(body)) {
+    body = JSON.stringify(woSettlement.techView(payload), null, 2);
+  }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store"
@@ -1637,6 +1687,9 @@ function needsAuth(method, pathname) {
   // routes above). MUST stay ABOVE the generic /api/work-orders rule:
   // needsAuth returns on first match.
   if (/^\/api\/work-orders\/[^/]+\/service-fee-waiver$/.test(pathname)) return "admin";
+  // Paid in Full (P-PJL-22 D) is the office's to record; a tech can
+  // neither set nor see it. Above the generic rule, like the waiver.
+  if (/^\/api\/work-orders\/[^/]+\/settlement$/.test(pathname)) return "admin";
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
@@ -3529,7 +3582,8 @@ async function readRawBody(req, { maxBytes = 1_000_000 } = {}) {
 // record has lines, no invoice, and a $0 total. A missing record or a
 // failed invoice draft is NOT no-charge — that visit still owes money.
 function isNoChargeServiceRecord(record) {
-  return Boolean(record) && !record.invoiceId
+  // Paid in Full is never No Charge (P-PJL-22 D) — it was paid for.
+  return Boolean(record) && !record.invoiceId && !woSettlement.isPaidInFull(record)
     && Array.isArray(record.lineItems) && record.lineItems.length > 0
     // From the LINES, not record.total — a failed draft also leaves total 0.
     && !(invoices.totalsForLines(record.lineItems).total > 0);
@@ -4441,7 +4495,9 @@ async function customerPortalSections(lead) {
         reportUrl: (w.status === "completed" || (Array.isArray(w.reportSnapshots) && w.reportSnapshots.length))
           ? `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(w.id)}`
           : null,
-        invoice: inv ? invoiceView(inv) : null
+        invoice: inv ? invoiceView(inv) : null,
+        // P-PJL-22 D: a prepaid visit says so, with no amount.
+        paidInFull: !inv && woSettlement.isPaidInFull(w)
       };
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
@@ -7090,6 +7146,156 @@ async function billingPreviewFor(proj) {
     note: src.note
   };
 }
+
+// ---- The project workspace's read models (2026-10-02) ----------------
+//
+// One builder per workspace tab. Each tab's GET route returns exactly what
+// its builder returns, and the Overview (GET /api/projects/:id/overview)
+// calls the SAME builders — so an Overview figure cannot disagree with the
+// tab it summarises: it is that tab's figure, read from that tab's model.
+
+// Materials tab — lib/project-materials.js over the job's lists, the POs
+// they produced and the build WOs' consumption, priced from the effective
+// parts catalog.
+async function projectMaterialsModel(proj) {
+  const lists = await materialLists.list({ parentType: "project", parentId: proj.id, includeArchived: true });
+  // Every PO that came from any of this job's lists. Receipts are counted
+  // from these, not from a line's "have" status, which a human can set by
+  // hand.
+  // A PO belongs to the job when its own list links, or any of its
+  // lines, name one of the job's lists (purchase-orders
+  // purchaseOrdersForLists) — each PO once, nothing inferred.
+  const pos = purchaseOrders.purchaseOrdersForLists(await purchaseOrders.list({}), lists.map((l) => l.id));
+  const buildWos = await workOrders.listBuildWosForProject(proj.id);
+  return projectMaterials.describeProject({
+    lists, purchaseOrders: pos, buildWos,
+    partsMap: (PARTS && PARTS.parts) || {}
+  });
+}
+
+// Change Orders tab — lib/change-orders-view.js over the shared "open"
+// rule, the quote chain and the completion check's own blockers.
+async function projectChangeOrdersModel(proj, preflight = null) {
+  const chainInfo = await projects.resolveProjectQuote(proj);
+  const pf = preflight || await projects.completionPreflight(proj.id);
+  return changeOrdersView.describeChangeOrders({
+    project: proj,
+    chainInfo,
+    blockers: pf.blockers || [],
+    stageOf: projects.scopeChangeStage,
+    describeAgreement: projects.describeAgreement,
+    revisionStateOf: projects.scopeChangeRevisionState
+  });
+}
+
+// Daily Records tab — lib/daily-records.js over the build WOs.
+async function projectDailyRecordsModel(proj) {
+  const buildWos = await workOrders.listBuildWosForProject(proj.id);
+  return dailyRecords.describeProject(buildWos, { project: proj });
+}
+
+// Financials tab — lib/financials-view.js over the signed agreement, the
+// job's invoices (projects.invoicesForProject), the deposit quote, the
+// shared billing preview and the completion check's money blockers.
+async function projectFinancialsModel(proj, preflight = null) {
+  const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
+  const projInvoices = await projects.invoicesForProject(proj);
+  const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+  let billing;
+  try { billing = await billingPreviewFor(proj); } catch (err) {
+    billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
+  }
+  const pf = preflight || await projects.completionPreflight(proj.id);
+  return financialsView.describeFinancials({
+    project: proj,
+    agreement,
+    invoices: projInvoices,
+    depositQuote,
+    billing,
+    blockers: pf.blockers || [],
+    methodLabels: invoices.PAYMENT_METHOD_LABELS
+  });
+}
+
+// The quote the project is linked to, resolved to the current version of
+// its revision chain (PJL-54). Post-acceptance the anchor is
+// sourceQuoteId; pre-acceptance, a System-Builder-originated job carries
+// systemDesign.linkedQuoteId — which may itself be stale, naming an early
+// revision that's since been superseded — so the FULL chain is walked.
+async function projectLinkedQuote(proj) {
+  const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
+  if (!quoteAnchorId) return null;
+  try {
+    const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
+    if (!resolved) return null;
+    const { current, chain } = resolved;
+    const isProposal = current.type === "project_proposal";
+    return {
+      id: current.id,
+      version: current.version || 1,
+      status: current.status,
+      type: current.type,
+      presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
+      // A send only ever completes once markSentForApproval's gate has
+      // matched the confirmed mode to the live one (PJL-48) — so any
+      // project_proposal quote that made it past "draft" was, by
+      // construction, confirmed for the mode it's showing right now.
+      confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+      subtotal: Number(current.subtotal) || 0,
+      hst: Number(current.hst) || 0,
+      total: Number(current.total) || 0,
+      lineItems: Array.isArray(current.lineItems)
+        ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
+        : [],
+      // The deposit/balance invoice is a real, populated field — but it
+      // lives on the INVOICE (invoice.quoteId), never on the quote itself
+      // (quote.depositInvoiceId is a schema placeholder nothing has ever
+      // written to — caught live, 2026-09-21, Patrick: "this invoice is
+      // part of the project. it has the deposit on it," for one that this
+      // field was reading as null). The project route fills it from the
+      // job's invoices.
+      depositInvoiceId: null,
+      chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+    };
+  } catch (err) { return null; /* tolerate — panel just doesn't render */ }
+}
+
+// System Builder summary (2026-09-21) — station/valve/area counts and the
+// last-saved date, from data already on the project record. Stations,
+// valves and areas are three different numbers; this used to send
+// `zoneCount: areas.length`, which agreed with the builder only on jobs
+// where no area produced several valves and no drip beds were grouped.
+// The counts come from the same engine the builder runs.
+function projectSiteBuilderSummary(proj) {
+  if (!(proj.systemDesign && Array.isArray(proj.systemDesign.areas))) return null;
+  // The save timestamp comes from the most recent system_design_saved
+  // history entry (systemDesign itself carries no timestamp — the server
+  // only size-caps and timestamps the HISTORY entry, per the comment on
+  // projects.update()).
+  const lastSave = (proj.history || [])
+    .filter((h) => h.action === "system_design_saved")
+    .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
+  const counts = countSystemDesign(proj.systemDesign) ||
+                 { stationCount: 0, valveCount: 0, areaCount: proj.systemDesign.areas.length };
+  return {
+    stationCount: counts.stationCount,   // programmed outputs on the controller
+    valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
+    areaCount: counts.areaCount,         // traced landscape areas
+    lastSavedAt: lastSave ? lastSave.ts : null,
+    // The saved plan, station by station, so the workspace can SHOW it
+    // rather than only count it (2026-09-24). Same engine pass as the
+    // counts above, so the list and the totals cannot disagree.
+    stations: describeSystemDesign(proj.systemDesign)
+  };
+}
+
+// Who may see a job's money — the office only (Patrick, 2026-10-02). Read
+// from the session on every /api/projects/* read; lib/money-visibility.js
+// holds the rule and the redactions.
+async function viewerCanSeeMoney(req) {
+  return moneyVisibility.canSeeMoney(await readSession(req));
+}
+const OFFICE_ONLY_ERROR = { ok: false, code: "office_only", errors: ["Financial figures are office-only."] };
 
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
@@ -11319,7 +11525,10 @@ async function handleApi(req, res, pathname) {
         quickbooksInvoiceId: qbInvoiceId || inv.quickbooksInvoiceId,
         paymentToken: paymentToken || inv.paymentToken
       };
-      const pdfBuffer = await generateInvoicePdf(renderInv);
+      // P-PJL-22 A: the customer's copy, never the draft. A first send is
+      // drawn as sent, dated now; the record flips to sent only after the
+      // email below goes, so a failed email still leaves a draft.
+      const pdfBuffer = await generateInvoicePdf(customerCopy(renderInv));
 
       // Build the public payment URL the customer clicks from the email.
       // resolvePublicBaseUrl() — env-var-authoritative, then the canonical
@@ -13987,7 +14196,10 @@ async function handleApi(req, res, pathname) {
       categories: PARTS.categories || [],
       manufacturers: PARTS.manufacturers || [],
       parts: PARTS.parts || {},
-      service_materials: PARTS.service_materials || {}
+      service_materials: PARTS.service_materials || {},
+      // { retiredSku: canonicalSku } — numbers merged into another part.
+      // They are not in `parts`; clients resolve a stored number here.
+      merged: PARTS.merged || {}
     };
     if (wantAdminMeta) {
       // Read the override file fresh so the response always reflects
@@ -14004,7 +14216,9 @@ async function handleApi(req, res, pathname) {
           // Per-SKU edit payload so the UI can show "original price"
           // tooltips on the modified indicator (and "Restore baseline"
           // affordance for individual fields).
-          edited: overrides.edited || {}
+          edited: overrides.edited || {},
+          // The full markers (into, at, by, supplierId, the retired record).
+          merged: overrides.merged || {}
         };
         // Baseline snapshot for the modified-indicator hover ("price
         // changed from $X.XX"). Only the editable fields, only the
@@ -14166,6 +14380,44 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/parts/:sku/merge-into { into, supplierId }  (admin)
+  //   Retire :sku as a duplicate of `into` — reversible (lib/parts.js
+  //   mergeInto). Writes only the marker: the supplier offer, the supplier
+  //   assignment and the photo are separate, explicit steps. Refused while
+  //   anything still references :sku (a list, PO, RFQ, project design, work
+  //   order or invoice): history is never rewritten to make a merge fit.
+  // POST /api/parts/:sku/unmerge  (admin) — put the retired part back.
+  const partMergeMatch = pathname.match(/^\/api\/parts\/([^/]+)\/(merge-into|unmerge)$/);
+  if (partMergeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const sku = decodeURIComponent(partMergeMatch[1]);
+      const by = await actorLabel(req);
+      if (partMergeMatch[2] === "unmerge") {
+        const result = await partsLib.unmerge(sku);
+        rebuildCatalogFromOverrides();
+        await settings.recordAudit({ who: by, action: "catalog.unmerge", note: `Un-merged ${sku} (was merged into ${result.into})`, after: result });
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const into = String(payload.into || "").trim();
+      const references = findPartReferences(sku);
+      if (references.total > 0) {
+        return sendJson(res, 409, { ok: false, code: "sku_referenced", references,
+          errors: [`${sku} is still referenced (${references.summary}). A part that records point at can't be retired.`] });
+      }
+      const supplierId = payload.supplierId ? String(payload.supplierId) : ((PARTS.parts[sku] && PARTS.parts[sku].supplierIds && PARTS.parts[sku].supplierIds[0]) || null);
+      const result = await partsLib.mergeInto(BASELINE_PARTS, sku, into, { by, supplierId });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "catalog.merge", note: `Merged ${sku} into ${into} (retired, reversible)`, after: { alias: result.alias, into: result.into, supplierId: result.supplierId, origin: result.origin } });
+      return sendJson(res, 200, { ok: true, alias: result.alias, into: result.into, supplierId: result.supplierId, origin: result.origin, at: result.at });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, code: err.code || undefined, errors: [err.message || "Couldn't merge the part."] });
+    }
+  }
+
   // ---------- Part photos (P-PJL-35, FLOW-47) ----------------------------
   // One verified photo per real-world fitting, shown only in the parts
   // picker. lib/part-photos.js owns the one rule (photoStateFor) for
@@ -14233,7 +14485,7 @@ async function handleApi(req, res, pathname) {
     const session = await requireAdmin(req);
     if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
-    const sku = decodeURIComponent(partPhotoSkuMatch[1]);
+    const sku = partAlias.canonical(decodeURIComponent(partPhotoSkuMatch[1]));   // a retired number answers for the part it was merged into
     const action = partPhotoSkuMatch[2];
     const part = PARTS.parts[sku];
     if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
@@ -14511,7 +14763,7 @@ async function handleApi(req, res, pathname) {
     const session = await requireAdmin(req);
     if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
-    const sku = decodeURIComponent(photoReviewSkuMatch[1]);
+    const sku = partAlias.canonical(decodeURIComponent(photoReviewSkuMatch[1]));
     const part = PARTS.parts[sku];
     if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
     const by = await actorLabel(req);
@@ -14612,13 +14864,17 @@ async function handleApi(req, res, pathname) {
       if (rows.length === 0) {
         return sendJson(res, 400, { ok: false, errors: ["No rows in the uploaded file."] });
       }
-      const diff = partsLib.computeImportDiff(PARTS.parts || {}, rows, { includeDeletions });
+      // Rows whose number was merged into another part come back as
+      // diff.aliased: they update that supplier's offer on the canonical
+      // part and are never re-added as parts.
+      const mergedMarkers = (await partsLib.readOverrides()).merged || {};
+      const diff = partsLib.computeImportDiff(PARTS.parts || {}, rows, { includeDeletions, merged: mergedMarkers });
       const importId = "imp_" + Math.random().toString(36).slice(2, 12);
       // Stage for 15 min. Cleanup runs on next request via the timestamp
       // check below.
       importStaging.set(importId, {
         ts: Date.now(),
-        staged: { added: diff.added, edited: diff.edited, deleted: diff.deleted }
+        staged: { added: diff.added, edited: diff.edited, deleted: diff.deleted, aliased: diff.aliased || {} }
       });
       cleanupImportStaging();
       return sendJson(res, 200, { ok: true, importId, diff });
@@ -14644,12 +14900,32 @@ async function handleApi(req, res, pathname) {
         payload.selections || {},
         { allowedCategories: categoriesAllowedSet() }
       );
+      // Rows that named a retired part number: record the price as that
+      // supplier's offer on the canonical part (the retired number is the
+      // supplier's part number there). Applied unless the client unticked
+      // it; a row with no price or no known supplier is reported, not guessed.
+      counts.offersUpdated = 0;
+      counts.aliasedSkipped = [];
+      const aliasedRows = entry.staged.aliased || {};
+      const wantAliased = Array.isArray(payload.selections && payload.selections.aliased)
+        ? new Set(payload.selections.aliased) : new Set(Object.keys(aliasedRows));
+      const bySupplier = new Map();
+      for (const [alias, row] of Object.entries(aliasedRows)) {
+        if (!wantAliased.has(alias)) continue;
+        if (!row.supplierId || row.priceCents == null) { counts.aliasedSkipped.push({ sku: alias, into: row.into, reason: !row.supplierId ? "no supplier on the merge record" : "no price in the file" }); continue; }
+        if (!bySupplier.has(row.supplierId)) bySupplier.set(row.supplierId, {});
+        bySupplier.get(row.supplierId)[row.into] = { priceCents: row.priceCents, supplierSku: alias };
+      }
+      for (const [supplierId, prices] of bySupplier.entries()) {
+        const { recorded } = await partSupplierPrices.recordSupplierPrices(supplierId, prices, { source: "import" });
+        counts.offersUpdated += Object.keys(recorded || {}).length;
+      }
       importStaging.delete(payload.importId);
       rebuildCatalogFromOverrides();
       await settings.recordAudit({
         who: "admin",
         action: "catalog.import",
-        note: `Imported xlsx: ${counts.added} added, ${counts.edited} edited, ${counts.deleted} deleted`,
+        note: `Imported xlsx: ${counts.added} added, ${counts.edited} edited, ${counts.deleted} deleted${counts.offersUpdated ? `, ${counts.offersUpdated} supplier offer(s) updated on merged parts` : ""}`,
         after: counts
       });
       return sendJson(res, 200, { ok: true, counts });
@@ -15163,6 +15439,11 @@ async function handleApi(req, res, pathname) {
         const wo = await workOrders.get(id);
         if (!wo) return [404, { ok: false, errors: ["Work order not found."] }];
         if (!wo.propertyId) return [422, { ok: false, errors: ["WO has no linked property — link a property first."] }];
+        // Paid in Full (P-PJL-22 D): the customer prepaid; there is nothing
+        // to invoice. Clear the settlement first if that was a mistake.
+        if (woSettlement.isPaidInFull(wo)) {
+          return [409, { ok: false, code: "paid_in_full", errors: ["Paid in full — this visit was prepaid, so there is no invoice to draft."] }];
+        }
         // Re-signing: no new bill for a revised scope the customer hasn't signed.
         if (workOrders.awaitsNewSignature(wo)) {
           return [409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order before invoicing it."] }];
@@ -16110,6 +16391,49 @@ async function handleApi(req, res, pathname) {
   // ADMIN ONLY, like the connection token and the payment link: starting a
   // charge is an admin action. /api/invoices is fenced at "user", so the
   // route checks the role itself.
+  // POST /api/invoices/:id/collect-now — "Take payment now instead"
+  // (P-PJL-22 C). Admin only: a Bill-later draft is opened for payment on
+  // site — still a draft, not emailed — so Tap to Pay and Take payment now
+  // work without sending the invoice first. invoices.switchToCollectNow
+  // keeps every on-site guard (price, signature, reconciliation, $0).
+  // PUT    /api/work-orders/:id/settlement  { type: "paid_in_full", reference }
+  // DELETE /api/work-orders/:id/settlement
+  // Paid in Full (P-PJL-22 D). Admin only (needsAuth + here). The work
+  // order's history keeps who set it and when; work-orders.setSettlement
+  // refuses a visit that has already completed.
+  const woSettlementMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/settlement$/);
+  if (woSettlementMatch && (req.method === "PUT" || req.method === "DELETE")) {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const id = decodeURIComponent(woSettlementMatch[1]);
+      const by = await actorLabel(req);
+      const r = req.method === "PUT"
+        ? await (async () => {
+          const payload = await parseRequestBody(req).catch(() => ({}));
+          return workOrders.setSettlement(id, { type: payload?.type, reference: payload?.reference, by });
+        })()
+        : await workOrders.clearSettlement(id, { by });
+      if (!r.ok) return sendJson(res, r.status || 409, { ok: false, code: r.code, errors: r.errors });
+      return sendJson(res, 200, { ok: true, workOrder: r.workOrder });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't change the settlement."] });
+    }
+  }
+
+  const collectNowMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/collect-now$/);
+  if (collectNowMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const r = await invoices.switchToCollectNow(decodeURIComponent(collectNowMatch[1]), { by: session.uid || "admin" });
+      if (!r.ok) return sendJson(res, r.status || 409, { ok: false, code: r.code, errors: r.errors });
+      return sendJson(res, 200, { ok: true, invoice: r.invoice, unchanged: Boolean(r.unchanged) });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't open this invoice for payment."] });
+    }
+  }
+
   const terminalIntentMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent$/);
   if (terminalIntentMatch && req.method === "POST") {
     try {
@@ -16701,12 +17025,22 @@ async function handleApi(req, res, pathname) {
   }
 
   // PATCH /api/part-suppliers — bulk update many SKUs in one round-trip.
-  // Body: { updates: { "<sku>": ["SUP-001","SUP-002"], ... } }. Pass an
-  // empty array to clear a SKU's assignment.
+  //   { primary: { "<sku>": "SUP-001" | "" } }  set the DEFAULT supplier.
+  //       Reorders; never drops an alternate (lib/part-suppliers
+  //       .withPrimary). This is what the Suppliers page sends.
+  //   { updates: { "<sku>": ["SUP-001","SUP-002"] } }  replace the whole
+  //       list. For callers that mean exactly that; no screen uses it.
   if (req.method === "PATCH" && pathname === "/api/part-suppliers") {
     try {
       const payload = await parseRequestBody(req);
-      const map = await partSuppliers.bulkSet(payload.updates || {});
+      let map;
+      if (payload.primary && typeof payload.primary === "object") {
+        map = await partSuppliers.setPrimaryBulk(payload.primary, {
+          currentFor: (sku) => (PARTS && PARTS.parts && PARTS.parts[sku] && PARTS.parts[sku].supplierIds) || []
+        });
+      } else {
+        map = await partSuppliers.bulkSet(payload.updates || {});
+      }
       // Refresh the in-memory PARTS catalog so the next /api/parts call
       // returns the updated supplierIds (and any concurrent catalog
       // overrides) without a server restart. Goes through the full
@@ -16934,11 +17268,15 @@ async function handleApi(req, res, pathname) {
     // Dashboard show these; they never read the frozen proposalSnapshot or
     // add money up in the browser (2026-09-27).
     const agreements = await projects.agreementsForProjects(all);
-    return sendJson(res, 200, {
+    const listPayload = {
       ok: true,
       projects: all.map((p) => ({ ...p, agreement: agreements.get(p.id) || null })),
-      totals: projects.contractTotals(all, agreements)
-    });
+      totals: projects.contractTotals(all, agreements),
+      viewer: { canSeeMoney: true }
+    };
+    // A technician gets the list without contract values or totals.
+    if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, moneyVisibility.projectListForTech(listPayload));
+    return sendJson(res, 200, listPayload);
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
@@ -17142,49 +17480,7 @@ async function handleApi(req, res, pathname) {
     // been superseded) and walk the FULL chain to the actually-current
     // version. Frontend renders "Quote v3 — sent, Summary total,
     // confirmed" from this without a second round-trip.
-    let linkedQuote = null;
-    const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
-    if (quoteAnchorId) {
-      try {
-        const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
-        if (resolved) {
-          const { current, chain } = resolved;
-          const isProposal = current.type === "project_proposal";
-          linkedQuote = {
-            id: current.id,
-            version: current.version || 1,
-            status: current.status,
-            type: current.type,
-            presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
-            // A send only ever completes once markSentForApproval's gate has
-            // matched the confirmed mode to the live one (PJL-48) — so any
-            // project_proposal quote that made it past "draft" was, by
-            // construction, confirmed for the mode it's showing right now.
-            confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
-            subtotal: Number(current.subtotal) || 0,
-            hst: Number(current.hst) || 0,
-            total: Number(current.total) || 0,
-            lineItems: Array.isArray(current.lineItems)
-              ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
-              : [],
-            // The deposit/balance invoice is a real, populated field —
-            // but it lives on the INVOICE (invoice.quoteId), never on the
-            // quote itself (quote.depositInvoiceId is a schema
-            // placeholder nothing has ever written to — caught live,
-            // 2026-09-21, Patrick: "this invoice is part of the project.
-            // it has the deposit on it," for one that this field was
-            // reading as null). Look it up the right way: every invoice
-            // raised against ANY quote in this job's revision chain (a
-            // deposit is usually raised against whichever version was
-            // actually accepted, not necessarily today's current one).
-            // Prefer the balance invoice if the deposit's already been
-            // paid and superseded by one; else the deposit invoice.
-            depositInvoiceId: null,
-            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
-          };
-        }
-      } catch (err) { /* tolerate — panel just doesn't render */ }
-    }
+    const linkedQuote = await projectLinkedQuote(proj);
 
     // The project's invoices — projects.invoicesForProject, the ONE rule
     // (Financials Fix B, 2026-09-28): tagged with the project, its final
@@ -17230,39 +17526,7 @@ async function handleApi(req, res, pathname) {
       } catch (err) { /* tolerate — Invoice panel just doesn't render */ }
     }
 
-    // System Builder summary (2026-09-21) — zone count + last-saved date
-    // inline, pulled from data already on the project record (no extra
-    // fetch): systemDesign.areas is the builder's own area list; the
-    // save timestamp comes from the most recent system_design_saved
-    // history entry (systemDesign itself carries no timestamp — the
-    // server only size-caps and timestamps the HISTORY entry, per the
-    // comment on projects.update()).
-    let siteBuilderSummary = null;
-    if (proj.systemDesign && Array.isArray(proj.systemDesign.areas)) {
-      const lastSave = (proj.history || [])
-        .filter((h) => h.action === "system_design_saved")
-        .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
-      // Stations, valves and areas are three different numbers, and this
-      // used to send one of them under a name belonging to another:
-      // `zoneCount: areas.length`. An area can produce several valves, and
-      // grouped drip beds collapse several areas onto one — so it agreed
-      // with the builder only on jobs where neither happened. The counts
-      // now come from the same engine the builder runs.
-      const counts = countSystemDesign(proj.systemDesign) ||
-                     { stationCount: 0, valveCount: 0, areaCount: proj.systemDesign.areas.length };
-      siteBuilderSummary = {
-        stationCount: counts.stationCount,   // programmed outputs on the controller
-        valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
-        areaCount: counts.areaCount,         // traced landscape areas
-        lastSavedAt: lastSave ? lastSave.ts : null,
-        // The saved plan, station by station, so the workspace can SHOW it
-        // rather than only count it (2026-09-24). Reading a plan is the
-        // half of the System Builder that has to work on a phone; drawing
-        // one stays a desktop job for now. Same engine pass as the counts
-        // above, so the list and the totals cannot disagree.
-        stations: describeSystemDesign(proj.systemDesign)
-      };
-    }
+    const siteBuilderSummary = projectSiteBuilderSummary(proj);
 
     // The signed agreement — projects.describeAgreement, the SAME function
     // the Change Orders tab reads — so "Contract value" is never an
@@ -17281,7 +17545,23 @@ async function handleApi(req, res, pathname) {
         project: proj, agreement, invoices: projInvoices, depositQuote, methodLabels: invoices.PAYMENT_METHOD_LABELS
       }));
     } catch (err) { /* tolerate — the header shows "—" */ }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing });
+    // The header's "Project progress" — computeProjectMetrics, the Tasks
+    // tab's own figures, rather than a mirror of its rule in the browser
+    // (2026-10-02).
+    let progress = null;
+    try {
+      const m = await projects.computeProjectMetrics(id);
+      progress = { doneTasks: m.doneTasks, totalTasks: m.totalTasks, percentComplete: m.percentComplete };
+    } catch (err) { /* tolerate — the header shows "—" */ }
+    const detailPayload = { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing, progress, viewer: { canSeeMoney: true } };
+    // A technician sees no contract, invoice or payment amount — only
+    // whether the office has billing to deal with.
+    if (!(await viewerCanSeeMoney(req))) {
+      let attention = false;
+      try { attention = moneyVisibility.needsOfficeAttention(await projectFinancialsModel(proj)); } catch (err) { /* no notice */ }
+      return sendJson(res, 200, moneyVisibility.projectDetailForTech(detailPayload, { attention }));
+    }
+    return sendJson(res, 200, detailPayload);
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -17689,21 +17969,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(projectMaterialsMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-
-      const lists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
-      // Every PO that came from any of this job's lists. Receipts are
-      // counted from these, not from a line's "have" status, which a
-      // human can set by hand.
-      const listIds = new Set(lists.map((l) => l.id));
-      const allPos = await purchaseOrders.list({});
-      const pos = allPos.filter((po) =>
-        (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
-      const buildWos = await workOrders.listBuildWosForProject(id);
-
-      const model = projectMaterials.describeProject({
-        lists, purchaseOrders: pos, buildWos,
-        partsMap: (PARTS && PARTS.parts) || {}
-      });
+      const model = await projectMaterialsModel(proj);
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
@@ -17721,17 +17987,9 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(changeOrdersViewMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const chainInfo = await projects.resolveProjectQuote(proj);
-      const preflight = await projects.completionPreflight(id);
-      const model = changeOrdersView.describeChangeOrders({
-        project: proj,
-        chainInfo,
-        blockers: preflight.blockers || [],
-        stageOf: projects.scopeChangeStage,
-        describeAgreement: projects.describeAgreement,
-        revisionStateOf: projects.scopeChangeRevisionState
-      });
-      return sendJson(res, 200, { ok: true, ...model });
+      const model = await projectChangeOrdersModel(proj);
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, { ok: true, ...moneyVisibility.changeOrdersForTech(model) });
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
     }
@@ -17752,8 +18010,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(dailyRecordsMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const buildWos = await workOrders.listBuildWosForProject(id);
-      const model = dailyRecords.describeProject(buildWos, { project: proj });
+      const model = await projectDailyRecordsModel(proj);
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
@@ -18164,7 +18421,8 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, scopeChanges: proj.scopeChangeRequests || [] });
+      const scopeChanges = proj.scopeChangeRequests || [];
+      return sendJson(res, 200, { ok: true, scopeChanges: (await viewerCanSeeMoney(req)) ? scopeChanges : moneyVisibility.stripMoney(scopeChanges) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
     }
@@ -18415,6 +18673,9 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(completionPreflightMatch[1]);
       const checks = await projects.completionPreflight(id);
+      if (!(await viewerCanSeeMoney(req))) {
+        return sendJson(res, 200, { ok: true, checks: { ...checks, blockers: moneyVisibility.redactBlockers(checks.blockers), warnings: moneyVisibility.redactBlockers(checks.warnings) } });
+      }
       return sendJson(res, 200, { ok: true, checks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run preflight."] });
@@ -18491,16 +18752,14 @@ async function handleApi(req, res, pathname) {
             try {
               const invoicePdf = require("./lib/invoice-pdf");
               if (invoicePdf && typeof invoicePdf.generateInvoicePdf === "function") {
-                const pdfDoc = invoicePdf.generateInvoicePdf(invoice);
-                const chunks = [];
-                await new Promise((resolve, reject) => {
-                  pdfDoc.on("data", (c) => chunks.push(c));
-                  pdfDoc.on("end", resolve);
-                  pdfDoc.on("error", reject);
-                });
+                // generateInvoicePdf resolves to a Buffer. This used to read
+                // it as a stream; the TypeError was caught below and every
+                // project-completion email went without its invoice
+                // (P-PJL-22 A5). The customer's copy, never "DRAFT".
+                const pdfBuffer = await invoicePdf.generateInvoicePdf(invoicePdf.customerCopy(invoice));
                 attachments.push({
                   filename: `PJL-Invoice-${invoice.id}.pdf`,
-                  content: Buffer.concat(chunks),
+                  content: pdfBuffer,
                   contentType: "application/pdf"
                 });
               }
@@ -18579,6 +18838,7 @@ async function handleApi(req, res, pathname) {
   if (tandmPreviewMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(tandmPreviewMatch[1]);
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       return sendJson(res, 200, { ok: true, ...(await billingPreviewFor(proj)) });
@@ -18598,28 +18858,61 @@ async function handleApi(req, res, pathname) {
   if (financialsMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(financialsMatch[1]);
+      // Office only (2026-10-02): a technician is refused, not redacted —
+      // there is nothing on this tab but money.
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
-      const projInvoices = await projects.invoicesForProject(proj);
-      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
-      let billing;
-      try { billing = await billingPreviewFor(proj); } catch (err) {
-        billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
-      }
-      const preflight = await projects.completionPreflight(id);
-      const model = financialsView.describeFinancials({
-        project: proj,
-        agreement,
-        invoices: projInvoices,
-        depositQuote,
-        billing,
-        blockers: preflight.blockers || [],
-        methodLabels: invoices.PAYMENT_METHOD_LABELS
-      });
-      return sendJson(res, 200, { ok: true, ...model });
+      const model = await projectFinancialsModel(proj);
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financials."] });
+    }
+  }
+
+  // GET /api/projects/:id/overview — the Overview tab (2026-10-02, stage 6
+  // of the Project Workspace). Read-only. It runs the five tabs' OWN
+  // builders (the same functions their GET routes return) and
+  // lib/project-overview.js copies fields out of them — no arithmetic of
+  // its own — so every Overview figure is its tab's figure.
+  const overviewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/overview$/);
+  if (overviewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(overviewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      // One completion check for the whole page — the Change Orders and
+      // Financials models read their holds from it, and the status card
+      // shows it.
+      const preflight = await projects.completionPreflight(id);
+      const [metrics, dailyRecordsModel, materialsModel, changeOrdersModel, financialsModel, linkedQuote] = await Promise.all([
+        projects.computeProjectMetrics(id),
+        projectDailyRecordsModel(proj),
+        projectMaterialsModel(proj),
+        projectChangeOrdersModel(proj, preflight),
+        projectFinancialsModel(proj, preflight),
+        projectLinkedQuote(proj)
+      ]);
+      const overview = projectOverview.describeOverview({
+        project: proj,
+        metrics,
+        dailyRecords: dailyRecordsModel,
+        materials: materialsModel,
+        changeOrders: changeOrdersModel,
+        financials: financialsModel,
+        preflight,
+        linkedQuote,
+        design: projectSiteBuilderSummary(proj)
+      });
+      if (!(await viewerCanSeeMoney(req))) {
+        // A technician: the same Overview, with every amount removed and
+        // the Financials card reduced to "does the office have billing to
+        // deal with" (Patrick, 2026-10-02).
+        return sendJson(res, 200, { ok: true, ...moneyVisibility.overviewForTech(overview, { attention: moneyVisibility.needsOfficeAttention(financialsModel) }) });
+      }
+      return sendJson(res, 200, { ok: true, ...overview, viewer: { canSeeMoney: true } });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the overview."] });
     }
   }
 
@@ -21902,8 +22195,9 @@ async function handleApi(req, res, pathname) {
           }
         }
         // Payment method — promoted to pre-sign per the brief.
-        if (merged.paidOnSite !== true && merged.paidOnSite !== false) {
-          fails.push({ key: "payment", label: "Choose payment method (paid on site or bill later)" });
+        // A visit the office settled as Paid in Full has nothing to choose.
+        if (merged.paidOnSite !== true && merged.paidOnSite !== false && !woSettlement.isPaidInFull(merged)) {
+          fails.push({ key: "payment", label: "Choose: Collect payment now, or Send invoice / bill later" });
         }
         // Return-visit decision (Patrick 2026-05-12). Forces the tech
         // to explicitly answer "Yes — coming back" or "No — done today"
@@ -22249,6 +22543,7 @@ async function handleApi(req, res, pathname) {
             email: wo.customerEmail || "",
             address: wo.address || "",
             notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})${invoices.isPriceUnconfirmed(invoice) ? " — SUGGESTED price, confirm it on the invoice before it goes out" : ""}`
+              : woSettlement.isPaidInFull(serviceRecord) ? ` · Paid in full (prepaid) — ${serviceRecord.settlement.reference}`
               : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length ? " · No charge" : " · No invoice drafted — price this visit")}`
           },
           // The alert shell prints "Requested" items and an "Estimated
@@ -22260,6 +22555,8 @@ async function handleApi(req, res, pathname) {
             ? (invoice.lineItems || []).map((l) => ({ label: l.label, qty: Number(l.qty) || 1, price: Number(l.unitPrice) || 0, quoteType: "fixed" }))
             // No lines at all is NOT "no charge" — a custom-quote size
             // (16+ / 9+ commercial) seeds none and needs Patrick to price it.
+            : woSettlement.isPaidInFull(serviceRecord)
+              ? [{ label: `Paid in full (prepaid) — nothing to invoice · ${serviceRecord.settlement.reference}`, qty: 1, price: 0, quoteType: "fixed" }]
             : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length
               ? [{ label: "No charge — nothing to invoice", qty: 1, price: 0, quoteType: "fixed" }]
               : [{ label: "No invoice drafted — price this visit (custom-quote size or no fee line)", qty: 1, price: 0, quoteType: "custom" }]),
@@ -22306,7 +22603,10 @@ async function handleApi(req, res, pathname) {
         // PJL-96: a price Patrick has not confirmed (a custom size, or a
         // commercial account without its own price) is never shown to the
         // customer — the draft carries only a suggestion.
-        const totalLine = invoice && invoices.isPriceUnconfirmed(invoice)
+        // Paid in Full (P-PJL-22 D): no amount, no "invoice will follow".
+        const totalLine = woSettlement.isPaidInFull(serviceRecord)
+          ? `<p style="margin: 0 0 14px;"><strong>PAID IN FULL</strong> — this visit was prepaid. There is nothing to pay.</p>`
+          : invoice && invoices.isPriceUnconfirmed(invoice)
           ? `<p style="margin: 0 0 14px;">PJL will confirm the price for today's visit and send your invoice.</p>`
           : invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
@@ -22462,7 +22762,10 @@ async function handleApi(req, res, pathname) {
           propertyEditsApplied: !!cascadeResult.propertyEditsApplied,
           // No charge: nothing to pay, no invoice — the app shows "No charge
           // — done" instead of an invoice screen (fall-closing fix #8).
-          noCharge: cascadeResult.noCharge === true || isNoChargeServiceRecord(cascadeResult.serviceRecord)
+          noCharge: cascadeResult.noCharge === true || isNoChargeServiceRecord(cascadeResult.serviceRecord),
+          // Paid in Full (P-PJL-22 D): nothing to collect, no invoice. A
+          // tech's copy of this reply says only nothingToCollect (techView).
+          paidInFull: cascadeResult.paidInFull === true || woSettlement.isPaidInFull(cascadeResult.serviceRecord)
         };
       } else if (cascadeError) {
         // Cascade threw — signed/locked/completed all persisted, but
@@ -22518,7 +22821,8 @@ async function handleApi(req, res, pathname) {
             ran: true, alreadyRan: false, invoiceId, invoiceTotal,
             invoiceDraftError: retryCascade.invoiceDraftError || null,
             propertyEditsApplied: !!retryCascade.propertyEditsApplied,
-            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord)
+            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord),
+            paidInFull: retryCascade.paidInFull === true || woSettlement.isPaidInFull(retryCascade.serviceRecord)
           };
         } else {
           responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
@@ -30052,6 +30356,8 @@ function seasonAndYearFor(date) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // "close" fires however the response ends (finished, aborted, errored).
+  res.on("close", memoryLog.requestStarted(req.method, url.pathname));
   // Normalize the pathname before route matching. If the URL came in with
   // consecutive slashes ("//book.html") — which can happen when a proxy
   // redirect chain mangles a relative path, or when a manual paste
@@ -30264,6 +30570,7 @@ const server = http.createServer(async (req, res) => {
       if (fieldOwner && String(fieldOwner) !== String(session.uid)) {
         return sendJson(res, 403, { ok: false, error: "owner_mismatch", errors: ["Sign in with the account that recorded this work."] });
       }
+      if (session.role !== "admin") res.__techView = true;   // P-PJL-22 D (sendJson)
 
       // Admin action log. This gate is the ONE place every guarded request
       // passes through with its session already resolved, which is why the
@@ -30543,6 +30850,7 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+  memoryLog.start();
 
   // The geography filter's key, checked ONCE at boot where nobody can
   // miss it. Without it every address is placed by town name only

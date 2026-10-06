@@ -103,13 +103,23 @@ const fallWo = (o = {}) => ({
 // ---- 2. The real routes, on a merged record ------------------------------
 const LEAD = "lead-merged-returning";
 const TOKEN = "tok-merged-returning-0123456789abcdef";
-function writeMerged(srv, { aprilArrived = true, secondLive = false } = {}) {
+// `start`: when the fall visit is. The portal sections pass a time a few
+// days out (soonVisit) — the customer's 24-hour cutoff reads the real
+// clock, as it should, so the fixed FALL date stopped being cancellable
+// once the calendar reached it (2026-10-05).
+function soonVisit() {
+  const d = new Date(Date.now() + 3 * 86400000);
+  d.setHours(10, 0, 0, 0);
+  return d.toISOString();
+}
+function writeMerged(srv, { aprilArrived = true, secondLive = false, start = FALL } = {}) {
+  const end = new Date(new Date(start).getTime() + 45 * 60000).toISOString();
   srv.writeData("leads", [{
     id: LEAD, createdAt: "2026-03-01T12:00:00Z", status: "won",
     portal: { token: TOKEN },
     contact: { name: "Merged Returning", email: "merged@example.invalid", address: "100 Main St, Newmarket, ON" },
     booking: {
-      start: FALL, end: at("2026-10-06", 10, 45), durationMinutes: 45, serviceKey: "fall_close_4z",
+      start, end, durationMinutes: 45, serviceKey: "fall_close_4z",
       serviceLabel: "Fall winterization (1-4 zones residential)", coords: { lat: 44.05, lng: -79.46 },
       workOrder: { id: "WO-FALL26", status: "scheduled", createdAt: at("2026-08-30", 12) }
     }
@@ -117,12 +127,12 @@ function writeMerged(srv, { aprilArrived = true, secondLive = false } = {}) {
   srv.writeData("bookings", [{
     id: "BK-2026-0001", leadId: LEAD, propertyId: null, customerName: "Merged Returning",
     customerEmail: "merged@example.invalid", address: "100 Main St, Newmarket, ON",
-    scheduledFor: FALL, durationMinutes: 45, serviceKey: "fall_close_4z",
+    scheduledFor: start, durationMinutes: 45, serviceKey: "fall_close_4z",
     serviceLabel: "Fall winterization (1-4 zones residential)", status: "confirmed",
     workOrderIds: secondLive ? ["WO-FALL26", "WO-FALL26B"] : ["WO-APRIL26", "WO-FALL26"],
     history: [], rescheduleCount: 0
   }]);
-  const wos = [fallWo({ leadId: LEAD }), aprilWo({ leadId: LEAD, arrivedAt: aprilArrived ? aprilWo().arrivedAt : null })];
+  const wos = [fallWo({ leadId: LEAD, scheduledFor: start }), aprilWo({ leadId: LEAD, arrivedAt: aprilArrived ? aprilWo().arrivedAt : null })];
   if (secondLive) wos.push(fallWo({ id: "WO-FALL26B", leadId: LEAD, createdAt: at("2026-09-02", 12) }));
   srv.writeData("work-orders", wos);
 }
@@ -159,7 +169,7 @@ try {
   }
 
   // 2c. Portal preflight — the customer's own view of the fall booking
-  writeMerged(srv, { aprilArrived: true });
+  writeMerged(srv, { aprilArrived: true, start: soonVisit() });
   {
     const r = await srv.api("GET", `/api/portal/${TOKEN}/booking-actions`);
     ok("portal preflight: reschedule is offered", r.body.canReschedule === true,
@@ -168,7 +178,7 @@ try {
   }
 
   // 2d. Portal cancel
-  writeMerged(srv, { aprilArrived: true });
+  writeMerged(srv, { aprilArrived: true, start: soonVisit() });
   {
     const r = await srv.api("POST", `/api/portal/${TOKEN}/cancel`, { reason: "Changed plans", reasonCode: "other" });
     ok("portal cancel of a merged fall booking goes through", r.status === 200 && r.body.ok === true,

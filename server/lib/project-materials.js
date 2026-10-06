@@ -35,6 +35,11 @@
 // server/material-list.js, with different field names.
 
 const materialLists = require("./material-lists");
+const partAlias = require("./part-alias");
+// The purchasing arithmetic (2026-10-05): what a PO line counts as
+// received / on order / ordered is purchase-orders.lineCommitment — the
+// same function still-to-order uses — never re-derived here.
+const purchaseOrders = require("./purchase-orders");
 
 // ---- Physical stock ------------------------------------------------
 
@@ -47,14 +52,14 @@ const materialLists = require("./material-lists");
 // Cancelled POs still count: "already-received lines stay have — can't
 // undo a delivery" (purchase-orders.js). The goods arrived; cancelling
 // the paperwork afterwards does not send them back.
-function receivedBySku(purchaseOrders) {
+function receivedBySku(pos) {
   const out = new Map();
-  for (const po of purchaseOrders || []) {
+  for (const po of pos || []) {
     if (po?.deletedAt) continue;
     for (const line of po?.lineItems || []) {
-      const sku = String(line?.sku || "").trim();
+      const sku = partAlias.canonical(String(line?.sku || "").trim());
       if (!sku) continue;
-      const got = Math.max(0, Math.floor(Number(line?.receivedQty) || 0));
+      const got = purchaseOrders.lineCommitment(po, line).received;
       if (!got) continue;
       const prev = out.get(sku) || { qty: 0, poIds: [] };
       prev.qty += got;
@@ -76,7 +81,7 @@ function consumedBySku(buildWos) {
   for (const wo of buildWos || []) {
     const dl = wo?.dailyLog || {};
     for (const used of dl.materialsConsumed || []) {
-      const sku = String(used?.partSku || "").trim();
+      const sku = partAlias.canonical(String(used?.partSku || "").trim());
       if (!sku) continue;
       const qty = Number(used?.qty) || 0;
       if (qty <= 0) continue;
@@ -106,7 +111,7 @@ function requiredBySku(lists) {
   for (const list of lists || []) {
     if (list?.status === "archived") continue;
     for (const line of list?.lineItems || []) {
-      const sku = String(line?.sku || "").trim();
+      const sku = partAlias.canonical(String(line?.sku || "").trim());
       if (!sku) continue;
       const prev = out.get(sku) || [];
       prev.push({
@@ -130,16 +135,21 @@ function requiredBySku(lists) {
 // on more than one list. Printing a total there would be inventing one
 // of exactly the numbers Patrick ruled out. The per-list figures are
 // carried alongside so the screen can show them instead.
-function stockBySku({ lists, purchaseOrders, buildWos, partsMap = {} }) {
+function stockBySku({ lists, purchaseOrders: pos, buildWos, partsMap = {} }) {
   const required = requiredBySku(lists);
-  const received = receivedBySku(purchaseOrders);
+  const received = receivedBySku(pos);
+  // Units actually ordered through purchase orders (2026-10-05, Patrick):
+  // sent, partly received and received POs count their quantity, a
+  // cancelled PO only what arrived, a draft nothing; each PO line once.
+  const ordered = purchaseOrders.orderedBySku(pos);
   const consumed = consumedBySku(buildWos);
 
-  const skus = new Set([...required.keys(), ...received.keys(), ...consumed.keys()]);
+  const skus = new Set([...required.keys(), ...ordered.keys(), ...received.keys(), ...consumed.keys()]);
   const rows = [];
   for (const sku of skus) {
     const reqRows = required.get(sku) || [];
     const got = received.get(sku) || { qty: 0, poIds: [] };
+    const ord = ordered.get(sku) || { qty: 0, onOrder: 0, poIds: [] };
     const used = consumed.get(sku) || { qty: 0, entries: [] };
     const part = partsMap[sku] || null;
 
@@ -155,6 +165,11 @@ function stockBySku({ lists, purchaseOrders, buildWos, partsMap = {} }) {
       required: reqRows.length === 0 ? 0 : (reqRows.length === 1 ? reqRows[0].qty : null),
       requiredAmbiguous: reqRows.length > 1,
       requiredByList: reqRows,
+      // Purchasing facts — one PO line is one real order, so these are
+      // safe to add up project-wide (unlike required).
+      ordered: ord.qty,
+      onOrder: ord.onOrder,
+      orderedOnPoIds: ord.poIds,
       received: got.qty,
       receivedFromPoIds: got.poIds,
       usedOnsite: used.qty,
@@ -238,7 +253,7 @@ function exceptionsFor(rows, lists, partsMap = {}) {
 
 // ---- The whole tab ---------------------------------------------------
 
-function describeProject({ lists = [], purchaseOrders = [], buildWos = [], partsMap = {} } = {}) {
+function describeProject({ lists = [], purchaseOrders: pos = [], buildWos = [], partsMap = {} } = {}) {
   // Planning: each list on its own, newest first, with its OWN totals.
   // No cross-list arithmetic anywhere in here.
   const planning = [...lists]
@@ -259,8 +274,27 @@ function describeProject({ lists = [], purchaseOrders = [], buildWos = [], parts
       href: `/admin/material-list/${encodeURIComponent(list.id)}`
     }));
 
-  const stock = stockBySku({ lists, purchaseOrders, buildWos, partsMap });
+  const stock = stockBySku({ lists, purchaseOrders: pos, buildWos, partsMap });
   const exceptions = exceptionsFor(stock, lists, partsMap);
+
+  // Required, project-wide (Patrick, 2026-10-05). One active list: that
+  // list's required units. Several: "per list", no total — a later list
+  // usually repeats an earlier one's bill of materials and nothing in the
+  // records says whether it replaces or adds to it. Archived lists are
+  // not active.
+  const active = lists.filter((l) => l && l.status !== "archived");
+  // `display` and `hint` are the words both screens print, decided here
+  // once.
+  const required = active.length === 1
+    ? (() => {
+        const units = (active[0].lineItems || []).reduce((n, l) => n + (Number(l.qty) || 0), 0);
+        return { kind: "one_list", units, listCount: 1, listId: active[0].id, listName: active[0].name || active[0].id,
+          display: String(units), hint: `units, ${active[0].name || active[0].id}` };
+      })()
+    : active.length > 1
+      ? { kind: "per_list", units: null, listCount: active.length, listId: null, listName: null,
+          display: `Per list — ${active.length} lists`, hint: "not added up: a later list may repeat an earlier one" }
+      : { kind: "none", units: 0, listCount: 0, listId: null, listName: null, display: "None", hint: "no active material list" };
 
   return {
     planning,
@@ -270,8 +304,12 @@ function describeProject({ lists = [], purchaseOrders = [], buildWos = [], parts
     exceptions,
     summary: {
       listCount: planning.length,
-      // Physical, so safe to aggregate.
+      // Planning: one list's figure, or "per list" — never a sum.
+      required,
+      // Purchasing and physical, so safe to aggregate.
       skuCount: stock.length,
+      orderedUnits: stock.reduce((s, r) => s + r.ordered, 0),
+      onOrderUnits: stock.reduce((s, r) => s + r.onOrder, 0),
       receivedUnits: stock.reduce((s, r) => s + r.received, 0),
       usedUnits: stock.reduce((s, r) => s + r.usedOnsite, 0),
       balanceUnits: stock.reduce((s, r) => s + r.projectBalance, 0),

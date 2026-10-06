@@ -169,7 +169,12 @@ try {
     "the invoice screen re-reads when the app comes back from Safari");
   ok(/invoice\?\.status === 'paid'/.test(SCREEN) && /owing <= 0\.01/.test(SCREEN),
     "a settled invoice reads Paid and offers no Send / Take payment");
-  ok(/paidOnSiteAtCompletion !== true/.test(SCREEN), "Take payment is not offered on a Bill-later draft");
+  // The rule moved into one module (P-PJL-22 C, pjl-field/src/invoice-actions.mjs);
+  // scripts/test-collect-payment-now.mjs runs it on real invoices.
+  const ACTIONS = fs.readFileSync(path.join(ROOT, "pjl-field/src/invoice-actions.mjs"), "utf8");
+  ok(/invoiceActions\(invoice/.test(SCREEN) && /actions\.takePayment \?/.test(SCREEN)
+    && /paidOnSiteAtCompletion === true/.test(ACTIONS) && /billLater = draft && !openOnSite/.test(ACTIONS),
+    "Take payment is not offered on a Bill-later draft");
   const requireFromApp = createRequire(path.join(ROOT, "pjl-field/package.json"));
   let babel = null;
   try { babel = requireFromApp("@babel/core"); } catch {}

@@ -2,7 +2,7 @@ import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { changeOrdersApi } from "../lib/api.ts";
 import type { AgreementVersion, ChangeOrder, ChangePhase } from "../lib/api.ts";
-import { money, shortDate } from "../lib/format.ts";
+import { OFFICE_ONLY, money, shortDate } from "../lib/format.ts";
 import { Card, CardHeader, EmptyState, ErrorNote, LoadingRows, Stat, StatusPill } from "../ui/primitives.tsx";
 import type { Tone } from "../ui/primitives.tsx";
 
@@ -56,7 +56,11 @@ function VersionRow({ v }: { v: AgreementVersion }) {
       <span className="text-[13px] text-ink-muted">· {v.status.replace(/_/g, " ")}</span>
       {/* The contract figure everywhere is WITH HST (the workspace header,
           the projects list, the Dashboard); before-HST rides alongside. */}
-      <span className="text-[14px] text-ink">{money(v.total)} <span className="text-[12px] text-ink-muted">with HST · {money(v.subtotal)} before HST</span></span>
+      {v.total == null ? (
+        <span className="text-[13px] text-ink-muted">· amount {OFFICE_ONLY.toLowerCase()}</span>
+      ) : (
+        <span className="text-[14px] text-ink">{money(v.total)} <span className="text-[12px] text-ink-muted">with HST · {money(v.subtotal)} before HST</span></span>
+      )}
       {v.acceptedAt ? <span className="text-[13px] text-ink-muted">· signed {shortDate(v.acceptedAt)}</span> : null}
     </li>
   );
@@ -92,7 +96,7 @@ function ChangeCard({ c }: { c: ChangeOrder }) {
         {c.capturedFromWoId ? (
           <span>· from <a className="underline" href={`/admin/work-order/${encodeURIComponent(c.capturedFromWoId)}`}>{c.capturedFromWoId}</a></span>
         ) : null}
-        <span>· estimate <strong className="text-ink">{money(c.estimatedTotal)}</strong> before HST</span>
+        {c.estimatedTotal == null ? null : <span>· estimate <strong className="text-ink">{money(c.estimatedTotal)}</strong> before HST</span>}
       </div>
 
       {c.lineItems.length ? (
@@ -101,8 +105,8 @@ function ChangeCard({ c }: { c: ChangeOrder }) {
             {c.lineItems.map((li, i) => (
               <tr key={i} className="border-t border-line">
                 <td className="py-1 pr-3 text-ink">{li.label}</td>
-                <td className="py-1 pr-3 text-ink-muted">{li.qty} × {money(li.price)}</td>
-                <td className="py-1 text-right text-ink">{money(li.lineTotal)}</td>
+                <td className="py-1 pr-3 text-ink-muted">{li.price == null ? `× ${li.qty}` : <>{li.qty} × {money(li.price)}</>}</td>
+                <td className="py-1 text-right text-ink">{li.lineTotal == null ? "" : money(li.lineTotal)}</td>
               </tr>
             ))}
           </tbody>
@@ -153,6 +157,10 @@ export function ChangeOrdersTab() {
   if (error || !data) return <Card><ErrorNote>{(error as Error)?.message || "Couldn't load the change orders."}</ErrorNote></Card>;
 
   const { agreement, summary, holds, changes } = data;
+
+  // The server sends a technician no amounts (office-only, 2026-10-02).
+
+  const officeOnly = data.viewer?.canSeeMoney === false;
   const open = changes.filter((c) => c.open);
   const inRevision = changes.filter((c) => !c.open && c.phase === "awaiting_signature");
   const closed = changes.filter((c) => !c.open && c.phase !== "awaiting_signature");
@@ -176,8 +184,10 @@ export function ChangeOrdersTab() {
           <Stat
             label="Signed changes"
             tone="money"
-            value={agreement.netChangeTotal === null ? "—" : signedChange(agreement.netChangeTotal)}
-            hint={agreement.netChangeTotal === null
+            value={officeOnly && agreement.governing ? OFFICE_ONLY : agreement.netChangeTotal === null ? "—" : signedChange(agreement.netChangeTotal)}
+            hint={officeOnly && agreement.governing
+              ? "amounts are office-only"
+              : agreement.netChangeTotal === null
               ? "no signed agreement"
               : agreement.netChangeTotal === 0 && agreement.netChangeSubtotal === 0
                 ? "nothing signed beyond the original"
@@ -213,14 +223,20 @@ export function ChangeOrdersTab() {
         {agreement.governing ? (
           <>
             <p className="px-4 pb-1 pt-3 text-[14px] text-ink" data-testid="agreement-line">
-              {data.billingBlocked ? "Signed agreement" : "Billed on"} <strong>{agreement.governing.id}</strong> (v{agreement.governing.version}) —{" "}
-              <strong data-testid="agreement-total">{money(agreement.governing.total)}</strong> with HST ({money(agreement.governing.subtotal)} before HST)
-              {agreement.original && agreement.original.id !== agreement.governing.id
-                ? <>, up from {money(agreement.original.total)} with HST on {agreement.original.id}</>
-                : null}
-              .
+              {data.billingBlocked ? "Signed agreement" : "Billed on"} <strong>{agreement.governing.id}</strong> (v{agreement.governing.version})
+              {officeOnly ? (
+                <> — amounts are office-only.</>
+              ) : (
+                <>
+                  {" "}— <strong data-testid="agreement-total">{money(agreement.governing.total)}</strong> with HST ({money(agreement.governing.subtotal)} before HST)
+                  {agreement.original && agreement.original.id !== agreement.governing.id
+                    ? <>, up from {money(agreement.original.total)} with HST on {agreement.original.id}</>
+                    : null}
+                  .
+                </>
+              )}
               {agreement.pending
-                ? <> Revision <strong>{agreement.pending.id}</strong> ({money(agreement.pending.total)} with HST) is waiting for the customer's signature — not part of the contract until it is signed.</>
+                ? <> Revision <strong>{agreement.pending.id}</strong>{officeOnly ? "" : <> ({money(agreement.pending.total)} with HST)</>} is waiting for the customer's signature — not part of the contract until it is signed.</>
                 : null}
             </p>
             <ul data-testid="agreement-versions">

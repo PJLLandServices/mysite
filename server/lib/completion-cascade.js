@@ -19,6 +19,7 @@ const properties = require("./properties");
 const invoices = require("./invoices");
 const workOrders = require("./work-orders");
 const billing = require("./billing");
+const woSettlement = require("./wo-settlement");
 const woReportSnapshot = require("./wo-report-snapshot");
 
 // Warranty months + month arithmetic now live in lib/warranty.js (JOB-002
@@ -297,7 +298,12 @@ async function run(wo, deps = {}) {
   // customer. There is nothing to pay, so there is no invoice: the visit,
   // its service record and its report are the record.
   const noCharge = bill.noCharge;
-  if (lineItems.length && !noCharge) {
+  // PAID IN FULL (P-PJL-22 D, lib/wo-settlement.js): the office recorded
+  // that the customer prepaid. Nothing to collect, so no invoice — not a
+  // $0 one, not a paid one — and no payment record, link or text. Not No
+  // Charge either: the lines keep their real value on the service record.
+  const paidInFull = woSettlement.isPaidInFull(wo) && !noCharge;
+  if (lineItems.length && !noCharge && !paidInFull) {
     try {
       invoice = await invoices.createDraft({
         woId: wo.id,
@@ -332,12 +338,17 @@ async function run(wo, deps = {}) {
     techNotes: wo.techNotes || "",
     summary,
     lineItems,
-    subtotal: invoice?.subtotal || 0,
-    hst: invoice?.hst || 0,
-    total: invoice?.total || 0,
+    // A Paid in Full visit keeps what it was worth, for the office; it has
+    // no invoice to take the totals from.
+    ...(paidInFull ? invoices.totalsForLines(lineItems) : {
+      subtotal: invoice?.subtotal || 0,
+      hst: invoice?.hst || 0,
+      total: invoice?.total || 0
+    }),
     warrantyMonths,
     warrantyExpiresAt,
-    invoiceId: invoice?.id || null
+    invoiceId: invoice?.id || null,
+    ...(paidInFull ? { settlement: wo.settlement } : {})
   });
 
   // 3a) PJL-100 #5 — a fall closing's findings are recorded for next
@@ -594,7 +605,7 @@ async function run(wo, deps = {}) {
     } catch (err) { console.warn("[cascade] property-edits stamp failed:", err?.message); }
   }
 
-  return { ok: true, serviceRecord, invoice, noCharge, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
+  return { ok: true, serviceRecord, invoice, noCharge, paidInFull, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
 }
 
 // ---- Brief 2: Project-final cascade --------------------------------

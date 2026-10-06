@@ -62,8 +62,10 @@ export default function CustomerSummary({ visible, workOrderId, onClose }) {
   // Only draw the summary when there IS one; anything else is the loading
   // state, never a crash.
   const view = state === 'ready' && !s ? 'loading' : state;
-  const pending = s?.pricePending === true;
-  const paid = !pending && Number(s?.amountPaid) > 0;
+  // Paid in Full (P-PJL-22 D): the work is listed with no amounts.
+  const prepaid = s?.prepaid === true;
+  const pending = !prepaid && s?.pricePending === true;
+  const paid = !pending && !prepaid && Number(s?.amountPaid) > 0;
 
   return (
     <Modal
@@ -144,10 +146,14 @@ export default function CustomerSummary({ visible, workOrderId, onClose }) {
                 {(s.lines || []).map((l, i) => (
                   <View key={`${l.label}:${i}`} style={styles.line}>
                     <Text style={styles.lineLabel}>{l.qty > 1 ? `${l.label} × ${l.qty}` : l.label}</Text>
-                    {pending ? null : <Text style={styles.lineAmount}>{amount(l.lineTotal)}</Text>}
+                    {pending || prepaid ? null : <Text style={styles.lineAmount}>{amount(l.lineTotal)}</Text>}
                   </View>
                 ))}
-                {pending ? (
+                {prepaid ? (
+                  <View style={[styles.line, styles.last]}>
+                    <Text style={styles.pendingText}>PAID IN FULL — this visit was prepaid. There is nothing to pay.</Text>
+                  </View>
+                ) : pending ? (
                   <View style={[styles.line, styles.last]}>
                     <Text style={styles.pendingText}>PJL confirms the price after the visit and sends the invoice.</Text>
                   </View>

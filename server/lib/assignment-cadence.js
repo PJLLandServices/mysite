@@ -364,7 +364,7 @@ function owedForBooking(booking, { now = new Date() } = {}) {
 // Dispatch one step for one booking. The step is marked fired BEFORE
 // the sends go out (rule 1); the results are written after. Returns the
 // per-channel outcome. `deps` lets tests capture sends without a wire.
-async function sendStepForBooking(booking, step, { season, year, deps = {}, by = "cadence", only = null }) {
+async function sendStepForBooking(booking, step, { season, year, deps = {}, by = "cadence", only = null, now = new Date() }) {
   const getProperty = deps.getProperty || properties.get;
   const sendEmail = deps.sendEmail || notify.sendOutreachEmail;
   const sendSms = deps.sendSms || notify.sendOutreachSms;
@@ -385,7 +385,11 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   // and the cadence (the 24-hour reminder included) is anchored on it. A
   // LATE step 1 — a catch-up — follows the rule like every other step.
   const isCatchUp = Array.isArray(only);
-  if ((isCatchUp || !step.blast) && !stepStillWanted(current, step)) {
+  // The caller's clock, not the wall clock: a sweep decides "is this
+  // appointment still ahead?" once, against the `now` it was given, and
+  // this re-check must agree with it (a test's fixed date ran into the
+  // real one on 2026-10-05 and every reminder read "appointment passed").
+  if ((isCatchUp || !step.blast) && !stepStillWanted(current, step, { now })) {
     return { skipped: true, reason: current.assignment?.outreach?.respondedAt ? "already_responded" : "appointment_passed" };
   }
 
@@ -669,7 +673,7 @@ async function blast(season, year, { deps = {}, by = "patrick", now = new Date()
     const result = { blasted: 0, alreadyBlasted: 0, skipped: [], errors: [] };
     for (const b of mine) {
       if (b.assignment.outreach?.steps?.["1"]) { result.alreadyBlasted += 1; continue; }
-      const outcome = await sendStepForBooking(b, step, { season, year, deps, by });
+      const outcome = await sendStepForBooking(b, step, { season, year, deps, by, now });
       if (outcome.skipped) result.skipped.push({ bookingId: b.id, code: b.assignment.code, reason: outcome.reason });
       else if (outcome.sent.length) result.blasted += 1;
       else result.errors.push({ bookingId: b.id, code: b.assignment.code, errors: outcome.errors });
@@ -736,7 +740,7 @@ async function sendConfirmationForBooking(bookingId, { deps = {}, by = "patrick"
   sendInProgress = true;
   try {
     const { season, year } = booking.assignment;
-    const outcome = await sendStepForBooking(booking, STEPS[0], { season, year: Number(year), deps, by });
+    const outcome = await sendStepForBooking(booking, STEPS[0], { season, year: Number(year), deps, by, now });
     if (outcome.skipped) return { ok: false, skipped: true, reason: outcome.reason };
     if (outcome.sent && outcome.sent.length) return { ok: true, sent: outcome.sent };
     return { ok: false, errors: outcome.errors || ["The send failed on every channel."] };
@@ -777,7 +781,7 @@ async function sweepDue(season, year, { deps = {}, now = new Date(), appointment
         if (outreachState.steps[String(step.n)]) continue;               // rule 1
         if (!stepStillWanted(b, step, { now })) continue;                  // rule 3 (one rule)
         if (dueDateKeyFor(b, step) !== todayKey) continue;               // rules 2 + 4
-        const outcome = await sendStepForBooking(b, step, { season, year, deps, by: "cadence-sweep" });
+        const outcome = await sendStepForBooking(b, step, { season, year, deps, by: "cadence-sweep", now });
         if (outcome.skipped) result.skipped += 1;
         else if (outcome.sent && outcome.sent.length) result.sent += 1;
         else result.errors += 1;
@@ -838,7 +842,7 @@ async function catchUpOwed(season, year, { deps = {}, now = new Date(), by = "ca
     let sent = 0;
     for (const w of work) {
       const outcome = await sendStepForBooking(w.booking, w.step, {
-        season, year, deps, by, only: w.channels
+        season, year, deps, by, only: w.channels, now
       });
       if (outcome.sent && outcome.sent.length) sent += 1;
       results.push({

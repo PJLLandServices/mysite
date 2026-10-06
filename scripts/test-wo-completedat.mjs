@@ -50,7 +50,7 @@ fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // atomic-json.js: work-orders.js requires it since fall-closing fix #1.
 // session-hours.js: since office corrections to session times and
 // labourer counts came in — the sandbox copy needs it to load at all.
-for (const f of ["work-orders.js", "warranty.js", "atomic-json.js", "session-hours.js"]) {
+for (const f of ["work-orders.js", "warranty.js", "atomic-json.js", "session-hours.js", "part-alias.js", "wo-settlement.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }
 const require = createRequire(import.meta.url);
