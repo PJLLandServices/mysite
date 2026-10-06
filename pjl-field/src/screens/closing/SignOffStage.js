@@ -286,6 +286,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
         ) : (
           <ChoiceRow
             label="How are they paying?"
+            stacked
             value={paid === true ? 'paid' : paid === false ? 'bill' : ''}
             options={[
               { value: 'paid', label: 'Collect payment now' },
