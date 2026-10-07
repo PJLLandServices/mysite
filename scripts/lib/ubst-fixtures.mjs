@@ -252,9 +252,15 @@ export function seedLeads(srv, list) {
   return list;
 }
 
-// The legacy heal: asking for a lead's bookings materialises the canonical
-// record from its envelope (one of the GETs that write, §3.4.2).
+// A lead's envelope becomes a canonical record the way the system does it
+// since PJL-133: the heal SWEEP (bookings.healFromLeads at boot and every
+// ten minutes), never a page view. The GET that used to do this is
+// read-only now (test-ubst-idempotent-writers A pins that), so the fixture
+// runs the sweep's own function over the sandbox store.
 export async function healLead(srv, leadId) {
+  const bookingsLib = srv.lib("bookings.js");
+  const lead = (srv.data("leads") || []).find((l) => l && l.id === leadId) || null;
+  if (lead) await bookingsLib.healFromLeads([lead]);
   const r = await srv.api("GET", `/api/bookings?leadId=${encodeURIComponent(leadId)}`);
   return (r.body?.bookings || [])[0] || null;
 }

@@ -22,6 +22,8 @@
 // the iCal feed and the day-before reminder all keep treating a finished
 // visit as upcoming; a desk-cancelled work order leaves its Booking live.
 //
+// After PJL-133 (Phase 1, the contract): 12 of 23 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-completion-reconciles.mjs
 
 import { SIGNATURE } from "./lib/field-server.mjs";

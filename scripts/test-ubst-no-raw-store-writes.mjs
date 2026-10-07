@@ -24,6 +24,8 @@
 // 2026-10-06; the two that pass are cancel()'s 409s and "no raw fs write
 // inside the library").
 //
+// After PJL-133 (Phase 1, the contract): 1 of 9 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-no-raw-store-writes.mjs
 
 import fs from "node:fs";

@@ -20,6 +20,8 @@
 // 2026-10-06): the spring Booking stays `confirmed` after April's work order
 // completes and its cascade runs; the fall work order has no bookingId.
 //
+// After PJL-133 (Phase 1, the contract): 2 of 18 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-returning-customer.mjs
 
 import {

@@ -18,6 +18,8 @@
 // 2026-10-06): the stored plan carries codes only; a stop whose booking was
 // removed reads `unassigned` and Book now quietly books it again.
 //
+// After PJL-133 (Phase 1, the contract): 4 of 15 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-plan-stop-identity.mjs
 
 import {

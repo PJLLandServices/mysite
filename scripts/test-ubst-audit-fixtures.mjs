@@ -28,6 +28,8 @@
 // 2026-10-06): the tool does not exist, so every assertion about it fails;
 // the fixture-building assertion and "the audit wrote nothing" pass.
 //
+// After PJL-133 (Phase 1, the contract): 18 of 20 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-audit-fixtures.mjs
 
 import fs from "node:fs";

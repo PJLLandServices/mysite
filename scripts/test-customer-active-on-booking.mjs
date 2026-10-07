@@ -136,8 +136,14 @@ try {
     ADMIN.includes("zonesAreDeclared") && ADMIN.includes('" (declared)"'));
 
   // And the wrapper is actually used — a wrapper nobody calls fixes nothing.
+  // Four writing paths: the two reserve branches, the portal reschedule and
+  // the portal cancel. It was six until PJL-133 (2026-10-06) made the three
+  // read-side heals read-only — a GET that materialised a record on the way
+  // out was a page view creating appointments — so a count above four would
+  // now mean a read has started writing again.
   const uses = (SERVER.match(/await syncBookingFromLead\(/g) || []).length;
-  ok("every booking path goes through it", uses >= 6, `${uses} call sites`);
+  ok("every booking path goes through it", uses >= 4, `${uses} call sites`);
+  ok("…and no read-side route heals the envelope on the way out", uses <= 4, `${uses} call sites — a GET is writing again?`);
 } finally {
   for (const [f, buf] of backups) {
     const p = path.join(DATA, f);

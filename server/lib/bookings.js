@@ -43,11 +43,39 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { writeJsonAtomic } = require("./atomic-json");
+const { writeJsonAtomic, serialize } = require("./atomic-json");
 
 const FILE = path.join(__dirname, "..", "data", "bookings.json");
 
 const STATUSES = new Set(["confirmed", "tentative", "cancelled", "completed", "no_show"]);
+
+// Every exported writer runs under the store's queue (atomic-json.serialize
+// on this file — the same key customers.js and the property merge take when
+// they rewrite bookings.json). writeJsonAtomic keeps the FILE whole; it does
+// not keep two writers' CHANGES: six concurrent PATCHes to six different
+// bookings left ONE on disk (scripts/test-ubst-idempotent-writers.mjs E,
+// 2026-10-06). Same shape as work-orders.js. NOT re-entrant: a writer must
+// not call another exported writer from inside (healFromLeads is deliberately
+// unwrapped for that reason — it only reads, then calls the wrapped upsert).
+const withStoreLock = (fn) => {
+  const locked = (...args) => serialize(FILE, () => fn(...args));
+  // The source guards in scripts/test-*.mjs read a writer's own source
+  // (bookings.cancel.toString() must name removalCode). The wrapper answers
+  // for the function it wraps, so a guard sees the rule, not the lock.
+  Object.defineProperty(locked, "name", { value: fn.name });
+  Object.defineProperty(locked, "toString", { value: () => fn.toString() });
+  return locked;
+};
+
+// The half-day the customer was promised, from a local start. The promise
+// lived in two places before — `assignment.bucket` on a season booking,
+// `lead.booking.bucketKey` on a self-booking — and nowhere on the canonical
+// record of a self-booked customer. One field, every source (TRD §3).
+function bucketFor(iso) {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return null;
+  return new Date(t).getHours() < 12 ? "morning" : "afternoon";
+}
 
 async function ensureFile() {
   await fs.mkdir(path.dirname(FILE), { recursive: true });
@@ -359,6 +387,10 @@ function blank() {
     propertyId: null,
     leadId: null,
     scheduledFor: null,
+    // The half-day the customer was told ("morning" | "afternoon" | null).
+    // scheduledFor is the route's minute inside it and moves with the route;
+    // this does not move without a reschedule.
+    bucket: null,
     durationMinutes: 0,
     serviceKey: "",
     serviceLabel: "",
@@ -617,6 +649,7 @@ async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
     existing.customerPhone = lead.contact?.phone || existing.customerPhone;
     existing.propertyId = lead.propertyId || existing.propertyId;
     existing.scheduledFor = booking.start || existing.scheduledFor;
+    existing.bucket = booking.bucketKey || existing.bucket || bucketFor(existing.scheduledFor);
     existing.durationMinutes = Number(booking.durationMinutes) || existing.durationMinutes;
     existing.serviceKey = booking.serviceKey || existing.serviceKey;
     existing.serviceLabel = booking.serviceLabel || existing.serviceLabel;
@@ -655,6 +688,7 @@ async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
   next.propertyId = lead.propertyId || null;
   next.leadId = lead.id;
   next.scheduledFor = booking.start || null;
+  next.bucket = booking.bucketKey || bucketFor(next.scheduledFor);
   next.durationMinutes = Number(booking.durationMinutes) || 0;
   next.serviceKey = booking.serviceKey || "";
   next.serviceLabel = booking.serviceLabel || "";
@@ -737,7 +771,7 @@ async function healFromLeads(leads = []) {
 // The caller supplies every field; this function only stamps identity
 // (id, timestamps, history) and refuses records that would be invisible
 // or unattributable. NOTHING here sends anything.
-async function createDirect(fields, { by = "system", note = "" } = {}) {
+async function createDirect(fields, { by = "system", note = "", action = "created" } = {}) {
   if (!fields || typeof fields !== "object") throw new Error("Booking fields are required.");
   if (!fields.scheduledFor || Number.isNaN(Date.parse(fields.scheduledFor))) {
     throw new Error("A valid scheduledFor is required.");
@@ -759,6 +793,7 @@ async function createDirect(fields, { by = "system", note = "" } = {}) {
   next.propertyId = fields.propertyId || null;
   next.leadId = fields.leadId || null;
   next.scheduledFor = new Date(fields.scheduledFor).toISOString();
+  next.bucket = fields.bucket || fields.assignment?.bucket || bucketFor(next.scheduledFor);
   next.durationMinutes = Number(fields.durationMinutes) || 0;
   next.serviceKey = fields.serviceKey;
   next.serviceLabel = fields.serviceLabel || "";
@@ -766,6 +801,7 @@ async function createDirect(fields, { by = "system", note = "" } = {}) {
   next.address = fields.address || "";
   next.status = fields.status || "confirmed";
   next.prepNotes = fields.prepNotes || "";
+  if (Array.isArray(fields.workOrderIds)) next.workOrderIds = fields.workOrderIds.filter(Boolean);
   // Provenance — how this record came to exist. "assignment" marks the
   // season writer's records; the assignment block carries what it needs
   // to be reversed and audited (season, year, plan date, bucket, code).
@@ -773,7 +809,7 @@ async function createDirect(fields, { by = "system", note = "" } = {}) {
   if (fields.assignment && typeof fields.assignment === "object") {
     next.assignment = { ...fields.assignment };
   }
-  next.history = [{ ts: next.createdAt, action: "created", by, note }];
+  next.history = [{ ts: next.createdAt, action, by, note }];
   records.unshift(next);
   await writeAll(records);
   return next;
@@ -782,6 +818,17 @@ async function createDirect(fields, { by = "system", note = "" } = {}) {
 // Update a booking record. Allowed fields are explicit so we don't
 // accept arbitrary patches (e.g., changing leadId would break the
 // back-reference).
+//
+// LIFECYCLE FIELDS ARE NOT PATCHABLE (PJL-133). `status` and `scheduledFor`
+// used to be in the allowed list, and the booking page's Status dropdown
+// reached them through PATCH /api/bookings/:id: a cancellation with no
+// cancelledAt, no reason, no lead mirror, no work-order cascade and no
+// email; a `completed` that fired nothing; a dead record revived to
+// `confirmed`. Those are cancel() / complete() / markNoShow() /
+// setLiveStatus() / reschedule() / setRouteTime() now, each with its own
+// history line, and a patch that names either field is refused rather
+// than silently dropped — a caller that sends one is a caller that still
+// believes the old contract.
 // "Notify on route" sent for this visit (a season-plan booking has no
 // lead to stamp). Kept with a history line.
 async function markOnRouteNotified(id, { at = new Date().toISOString(), forVisit = null, by = "tech" } = {}) {
@@ -801,21 +848,16 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "prepNotes", "scheduledFor", "durationMinutes", "serviceKey", "serviceLabel", "address", "customerName", "customerPhone", "customerEmail", "zoneCount", "sourceQuoteId"];
+  for (const field of LIFECYCLE_FIELDS) {
+    if (patch && Object.prototype.hasOwnProperty.call(patch, field)) {
+      const err = new Error(`${field} is a lifecycle field — use cancel(), complete(), markNoShow(), setLiveStatus(), reschedule() or setRouteTime().`);
+      err.code = "LIFECYCLE_FIELD";
+      throw err;
+    }
+  }
+  const allowed = ["prepNotes", "durationMinutes", "serviceKey", "serviceLabel", "address", "customerName", "customerPhone", "customerEmail", "zoneCount", "sourceQuoteId"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
-  }
-  if (Array.isArray(patch?.workOrderIds)) next.workOrderIds = patch.workOrderIds;
-  if (patch && patch.status && !STATUSES.has(patch.status)) {
-    throw new Error(`Unknown booking status: ${patch.status}`);
-  }
-  if (patch && patch.status && patch.status !== current.status) {
-    next.history = [...(next.history || []), {
-      ts: new Date().toISOString(),
-      action: `status:${patch.status}`,
-      by: patch.by || "admin",
-      note: patch.note || ""
-    }];
   }
   // Audit a service-type change (Book-from-lead follow-up: the appointment
   // type is now editable after booking, which also moves duration + price).
@@ -838,7 +880,7 @@ async function update(id, patch) {
 // reschedule (same start) returns the existing record unchanged. The
 // caller is responsible for verifying slot availability before invoking
 // this — the helper assumes the slot has already been validated.
-async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reason = "" } = {}) {
+async function reschedule(id, { scheduledFor, bucket = null, by = "admin", actorName = "", reason = "" } = {}) {
   if (!scheduledFor) throw new Error("scheduledFor is required.");
   if (Number.isNaN(Date.parse(scheduledFor))) throw new Error("Invalid scheduledFor.");
   const records = await readAll();
@@ -850,6 +892,9 @@ async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reas
   const previous = current.scheduledFor;
   const next = { ...current };
   next.scheduledFor = scheduledFor;
+  // A reschedule is a new promise: the half-day follows the new start
+  // unless the caller names the window it offered.
+  next.bucket = (bucket === "morning" || bucket === "afternoon") ? bucket : bucketFor(scheduledFor);
   // Counter bumps on EVERY reschedule (admin too). The customer-side
   // cap (1 max) is enforced at the portal endpoint, not here — that
   // way admin can still move the booking after the customer's
@@ -925,20 +970,165 @@ async function cancel(id, { reason = "", reasonCode = "", by = "admin", actorNam
   return { ok: true, booking: next };
 }
 
+// ---- The rest of the lifecycle (PJL-133) --------------------------------
+//
+// One record, one set of transitions, each with its own history line.
+// cancel() above owns cancelled / no_show; these own completed, the live
+// pair (confirmed ↔ tentative), and the route's minute.
+
+const LIFECYCLE_FIELDS = ["status", "scheduledFor"];
+
+// Not "does it hold its slot" negated for its own sake: the name every
+// transition guard asks by. A terminal record is never reopened by a
+// status menu, a re-sync, or a retry.
+function isTerminal(status) {
+  return !holdsItsSlot(status);
+}
+
+// The visit happened. Called by the completion cascade (Phase 4) and the
+// admin status menu; the work order that fulfilled it is linked when named.
+// Refuses a dead record — completing a cancellation would invent a visit.
+async function complete(id, { workOrderId = null, completedAt = null, by = "system", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
+  const current = records[idx];
+  if (isTerminal(current.status)) {
+    return current.status === "completed"
+      ? { ok: true, booking: current, unchanged: true }
+      : { ok: false, status: 409, code: "terminal", errors: [`Can't complete a ${current.status} booking.`] };
+  }
+  const now = new Date().toISOString();
+  const at = completedAt && Number.isFinite(Date.parse(completedAt)) ? new Date(completedAt).toISOString() : now;
+  const workOrderIds = [...(current.workOrderIds || [])];
+  if (workOrderId && !workOrderIds.includes(workOrderId)) workOrderIds.push(workOrderId);
+  const next = {
+    ...current,
+    status: "completed",
+    completedAt: at,
+    completedBy: by,
+    workOrderIds,
+    updatedAt: now,
+    history: [...(current.history || []), {
+      ts: now, action: "completed", by,
+      note: [workOrderId ? `work order ${workOrderId}` : "", note].filter(Boolean).join(" · ")
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, booking: next };
+}
+
+// Nobody home. The same audit fields as a cancellation (cancel() chooses
+// the outcome from the reason code), named so a caller never has to know
+// which code means no-show.
+async function markNoShow(id, { reason = "", by = "tech", actorName = "" } = {}) {
+  return cancel(id, { reason: reason || "Nobody home", reasonCode: "no_answer", by, actorName });
+}
+
+// confirmed ↔ tentative, the two live states. Neither revives a dead
+// record: that is a new booking, not a status change.
+async function setLiveStatus(id, status, { by = "admin", actorName = "", note = "" } = {}) {
+  if (status !== "confirmed" && status !== "tentative") {
+    return { ok: false, status: 422, errors: [`${status} is not a live status — use cancel(), complete() or markNoShow().`] };
+  }
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
+  const current = records[idx];
+  if (isTerminal(current.status)) {
+    return { ok: false, status: 409, code: "terminal", errors: [`This booking is ${current.status}; a finished or cancelled visit is not reopened from a status menu. Book a new visit instead.`] };
+  }
+  if (current.status === status) return { ok: true, booking: current, unchanged: true };
+  const now = new Date().toISOString();
+  const next = {
+    ...current, status, updatedAt: now,
+    history: [...(current.history || []), { ts: now, action: `status:${status}`, by, note: [actorName ? `${actorName} (${by})` : "", note].filter(Boolean).join(" · ") }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, booking: next };
+}
+
+// The route re-cut this visit's minute inside the half-day the customer was
+// told (syncRoutedTimes, after every plan edit and on a timer). Not a
+// reschedule: the promise (date + bucket) is unchanged, so no
+// rescheduleCount, no customer notice, and one compact history line only
+// when the minute actually moved. Refuses to leave the promised half-day.
+async function setRouteTime(id, scheduledFor, { by = "route", note = "" } = {}) {
+  if (!scheduledFor || Number.isNaN(Date.parse(scheduledFor))) throw new Error("A valid scheduledFor is required.");
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  const iso = new Date(scheduledFor).toISOString();
+  if (current.scheduledFor === iso) return current;
+  if (current.bucket && bucketFor(iso) !== current.bucket) {
+    const err = new Error(`${id}: a route re-time cannot move a ${current.bucket} visit to the ${bucketFor(iso)} — that is a reschedule.`);
+    err.code = "BUCKET_MISMATCH";
+    throw err;
+  }
+  const now = new Date().toISOString();
+  const next = {
+    ...current, scheduledFor: iso, updatedAt: now,
+    history: [...(current.history || []), { ts: now, action: "retimed", by, note: `${current.scheduledFor || "(unscheduled)"} → ${iso}${note ? ` · ${note}` : ""}` }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Has this record ever reached the customer or the truck? A booking the
+// customer was told about, acknowledged, was reminded of, or that a tech
+// was sent to is history the moment it exists; it is cancelled with a
+// reason, never erased. (Peter Bazios, 2026-10-06: his messaged booking
+// was deleted, and every reader of a "no" reads records.)
+function customerWasTold(rec) {
+  if (!rec) return false;
+  const outreach = rec.assignment?.outreach || {};
+  if (outreach.steps && Object.keys(outreach.steps).length) return true;
+  if (outreach.respondedAt || outreach.seenAt) return true;
+  if (rec.reminder24?.sentAt || rec.onRouteNotifiedAt) return true;
+  if ((rec.workOrderIds || []).length) return true;
+  return (rec.history || []).some((h) => /^(cadence_step|reminder_24h|notified_on_route|confirmation_sent|assignment_responded|appointment_opened)/.test(String(h.action || "")));
+}
+
+// The one work order a reader should name for a visit: the first of this
+// visit's (PJL-97 rule), never last season's.
+function primaryWorkOrderId(rec, wos) {
+  const ids = workOrderIdsForVisit(rec, wos);
+  return ids.length ? ids[0] : null;
+}
+
 // Hard delete — removes the booking record entirely. Admin-only at the
 // route layer. Refuses if the booking has any linked WOs that have moved
 // past the `scheduled` state (i.e. tech has touched the WO). Use Cancel
 // instead in that case.
 //
+// PJL-133: also refuses any record the customer or the truck already knows
+// about (customerWasTold) unless the caller is the test-data purge
+// (`purge: true`). A delete that erases a messaged booking leaves the plan
+// stop reading "never booked" and the next Assign re-books and re-messages
+// the customer. The admin "delete" of such a record is a cancellation.
+//
 // Returns:
 //   { ok: false, status: 404 }                — booking missing
 //   { ok: false, status: 409, linkedWoId }    — has an active linked WO
+//   { ok: false, status: 409, code: "customer_was_told" } — cancel instead
 //   { ok: true }                              — removed
-async function remove(id, { by = "admin", isActiveWo = null } = {}) {
+async function remove(id, { by = "admin", isActiveWo = null, purge = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
   const current = records[idx];
+  if (!purge && customerWasTold(current)) {
+    return {
+      ok: false,
+      status: 409,
+      code: "customer_was_told",
+      errors: ["This booking already reached the customer or the truck, so it is history. Cancel it with a reason instead of deleting it."]
+    };
+  }
   // Caller passes isActiveWo(woId) -> bool that knows the WO lifecycle.
   // Decoupled here so this lib doesn't have to require work-orders.js.
   if (typeof isActiveWo === "function" && Array.isArray(current.workOrderIds)) {
@@ -1040,6 +1230,7 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
   const next = {
     ...current,
     scheduledFor: new Date(scheduledFor).toISOString(),
+    bucket,
     assignment: { ...current.assignment, date: toDate, bucket, outreach },
     updatedAt: now,
     history
@@ -1216,9 +1407,33 @@ async function attachWorkOrder(bookingId, woId) {
   return records[idx];
 }
 
+// The reverse of attachWorkOrder, for a work order that was deleted: the
+// id leaves workOrderIds, the history keeps that it was there. A dead id
+// left behind is what the audit (PJL-137) calls a dangling link.
+async function detachWorkOrder(bookingId, woId, { by = "system", note = "" } = {}) {
+  if (!bookingId || !woId) return null;
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === bookingId);
+  if (idx === -1) return null;
+  if (!(records[idx].workOrderIds || []).includes(woId)) return records[idx];
+  const now = new Date().toISOString();
+  records[idx] = {
+    ...records[idx],
+    workOrderIds: records[idx].workOrderIds.filter((id) => id !== woId),
+    updatedAt: now,
+    history: [...(records[idx].history || []), { ts: now, action: "wo_detached", by, note: [woId, note].filter(Boolean).join(" · ") }]
+  };
+  await writeAll(records);
+  return records[idx];
+}
+
 module.exports = {
   responseLabel,
   holdsItsSlot,
+  isTerminal,
+  bucketFor,
+  customerWasTold,
+  primaryWorkOrderId,
   workOrdersForVisit,
   workOrderIdsForVisit,
   isPreviousVisitWo,
@@ -1230,6 +1445,7 @@ module.exports = {
   isCustomerCancelReason,
   reasonLabel,
   DEAD_STATUSES,
+  LIFECYCLE_FIELDS,
   REMOVAL_REASONS,
   customerCancelReasonList,
   isRemovalReason,
@@ -1241,21 +1457,29 @@ module.exports = {
   listByProperty,
   listForProperty,
   belongsToProperty,
-  upsertFromLead,
   currentRecordForLead,
+  // healFromLeads only reads, then calls the locked upsert per lead — it
+  // must stay unwrapped (serialize is not re-entrant).
   healFromLeads,
-  createDirect,
-  setAssignmentOutreach,
-  markAssignmentResponded,
-  moveAssignmentDay,
-  setFreeBucket,
-  setRequestedWindow,
-  setDeclaredZones,
-  markReminderSent,
-  update,
-  markOnRouteNotified,
-  reschedule,
-  cancel,
-  remove,
-  attachWorkOrder
+  // Every writer, under the store's queue.
+  upsertFromLead: withStoreLock(upsertFromLead),
+  createDirect: withStoreLock(createDirect),
+  setAssignmentOutreach: withStoreLock(setAssignmentOutreach),
+  markAssignmentResponded: withStoreLock(markAssignmentResponded),
+  moveAssignmentDay: withStoreLock(moveAssignmentDay),
+  setFreeBucket: withStoreLock(setFreeBucket),
+  setRequestedWindow: withStoreLock(setRequestedWindow),
+  setDeclaredZones: withStoreLock(setDeclaredZones),
+  markReminderSent: withStoreLock(markReminderSent),
+  update: withStoreLock(update),
+  markOnRouteNotified: withStoreLock(markOnRouteNotified),
+  reschedule: withStoreLock(reschedule),
+  setRouteTime: withStoreLock(setRouteTime),
+  setLiveStatus: withStoreLock(setLiveStatus),
+  cancel: withStoreLock(cancel),
+  markNoShow: withStoreLock(markNoShow),
+  complete: withStoreLock(complete),
+  remove: withStoreLock(remove),
+  attachWorkOrder: withStoreLock(attachWorkOrder),
+  detachWorkOrder: withStoreLock(detachWorkOrder)
 };

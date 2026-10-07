@@ -24,6 +24,8 @@
 // property POST opens a twin; a cancelled assignment booking does not block
 // a new WO; a deleted WO leaves its id on the Booking.
 //
+// After PJL-133 (Phase 1, the contract): 5 of 17 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-wo-binds-one-booking.mjs
 
 import fs from "node:fs";
@@ -116,4 +118,4 @@ try {
   await srv.stop();
 }
 
-R.finish({ expectedFailing: 9 });
+R.finish({ expectedFailing: 5 });

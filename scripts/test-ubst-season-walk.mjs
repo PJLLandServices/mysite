@@ -26,6 +26,8 @@
 // disagree); the finished visit's Booking stays `confirmed`; the
 // desk-cancelled work order leaves its Booking live.
 //
+// After PJL-133 (Phase 1, the contract): 3 of 117 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-season-walk.mjs
 
 import { SIGNATURE } from "./lib/field-server.mjs";
@@ -170,4 +172,4 @@ try {
   await srv.stop();
 }
 
-R.finish({ expectedFailing: 8 });
+R.finish({ expectedFailing: 3 });

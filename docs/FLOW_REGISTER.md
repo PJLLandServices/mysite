@@ -8768,3 +8768,40 @@ lock), `plan-stop-identity` 4/15, `audit-fixtures` 18/20 (the tool does not exis
 Windows account lacks (EPERM on `.claude`); it now uses directory junctions and copies top-level files
 on win32, and is unchanged on Linux and CI. No PASS flow touched; no production data read or changed by
 any suite (tripwires unchanged).
+
+**2026-10-07 (Unified Booking Source of Truth — Phase 1, the contract; PJL-133):** One module now owns
+what happens to an appointment: `server/lib/booking-lifecycle.js` (`cancelBooking`, `markNoShow`,
+`completeBooking`, `linkWorkOrder` / `unlinkWorkOrder`, `resolveBookingForWorkOrder`,
+`setStatusFromAdmin`), over `lib/bookings.js` (the record: new `complete`, `markNoShow`,
+`setLiveStatus`, `setRouteTime`, `detachWorkOrder`, `isTerminal`, `customerWasTold`,
+`primaryWorkOrderId`, `bucketFor`) and `lib/work-orders.js` (new `bookingId` on every work order,
+`setBookingId`, `listByBooking`, `resolveForBooking`). **Seven rules land with it.** (1) Every write to
+bookings.json runs under the store's queue (`withStoreLock`, the work-orders pattern): six concurrent
+PATCHes to six bookings now keep six (one survived before). (2) `bookings.update` refuses `status` and
+`scheduledFor` (`LIFECYCLE_FIELD`); the booking page's Status dropdown goes through
+`setStatusFromAdmin`, so "cancelled" from the menu is a real cancellation (cancelledAt, reason, lead
+mirror, work-order cascade) and a dead record is never revived; a date edit answers 422 "use
+Reschedule". (3) A Booking carries `bucket`, the half-day the customer was promised, from every writer
+(reserve, assignment, reschedule, day move); `scheduledFor` stays the route's minute and `setRouteTime`
+moves it without a reschedule and refuses to leave the promised half-day. (4) `bookings.remove`
+refuses a record the customer or the truck already knows about (`customerWasTold` → 409
+`customer_was_told`) unless `purge: true`: the Schedule page's Delete Permanently and Season Plan
+Unassign now stop at that record instead of erasing it (their conversion to cancel-with-reason is
+PJL-135). (5) The three GETs that healed a lead's envelope into a record on the way out
+(`GET /api/bookings?leadId`, portal `reschedule-availability`, portal `booking-actions`) are read-only;
+the boot + 10-minute sweep is the only heal. (6) The follow-up work order's booking is written by
+`bookings.createDirect` (it hand-built the record and `fs.writeFile`'d the store). (7) The Schedule
+page's cancel, the Field app's "Not today" and the Assistant's `cancel_booking` cascade this visit's
+open work orders to cancelled, as the portal's cancel already did; one implementation. Work orders
+raised for a lead booking are linked both ways (`wo.bookingId`); deleting a work order detaches it from
+every Booking that named it. **Not in this phase, by the approved order:** the delete/Unassign doors
+(PJL-135), property-path work orders (every season-plan visit) are still linked to nothing and the
+completion cascade does not call `completeBooking` (PJL-136), the plan stop carries no bookingId
+(PJL-134), readers that still consult `lead.booking` (PJL-138). Measured: `npm run test:ubst` 99
+failing of 409 (123 of 403 before); `no-raw-store-writes` 1/9 (the remaining one is the delete door),
+`idempotent-writers` 5/18 (the five are callers that send no request id). Every booking suite in
+`build:check` green; `test-customer-active-on-booking` now also asserts that no GET heals.
+`test-remove-visit`'s source guard reads a locked writer's own source (`withStoreLock` answers
+`toString` for the function it wraps). Harness note: `npm run build:check` cannot run through npm on
+Windows (the chain exceeds the shell's command-line limit); run it through bash. No PASS flow's
+behaviour changed except as listed.

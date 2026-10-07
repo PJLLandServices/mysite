@@ -24,6 +24,8 @@
 // the Assistant sends a request id; the follow-up record is a hand-built
 // shape; and six concurrent writes to six bookings left ONE on disk.
 //
+// After PJL-133 (Phase 1, the contract): 5 of 18 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-idempotent-writers.mjs
 
 import fs from "node:fs";
@@ -72,8 +74,12 @@ try {
     ok("[B] fixture booking created", b.outcome === "created", j(b.body));
     const r = await srv.api("PATCH", `/api/bookings/${b.bookingId}`, { status: "completed" });
     const now = bookingOnDisk(srv, b.bookingId);
-    ok("[B] PATCH cannot mark a booking completed (that is completeBooking's job, and it fires the cascade)",
-      r.status !== 200 || now?.status !== "completed", j({ status: r.status, now: now?.status, serviceRecords: ((srv.data("properties") || []).find((p) => p.id === P.id)?.serviceRecords || []).length }));
+    // Either the status menu is refused, or it went through the lifecycle:
+    // completedAt stamped and a "completed" history line — never a bare
+    // field flip. (PJL-133 routes the menu through completeBooking.)
+    const viaLifecycle = now?.status === "completed" && typeof now.completedAt === "string" && (now.history || []).some((h) => h.action === "completed");
+    ok("[B] PATCH cannot flip a booking to completed behind the lifecycle's back",
+      r.status !== 200 || now?.status !== "completed" || viaLifecycle, j({ status: r.status, now: now?.status, completedAt: now?.completedAt ?? null }));
     const r2 = await srv.api("PATCH", `/api/bookings/${b.bookingId}`, { scheduledFor: iso("2026-10-30", 9, 0) });
     const now2 = bookingOnDisk(srv, b.bookingId);
     ok("[B] PATCH cannot move a booking's date (that is rescheduleBooking's job)",
@@ -139,4 +145,4 @@ try {
   await srv.stop();
 }
 
-R.finish({ expectedFailing: 12 });
+R.finish({ expectedFailing: 5 });

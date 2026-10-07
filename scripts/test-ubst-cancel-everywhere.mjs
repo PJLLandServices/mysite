@@ -42,6 +42,8 @@
 // visit; and a lead booking cancelled by PATCH keeps its slot and its Today
 // row because both read the envelope.
 //
+// After PJL-133 (Phase 1, the contract): 34 of 101 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-cancel-everywhere.mjs
 
 import {
@@ -160,14 +162,18 @@ try {
   // ---- Door 1: DELETE, "booked by mistake" --------------------------------
   {
     const r = await srv.api("DELETE", `/api/bookings/${booked.DEL_MISTAKE}`, {});
-    ok("[DEL_MISTAKE] the delete route answers", r.status === 200, j(r.body));
+    // Since PJL-133 the library refuses to erase a booking the customer was
+    // told about (409 customer_was_told); until PJL-135 turns the door into a
+    // cancellation, the record is left exactly as it was — which the
+    // contract below reports.
+    ok("[DEL_MISTAKE] the delete route answers", r.status === 200 || r.status === 409, j(r.body));
     await assertContract("DEL_MISTAKE");
   }
 
   // ---- Door 2: DELETE with saidNo (#398) ---------------------------------
   {
     const r = await srv.api("DELETE", `/api/bookings/${booked.DEL_SAIDNO}`, { saidNo: true });
-    ok("[DEL_SAIDNO] the delete route answers", r.status === 200, j(r.body));
+    ok("[DEL_SAIDNO] the delete route answers", r.status === 200 || r.status === 409, j(r.body));
     await assertContract("DEL_SAIDNO");
   }
 
@@ -268,4 +274,4 @@ try {
   await srv.stop();
 }
 
-R.finish({ expectedFailing: 32 });
+R.finish({ expectedFailing: 34 });

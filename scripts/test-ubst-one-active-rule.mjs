@@ -31,6 +31,8 @@
 // done stop keeps a route number; the PATCH-cancelled lead booking stays on
 // Today and keeps its slot; six readers keep their own dead-status lists.
 //
+// After PJL-133 (Phase 1, the contract): 15 of 71 assertions fail — the rest belong to later phases.
+//
 // Run: node scripts/test-ubst-one-active-rule.mjs
 
 import fs from "node:fs";
@@ -198,4 +200,4 @@ try {
   await srv.stop();
 }
 
-R.finish({ expectedFailing: 19 });
+R.finish({ expectedFailing: 15 });

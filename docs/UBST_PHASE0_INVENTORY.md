@@ -373,6 +373,13 @@ Two findings the suites added to the inventory while running: six concurrent PAT
 different bookings left **one** note on disk (`idempotent-writers` E — the store has no lock), and a
 visible plan window and the customer's requested window are two stores with one display (§3.5).
 
+**After Phase 1 (PJL-133, branch `claude/pjl-133-phase1-contract`, 2026-10-07):** 99 of 409 fail.
+`no-raw-store-writes` 1/9 (the delete door, PJL-135), `cancel-everywhere` 34/101 (the two deletes and
+Unassign are now *refused* rather than erasing — the record survives but is not yet cancelled, PJL-135;
+the property-path work order is still unlinked, PJL-136), `wo-binds-one-booking` 5/17,
+`idempotent-writers` 5/18 (only the five callers that send no request id), `one-active-rule` 15/71,
+`season-walk` 3/117; the rest unchanged. See the FLOW_REGISTER entry dated 2026-10-07 for what landed.
+
 The original proposal, kept for the record:
 
 | Test | Fixture | Assertions that **fail today** | Already green (regression guard) |
@@ -427,13 +434,13 @@ envelope until Phase 6).
 
 ## 8. Changes to PJL-133 … PJL-138 before coding
 
-* **PJL-133**: add (a) `bookings.update` must reject `status`/`scheduledFor`; (b) `remove()` limited to
-  purge + never-messaged records, with `cancelBooking(reason)` as the admin "delete"; (c) `bucket`
-  (promised window) on every Booking; (d) `WO.bookingId` is part of the contract here; (e) keep
-  `workOrderIds[]` with the same-visit invariant, `primaryWorkOrderId` derived; (f) no "rescheduled"
-  status; (g) `standby` decision; (h) a store lock around every bookings.json write (today only
-  hold/reserve are locked, §3.4.6); (i) status transition rules (no reviving a dead record); (j) GET
-  endpoints must not write (the heal moves to the sweep only).
+* **PJL-133** — *shipped on `claude/pjl-133-phase1-contract` (2026-10-07)*: (a) `bookings.update`
+  rejects `status`/`scheduledFor` ✓; (b) `remove()` refuses any record the customer was told about ✓
+  (the doors' conversion to cancel-with-reason is PJL-135); (c) `bucket` on every Booking ✓;
+  (d) `WO.bookingId` + `resolveForBooking` ✓; (e) `workOrderIds[]` kept, `primaryWorkOrderId` derived ✓;
+  (f) no "rescheduled" status ✓; (g) standby out of scope ✓; (h) store lock on every write ✓;
+  (i) transition rules ✓; (j) GETs never write ✓. Plus: one cancel implementation with the work-order
+  cascade for every door; `setRouteTime` for the route's minute; the follow-up booking through the library.
 * **PJL-134**: plan stop stores `bookingId` at assign/Book-now; `planStopState` resolves by id first;
   a missing/terminal booking never returns a stop to Assign-bookable; Unassign → cancel-with-reason (or
   removed); `seasonalOutreach.touches` carry `bookingId`; "Skip this season", a cancelled assignment

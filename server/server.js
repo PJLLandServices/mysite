@@ -185,6 +185,10 @@ const stripe = require("./lib/stripe");
 const klarna = require("./lib/klarna");
 const financingReminders = require("./lib/financing-reminders");
 const bookings = require("./lib/bookings");
+// The one module that cancels, completes, no-shows or links a Booking and
+// its work orders together (P-PJL-39, PJL-133). Routes call this, then
+// mirror onto lead.booking until Phase 6 retires the envelope.
+const bookingLifecycle = require("./lib/booking-lifecycle");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
@@ -5857,9 +5861,11 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   // bucket slots; for admin_custom it's start + service.minutes.
   const endDate = new Date(matched.end);
 
-  // 1) Push the canonical bookings.json record.
+  // 1) Push the canonical bookings.json record (with the half-day the
+  //    customer was offered, so the promise lives on the record).
   const updatedBooking = await bookings.reschedule(bookingId, {
     scheduledFor: startDate.toISOString(),
+    bucket: matched.bucketKey || null,
     by: actor,
     actorName,
     reason
@@ -13734,21 +13740,17 @@ async function handleApi(req, res, pathname) {
     if (propertyId) all = all.filter((b) => b.propertyId === propertyId);
     if (leadId) all = all.filter((b) => b.leadId === leadId);
     if (status) all = all.filter((b) => b.status === status);
-    // Legacy data heal: if asking for a specific lead's bookings and we
-    // have no canonical record yet, materialize one from lead.booking
-    // so the reschedule / follow-up modals can find it. Idempotent —
-    // upsertFromLead returns the existing record on subsequent calls.
+    // A read is never a write (PJL-133). This GET used to heal a lead's
+    // envelope into a canonical record on the way out, which meant a page
+    // view could create a record, close last season's as completed and
+    // re-time the day. The heal is the boot + 10-minute sweep's job
+    // (bookings.healFromLeads); a lead that still has an envelope and no
+    // record here is logged for it.
     if (leadId && !all.length) {
       try {
-        const allLeads = await readLeads();
-        const lead = allLeads.find((l) => l.id === leadId);
-        if (lead && lead.booking) {
-          const upserted = await syncBookingFromLead(lead);
-          if (upserted) all = [upserted];
-        }
-      } catch (err) {
-        console.warn("[bookings list] upsert-from-lead failed:", err?.message);
-      }
+        const lead = (await readLeads()).find((l) => l.id === leadId);
+        if (lead?.booking?.start) console.warn(`[bookings list] lead ${leadId} has an envelope and no canonical record — the heal sweep will mirror it`);
+      } catch { /* a read stays a read */ }
     }
     all.sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));
     // What the CUSTOMER has done, derived server-side and sent alongside
@@ -13765,15 +13767,65 @@ async function handleApi(req, res, pathname) {
     if (!b) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
     return sendJson(res, 200, { ok: true, booking: withCustomerState(b) });
   }
+  // PATCH /api/bookings/:id — the booking page's notes and status menu.
+  //
+  // PJL-133: a client body no longer reaches bookings.update. The notes
+  // fields are picked by name; `status` goes through the lifecycle (cancel
+  // with a reason, no-show, complete, or the confirmed ↔ tentative pair) and
+  // mirrors onto the lead envelope exactly as the cancel route does; a
+  // dead record is never revived; `scheduledFor` is a reschedule and is
+  // refused here. Before this, the Status dropdown wrote a cancellation
+  // with no cancelledAt, no cascade and no email, and could put a
+  // cancelled visit back on the route.
   if (bookingMatch && req.method === "PATCH") {
     try {
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in required."] });
       const id = decodeURIComponent(bookingMatch[1]);
-      const payload = await parseRequestBody(req);
-      const updated = await bookings.update(id, payload);
+      const payload = (await parseRequestBody(req)) || {};
+      if (Object.prototype.hasOwnProperty.call(payload, "scheduledFor")) {
+        return sendJson(res, 422, { ok: false, code: "use_reschedule", errors: ["A booking's date is changed with Reschedule, not by editing the record."] });
+      }
+      const PATCHABLE = ["prepNotes", "zoneCount", "customerName", "customerPhone", "customerEmail", "address"];
+      const picked = {};
+      for (const key of PATCHABLE) if (Object.prototype.hasOwnProperty.call(payload, key)) picked[key] = payload[key];
+      let updated = null;
+      if (Object.keys(picked).length) {
+        updated = await bookings.update(id, picked);
+        if (!updated) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+      }
+      if (typeof payload.status === "string" && payload.status) {
+        const by = session.role === "admin" ? "admin" : "tech";
+        const result = await bookingLifecycle.setStatusFromAdmin(id, payload.status, { by, actorName: session.uid || "", note: String(payload.note || "").slice(0, 300) });
+        if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code || null, errors: result.errors });
+        updated = result.booking;
+        // The envelope follows the record (the cancel route's mirror), until
+        // Phase 6 makes lead.booking a projection.
+        if (!result.unchanged && updated.leadId) {
+          try {
+            const allLeads = await readLeads();
+            const lead = allLeads.find((l) => l.id === updated.leadId);
+            if (lead && lead.booking) {
+              lead.booking.status = updated.status;
+              if (!bookingHoldsItsSlot(updated.status)) {
+                lead.booking.cancelledAt = updated.cancelledAt || updated.completedAt || new Date().toISOString();
+                lead.booking.cancellationReason = updated.cancellationReason || "";
+                lead.booking.removalCode = updated.removalCode || null;
+                lead.booking.removedBy = updated.cancelledBy || updated.completedBy || by;
+              }
+              await writeLeads(allLeads);
+            }
+          } catch (e) {
+            console.warn("[booking patch] lead.booking mirror failed:", e?.message);
+          }
+        }
+      }
+      if (!updated) updated = await bookings.get(id);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
       return sendJson(res, 200, { ok: true, booking: updated });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update booking."] });
+      const status = err?.code === "LIFECYCLE_FIELD" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update booking."] });
     }
   }
 
@@ -13901,7 +13953,11 @@ async function handleApi(req, res, pathname) {
       const notify = payload?.notifyCustomer === undefined
         ? (spec ? spec.notify !== false : true)
         : payload.notifyCustomer !== false;
-      const result = await bookings.cancel(id, {
+      // PJL-133: the lifecycle cancels the record AND this visit's open
+      // work orders. Before this, the Schedule page's cancel and the Field
+      // app's "Not today" left the work order `scheduled`, and Today's
+      // work-order union put the cancelled visit straight back on the day.
+      const result = await bookingLifecycle.cancelBooking(id, {
         reason,
         reasonCode,
         by: session.role === "admin" ? "admin" : "tech",
@@ -15283,51 +15339,35 @@ async function handleApi(req, res, pathname) {
       // customer in the CRM) but its workOrderIds points at the new
       // follow-up WO. activeBookings() unions bookings.json on top of
       // lead.booking so this slot gets respected by the calendar.
+      //
+      // PJL-133: through the library, under the store's lock, as a full
+      // record. This used to hand-build the record and fs.writeFile the
+      // whole store — its own id counter, no customerId, no rescheduleCount,
+      // and a write that could erase a concurrent cancel or reschedule.
       if (validatedSlot) {
         const service = BOOKABLE_SERVICES[serviceKey];
         const startDate = new Date(validatedSlot.start);
-        const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
-        const now = new Date().toISOString();
-        const allRec = await bookings.list();
-        const nextId = await (async () => {
-          const prefix = `BK-${new Date().getUTCFullYear()}-`;
-          let max = 0;
-          for (const b of allRec) {
-            if (typeof b.id === "string" && b.id.startsWith(prefix)) {
-              const n = parseInt(b.id.slice(prefix.length), 10);
-              if (Number.isFinite(n) && n > max) max = n;
-            }
-          }
-          return `${prefix}${String(max + 1).padStart(4, "0")}`;
-        })();
-        const newBooking = {
-          id: nextId,
-          customerEmail: (lead?.contact?.email || parent.customerEmail || "").toLowerCase(),
-          customerName: lead?.contact?.name || parent.customerName || "",
-          customerPhone: lead?.contact?.phone || parent.customerPhone || "",
-          propertyId: parent.propertyId || null,
-          leadId: parent.leadId || null,
-          scheduledFor: startDate.toISOString(),
-          durationMinutes: service.minutes,
-          serviceKey,
-          serviceLabel: service.label,
-          zoneCount: null,
-          address: parent.address || "",
-          status: "confirmed",
-          prepNotes: notes ? `Follow-up scope: ${notes}` : "",
-          sourceQuoteId: null,
-          workOrderIds: [followup.id],
-          source: forcedByAdmin ? "admin_custom" : "slot",
-          createdAt: now,
-          updatedAt: now,
-          history: [{ ts: now, action: "created_followup", by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
-        };
-        const allWithNew = [newBooking, ...allRec];
         try {
-          const fs = require("node:fs/promises");
-          const path = require("node:path");
-          const FILE = path.join(__dirname, "data", "bookings.json");
-          await fs.writeFile(FILE, JSON.stringify(allWithNew, null, 2) + "\n", "utf8");
+          const newBooking = await bookings.createDirect({
+            customerId: lead?.customerId || parent.customerId || null,
+            customerEmail: (lead?.contact?.email || parent.customerEmail || "").toLowerCase(),
+            customerName: lead?.contact?.name || parent.customerName || "",
+            customerPhone: lead?.contact?.phone || parent.customerPhone || "",
+            propertyId: parent.propertyId || null,
+            leadId: parent.leadId || null,
+            scheduledFor: startDate.toISOString(),
+            durationMinutes: service.minutes,
+            serviceKey,
+            serviceLabel: service.label,
+            zoneCount: null,
+            address: parent.address || "",
+            status: "confirmed",
+            prepNotes: notes ? `Follow-up scope: ${notes}` : "",
+            workOrderIds: [followup.id],
+            source: forcedByAdmin ? "admin_custom" : "slot"
+          }, { by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}`, action: "created_followup" });
+          // The work order names its Booking (both sides).
+          await bookingLifecycle.linkWorkOrder(newBooking.id, followup.id, { by: "system" });
           bookingRec = newBooking;
         } catch (err) {
           console.warn("[followup] booking record write failed:", err?.message);
@@ -15937,8 +15977,10 @@ async function handleApi(req, res, pathname) {
       if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file."] });
       const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
-      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
-      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
+      // A read is never a write (PJL-133): no heal from here. A lead with an
+      // envelope and no record is the sweep's to mirror.
+      const bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
+      if (!bookingRec && lead.booking?.start) console.warn(`[portal availability] lead ${lead.id} has an envelope and no canonical record — the heal sweep will mirror it`);
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
             from: url.searchParams.get("from"),
@@ -16049,8 +16091,9 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
-      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
+      // A read is never a write (PJL-133): no heal from here.
+      const bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
+      if (!bookingRec && lead.booking?.start) console.warn(`[portal booking-actions] lead ${lead.id} has an envelope and no canonical record — the heal sweep will mirror it`);
 
       const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
       const hoursUntil = currentStart ? (currentStart.getTime() - Date.now()) / (60 * 60 * 1000) : null;
@@ -16192,7 +16235,10 @@ async function handleApi(req, res, pathname) {
       }
 
       // 1) Flip the canonical booking record.
-      const cancelResult = await bookings.cancel(bookingRec.id, {
+      // One cancel, one cascade (PJL-133): the lifecycle flips the record
+      // and this visit's open work orders together, the same way the
+      // Schedule page's cancel and the Field app's "Not today" do now.
+      const cancelResult = await bookingLifecycle.cancelBooking(bookingRec.id, {
         reason,
         by: "customer",
         actorName: lead.contact?.name || "customer"
@@ -16228,29 +16274,18 @@ async function handleApi(req, res, pathname) {
         console.warn("[portal cancel] lead mirror failed:", e?.message);
       }
 
-      // 3) Cascade to linked WOs — flip to cancelled + add a distinct
-      //    history breadcrumb so the audit trail explains WHY the WO
-      //    moved (rather than the bare status_change entry that update()
-      //    writes on its own). Best-effort: if any single WO update fails
-      //    we log and continue rather than rolling back the booking cancel
-      //    (the customer-facing "your appointment is cancelled" contract
-      //    takes priority).
-      for (const wo of linkedWos) {
+      // 3) The lifecycle already cascaded this visit's open work orders to
+      //    cancelled (cancelResult.workOrdersCancelled); keep the distinct
+      //    breadcrumb that says WHY on each, for the audit trail.
+      for (const woId of cancelResult.workOrdersCancelled || []) {
         try {
-          if (wo.status !== "cancelled") {
-            await workOrders.update(wo.id, {
-              status: "cancelled",
-              __by: "customer",
-              __statusNote: `Cascade from booking cancel${reason ? `: ${reason}` : ""}`
-            });
-          }
-          await workOrders.appendHistory(wo.id, {
+          await workOrders.appendHistory(woId, {
             action: "booking_cancelled_cascade",
             by: "customer",
             note: `Booking ${bookingRec.id} cancelled by customer${reason ? `: ${reason}` : ""}`
           });
         } catch (err) {
-          console.warn(`[portal cancel] WO ${wo.id} cascade failed:`, err?.message);
+          console.warn(`[portal cancel] WO ${woId} breadcrumb failed:`, err?.message);
         }
       }
 
@@ -21989,7 +22024,7 @@ async function handleApi(req, res, pathname) {
       if (lead) {
         try {
           const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
-          if (current) await bookings.attachWorkOrder(current.id, wo.id);
+          if (current) await bookingLifecycle.linkWorkOrder(current.id, wo.id, { by: "system" });
         } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
@@ -22945,6 +22980,10 @@ async function handleApi(req, res, pathname) {
 
       const removed = await workOrders.remove(id);
       if (!removed) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      // Every Booking that named this work order lets go of the id (PJL-133);
+      // a dead id left on the record is a dangling link the audit reports.
+      try { await bookingLifecycle.unlinkWorkOrder(id, { by: await actorLabel(req), note: "work order deleted" }); }
+      catch (e) { console.warn("[wo delete] booking unlink failed:", e?.message); }
       // Clear the lead's pointer so the CRM doesn't show a dangling link.
       if (removed.leadId) {
         const allLeads = await readLeads();
@@ -26653,7 +26692,7 @@ async function orderDayForDriving(rows) {
       if (customId && wo.id !== customId) {
         try {
           const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
-          if (current) await bookings.attachWorkOrder(current.id, wo.id);
+          if (current) await bookingLifecycle.linkWorkOrder(current.id, wo.id, { by: "system" });
         } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
@@ -30488,7 +30527,7 @@ async function retimeCustomerBooking(row, start, durationMinutes) {
     await writeLeads(all);
     await mirrorBookingOnly(lead).catch((err) => console.warn("[retime] mirror failed:", err?.message));
   } else if (rec) {
-    await bookings.update(rec.id, { scheduledFor: startIso });
+    await bookings.setRouteTime(rec.id, startIso, { by: "route" });
   } else {
     return false;
   }
