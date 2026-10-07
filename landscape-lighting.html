@@ -242,6 +242,9 @@
     grid-column: 1;
     grid-row: 1;
     height: clamp(280px, 50vw, 420px);
+    /* A fixed height plus the 4/3 aspect-ratio forced a 373px-wide box on
+       phones, pushing the whole page sideways. Let the width follow the column. */
+    aspect-ratio: auto;
   }
   .service-detail-content {
     grid-column: 1;
