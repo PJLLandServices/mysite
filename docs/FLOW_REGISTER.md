@@ -2,6 +2,16 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-07, minutes later (Two booked customers can swap with each other):** Patrick, as soon as
+the arrows went live: *"two personally booked appointments can't jump each other now either."*
+`day.bookedOrder[key]` stored only `{ before: planCode }`, so two booked rows ahead of the same plan
+stop (or both at the end of the half-day) wrote the same position and `bucketOrderWithBooked`
+put them back in arrival order — the ↑ press "worked" and nothing moved. Now the position also
+carries `rank`, the row's place among the booked rows sharing that `before`; `applyBucketOrder`
+assigns it from the merged list, the merge sorts by it (unranked rows from older data go after, in
+arrival order), `validate` keeps it. `scripts/test-booked-order.mjs` section 4½ (45 total)
+reproduces the no-op swap on the previous code and pins the fix.
+
 **2026-10-07 (A booked customer can be moved like any other stop — and a hand-ordered day no longer
 pins them last):** Patrick, Oct 14 again, after the optimiser fix went live and the day came back
 *"Ordered by hand"* with 72 minutes of waiting: *"If we start off with Cynthia like we needed to,
