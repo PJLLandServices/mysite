@@ -1511,6 +1511,9 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // The read-only booking reconciliation audit (PJL-137): every store that
+  // can say "there is an appointment", checked against the Booking.
+  if (pathname === "/api/admin/booking-audit") return "admin";
   // Which commit each phone reports running (lib/field-clients.js).
   if (pathname === "/api/admin/field-clients") return "admin";
   // One-time backfill for pre-2026-09-20 project conversions — bulk
@@ -13731,6 +13734,34 @@ async function handleApi(req, res, pathname) {
   // and bookings.attachWorkOrder under the hood. Patch endpoint is
   // available for prep-notes / status changes that don't go through
   // the lead.booking sync path.
+  // GET /api/admin/booking-audit — the reconciliation audit over the LIVE
+  // stores, read-only (PJL-137, TRD §11). The same report
+  // scripts/audit-bookings.mjs prints from a data directory; served here so
+  // production is audited where its data lives (and through the Assistant's
+  // read_crm, which whitelists this path). ?format=text for the human
+  // summary. Never writes; repair is a separate mode that does not exist yet.
+  if (req.method === "GET" && pathname === "/api/admin/booking-audit") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const audit = require("./lib/booking-audit");
+      const [allBookings, allLeads, allWos, allProps, allPlans] = await Promise.all([
+        bookings.list(),
+        readLeads(),
+        workOrders.list({ includeArchived: true }),
+        properties.list({ includeArchived: true }),
+        seasonPlans.read()
+      ]);
+      const report = audit.runAudit({ bookings: allBookings, leads: allLeads, workOrders: allWos, properties: allProps, seasonPlans: allPlans });
+      if (url.searchParams.get("format") === "text") {
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+        return res.end(audit.formatReport(report) + "\n");
+      }
+      return sendJson(res, 200, { ok: true, report });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "The audit could not run."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/bookings") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const propertyId = url.searchParams.get("propertyId");

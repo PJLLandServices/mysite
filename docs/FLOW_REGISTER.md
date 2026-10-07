@@ -8805,3 +8805,35 @@ failing of 409 (123 of 403 before); `no-raw-store-writes` 1/9 (the remaining one
 `toString` for the function it wraps). Harness note: `npm run build:check` cannot run through npm on
 Windows (the chain exceeds the shell's command-line limit); run it through bash. No PASS flow's
 behaviour changed except as listed.
+
+**2026-10-07 (Unified Booking Source of Truth — Phase 5a, the read-only reconciliation audit; PJL-137,
+first half):** `server/lib/booking-audit.js` (`runAudit(stores, { now })`, `formatReport`) reads
+bookings, leads, work orders, properties and the season plans together and names every place two of
+them disagree about an appointment. It never writes. **Fourteen categories**, six critical —
+`duplicate_active` (two live Bookings, one property, one day), `merged_visits` (one Booking holding
+work orders from different visits), `terminal_wo_on_live` (a live Booking whose own work order is
+finished), `plan_stop_deleted_booking` (a planned stop whose customer was messaged but has no Booking:
+the record was deleted — Peter's class), `id_collision`, `envelope_disagrees` (lead envelope vs
+canonical record) — and eight advisory — `stale_confirmed` (live but past-dated), `plan_stop_no_booking`,
+`wo_missing_booking_link` (the Booking can be inferred), `wo_without_booking`, `dangling_wo_id`,
+`lead_without_record`, `patch_flip` (terminal status with no cancelledAt: set by a plain field edit),
+`test_record`. Liveness is asked of `holdsItsSlot`, never spelled out; `test-booking-status-readers`
+allow-lists the module with that reason (it names states in order to report them). **Three doors to one
+report:** `node scripts/audit-bookings.mjs [--data DIR] [--json] [--now YYYY-MM-DD]` (exit 2 while any
+critical conflict exists, 1 advisory-only, 0 clean; TZ America/Toronto), `GET /api/admin/booking-audit`
+(`?format=text` for the human summary; admin session) and the PJL Assistant's `read_crm` (path
+whitelisted) — so production is audited where its data lives, never by copying it. Pinned by T9
+`scripts/test-ubst-audit-fixtures.mjs`: one fixture per category, the expected ids per category, the
+store bytes identical before and after, `--now` pinned to 2026-10-07 so "past" is stable; 22/22 (18 of
+20 failed on `305d7e3`). Measured: `npm run test:ubst` 81 failing of 411 (99 of 409 after Phase 1).
+**Production preview, 2026-10-06, read-only through the Assistant's read tools** (the route is not
+deployed until PR #401 merges): 143 bookings in 2026; 0 ever completed; 57 confirmed and already past
+(`stale_confirmed` — "nothing completes a Booking", confirmed live, Peter Bazios's May repair
+BK-2026-0002 among them); 76 confirmed ahead; 9 cancelled; 1 tentative; 0 no_show. Fall plan, Sep 28 →
+Oct 9 (36 of 68 stops, the response truncates there): 35 `on_day`, 1 `unassigned` (P-2026-0025, Oct 6),
+5 cancelled stops dropped with their booking ids kept, 1 moved (BK-2026-0139), 1 `skipped` with no
+booking at all (P-2026-0009, Peter Bazios — #398's flag over the deleted record). Lead-path bookings show
+a `synced_from_lead` history line every few minutes on Oct 6–7 with nothing changed (the envelope mirror
+is not idempotent; PJL-135). Full counts and ids come from the route after deploy. **Repair mode does not
+exist** (PJL-137's second half: a separate mode, backup-first, dry-run by default, deterministic, logged,
+stops on ambiguity) and no production data was changed by this work. No PASS flow touched.

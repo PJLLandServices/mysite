@@ -366,7 +366,7 @@ phase that makes it green ships. Measured on `origin/main` @ `305d7e3`:
 | `one-active-rule` (T5) | 19 / 71 | PJL-133, 138 |
 | `idempotent-writers` (T6) | 12 / 18 | PJL-133, 135 |
 | `plan-stop-identity` (T8) | 4 / 15 | PJL-134 |
-| `audit-fixtures` (T9) | 18 / 20 | PJL-137 |
+| `audit-fixtures` (T9) | 18 / 20 → **0 / 22 after PJL-137 (read-only half), 2026-10-07** | PJL-137 |
 | `season-walk` (T10) | 8 / 108 | all; the project's gate |
 
 Two findings the suites added to the inventory while running: six concurrent PATCHes to six
@@ -412,6 +412,12 @@ The Linear phases are right in content; two re-orderings make them safer:
 3. **Phase 5a (PJL-137, read-only half) — moved up.** The audit is cheap, read-only, and we need its
    numbers before touching the plan or writers (we already know of 57 stale-confirmed, 1 merged, 2
    PATCH-flipped, 1 dangling-WO, 2 test records from a partial look). Dry-run report to Patrick.
+   **Shipped 2026-10-07 on PR #401:** `server/lib/booking-audit.js` + `scripts/audit-bookings.mjs` +
+   `GET /api/admin/booking-audit` (+ `read_crm`). Production preview, read-only, 2026-10-06: 143
+   bookings, 0 ever completed, 57 confirmed and past-dated, 76 confirmed ahead, 9 cancelled,
+   1 tentative; fall plan Sep 28–Oct 9 (36 of 68 stops): 35 on_day, 1 unassigned (P-2026-0025),
+   5 cancelled-dropped (booking ids kept), 1 moved, 1 skipped (P-2026-0009 Peter Bazios, no
+   booking). The full count + id report runs on the box once #401 deploys. Repair: not built.
 4. **Phase 3 (PJL-135) — writers before the plan.** Peter's class of bug is caused by the delete and
    PATCH doors, not by the plan reader. Close W5/W6/W8/W19 first (cancel-with-reason, PATCH refuses
    status, follow-up through the lib), make W7/W11 one op, make reserve create the Booking before the
@@ -457,7 +463,9 @@ envelope until Phase 6).
   same local day, same type → unresolved (manual); cascade reconciles on `completed`, `cancelled` and
   `no_show`; property-only WO must create/bind a Booking; follow-up WO path included; #391 relink.
 * **PJL-137**: add the §5.8 categories; machine-readable JSON + human summary; never writes; include
-  the numbers already observed (57 / 1 / 2 / 1 / 2) as the first baseline.
+  the numbers already observed (57 / 1 / 2 / 1 / 2) as the first baseline. **Read-only half shipped
+  (PR #401, 2026-10-07): 14 categories, 6 critical / 8 advisory; CLI exit 2 / 1 / 0; the second
+  half (repair: separate mode, backup-first, dry-run default, stops on ambiguity) is not started.**
 * **PJL-138**: reader list = R1 lead pass, R2 lead pass + `removedToday`, R3 canvas, R5 `envelopeUpcoming`
   + `nextVisit` + calendar.ics, R11, R16, R17; definition of done adds "no reader consults
   `lead.booking` for liveness" and "T1–T9 green".

@@ -17,18 +17,22 @@
 //   plan_stop_no_booking        a planned stop with no Booking at all
 //   plan_stop_deleted_booking   a planned stop whose property was messaged
 //                               (outreach touch) but has no Booking — Peter
-//   wo_missing_booking_link     a dated property WO no Booking names
+//   wo_missing_booking_link     a dated WO with no bookingId whose Booking
+//                               can be inferred (a record names it)
+//   wo_without_booking          a dated, open WO with no Booking anywhere
+//   lead_without_record         (none in the fixture) an envelope, no record
 //   dangling_wo_id              a Booking naming a WO id that does not exist
 //   id_collision                two Bookings sharing an id
 //   envelope_disagrees          lead.booking live while the record is cancelled
 //   patch_flip                  status changed with no cancelledAt
 //   test_record                 a PJLTEST / example.com record in the store
 //
-// Expected on origin/main @ 305d7e3: 18 of 20 assertions fail (verified
-// 2026-10-06): the tool does not exist, so every assertion about it fails;
-// the fixture-building assertion and "the audit wrote nothing" pass.
+// Expected on origin/main @ 305d7e3: 18 of 20 assertions failed (the tool did
+// not exist). The clock is pinned (--now 2026-10-07) so "past" means the same
+// thing every run.
 //
 // After PJL-133 (Phase 1, the contract): 18 of 20 assertions fail — the rest belong to later phases.
+// After PJL-137 (Phase 5a, the read-only audit): 0 of 22 fail. The tool exists; repair mode does not.
 //
 // Run: node scripts/test-ubst-audit-fixtures.mjs
 
@@ -103,7 +107,9 @@ const EXPECT = {
   terminal_wo_on_live: ["BK-2026-0104"],
   plan_stop_no_booking: ["P-NOBOOK", "P-PETER", "P-WOLINK"],
   plan_stop_deleted_booking: ["P-PETER"],
-  wo_missing_booking_link: ["WO-LINK1", "WO-OCT1"],
+  wo_missing_booking_link: ["WO-ENV1", "WO-OCT1"],
+  wo_without_booking: ["WO-LINK1"],
+  lead_without_record: [],
   dangling_wo_id: ["BK-2026-0105"],
   id_collision: ["BK-2026-0106", "WO-COL1"],
   envelope_disagrees: ["lead-envelope"],
@@ -113,11 +119,11 @@ const EXPECT = {
 
 let report = null;
 if (fs.existsSync(TOOL)) {
-  const run = spawnSync(process.execPath, [TOOL, "--data", DIR, "--json"], { encoding: "utf8", timeout: 120000 });
+  const run = spawnSync(process.execPath, [TOOL, "--data", DIR, "--json", "--now", "2026-10-07"], { encoding: "utf8", timeout: 120000 });
   try { report = JSON.parse(run.stdout || "{}"); } catch { report = null; }
   ok("the tool answers with JSON on --json", report && typeof report === "object" && report.categories, (run.stderr || run.stdout || "").slice(0, 300));
   ok("the tool exits non-zero when critical conflicts exist", run.status !== 0, `exit ${run.status}`);
-  const human = spawnSync(process.execPath, [TOOL, "--data", DIR], { encoding: "utf8", timeout: 120000 });
+  const human = spawnSync(process.execPath, [TOOL, "--data", DIR, "--now", "2026-10-07"], { encoding: "utf8", timeout: 120000 });
   ok("the tool prints a human summary without --json", /conflict|duplicate|Booking/i.test(human.stdout || ""), (human.stdout || "").slice(0, 200));
 } else {
   ok("the tool answers with JSON on --json", false, "no tool");
@@ -135,7 +141,7 @@ for (const [cat, ids] of Object.entries(EXPECT)) {
 ok("the report names which conflicts are critical and which are advisory", report && typeof report.critical === "number" && typeof report.advisory === "number", j(report && { critical: report.critical, advisory: report.advisory }));
 ok("the report is deterministic: a second run matches the first", (() => {
   if (!fs.existsSync(TOOL) || !report) return false;
-  const again = spawnSync(process.execPath, [TOOL, "--data", DIR, "--json"], { encoding: "utf8", timeout: 120000 });
+  const again = spawnSync(process.execPath, [TOOL, "--data", DIR, "--json", "--now", "2026-10-07"], { encoding: "utf8", timeout: 120000 });
   try { return JSON.stringify(JSON.parse(again.stdout).categories) === JSON.stringify(report.categories); } catch { return false; }
 })(), "no report to compare");
 
