@@ -349,10 +349,31 @@ This is why the fix is architectural: the plan stop has **no identity** to be ca
 
 ---
 
-## 6. Fail-first tests proposed (none written yet)
+## 6. Fail-first tests — written, run, failing on `305d7e3` (2026-10-06)
 
 All on the booted-server harness (`scripts/lib/field-server.mjs`: temp copy of `server/`, outbound
-stubbed, tripwires), run from `build:check`, each confirmed failing on `origin/main` before any fix.
+stubbed, tripwires) with shared fixtures in `scripts/lib/ubst-fixtures.mjs`. `npm run test:ubst`
+runs them (`scripts/run-ubst.mjs`). They are **not** in `build:check`; each joins the gate when the
+phase that makes it green ships. Measured on `origin/main` @ `305d7e3`:
+
+| Suite (`scripts/test-ubst-*.mjs`) | Failing / total | Phase that turns it green |
+|---|---|---|
+| `no-raw-store-writes` (T7) | 7 / 9 | PJL-133 |
+| `cancel-everywhere` (T1, Peter) | 32 / 101 | PJL-133, 134, 135 |
+| `returning-customer` (T2) | 2 / 18 | PJL-136 |
+| `wo-binds-one-booking` (T3) | 9 / 17 | PJL-133, 136 |
+| `completion-reconciles` (T4) | 12 / 23 | PJL-136 |
+| `one-active-rule` (T5) | 19 / 71 | PJL-133, 138 |
+| `idempotent-writers` (T6) | 12 / 18 | PJL-133, 135 |
+| `plan-stop-identity` (T8) | 4 / 15 | PJL-134 |
+| `audit-fixtures` (T9) | 18 / 20 | PJL-137 |
+| `season-walk` (T10) | 8 / 108 | all; the project's gate |
+
+Two findings the suites added to the inventory while running: six concurrent PATCHes to six
+different bookings left **one** note on disk (`idempotent-writers` E — the store has no lock), and a
+visible plan window and the customer's requested window are two stores with one display (§3.5).
+
+The original proposal, kept for the record:
 
 | Test | Fixture | Assertions that **fail today** | Already green (regression guard) |
 |---|---|---|---|

@@ -8750,3 +8750,21 @@ is shared it does nothing.
 - **Test:** `scripts/test-wo-duplicate-id-repair.mjs` (in build:check). On the parent it fails
   12 of 24, including "a DRAFT invoice for the fall visit (got paid)" and "GET WO-… is the spring
   visit (got fall_closing)". With the fix, 24 of 24 pass, and a second boot changes nothing.
+
+**2026-10-06, late (Unified Booking Source of Truth — Phase 0, the fail-first suites):** P-PJL-39 /
+PJL-132. The inventory (`docs/UBST_PHASE0_INVENTORY.md`) found seven stores that can each say "there is
+an appointment" and one lifecycle, and ten suites now pin the contract the project builds toward
+(PJL-133 → PJL-138). They are **expected to fail** on today's code and are **deliberately not in
+`build:check`**; a suite joins the gate when the phase that makes it green ships. `npm run test:ubst`
+runs them all (`scripts/run-ubst.mjs`; one line per suite; exit 1 while any fails). Each suite's header
+records what failed on `305d7e3` and why. Verified on 2026-10-06: `no-raw-store-writes` 7/9,
+`cancel-everywhere` (Peter Bazios, six doors + the lead PATCH) 32/101, `returning-customer` 2/18,
+`wo-binds-one-booking` 9/17, `completion-reconciles` 12/23, `one-active-rule` 19/71,
+`idempotent-writers` 12/18 (six concurrent PATCHes to six bookings left ONE on disk — the store has no
+lock), `plan-stop-identity` 4/15, `audit-fixtures` 18/20 (the tool does not exist yet), `season-walk`
+8/108 (a whole season through every door, one invariant after every step). Shared fixtures:
+`scripts/lib/ubst-fixtures.mjs` over `scripts/lib/field-server.mjs`. **Harness change, Windows only:**
+`field-server.mjs` symlinked every repo entry into its temp copy, which needs a privilege a normal
+Windows account lacks (EPERM on `.claude`); it now uses directory junctions and copies top-level files
+on win32, and is unchanged on Linux and CI. No PASS flow touched; no production data read or changed by
+any suite (tripwires unchanged).
