@@ -888,7 +888,13 @@
         sessionToken: state.sessionToken || null,
         holdToken: state.holdToken || undefined,
         pageUrl: window.location.href,
-        userAgent: navigator.userAgent
+        userAgent: navigator.userAgent,
+        // Where this visitor came from (ad tags / referring site), captured
+        // on landing by the analytics partial. Null when nothing was stored.
+        attribution: (function () {
+          try { return typeof window.pjlAttribution === "function" ? window.pjlAttribution() : null; }
+          catch (e) { return null; }
+        })()
       };
       // Anti-bot defense layer (see WEBSITE_MAINTENANCE §15.14). Pulls
       // contact_website (honeypot), _ts (time-trap stamp), and
@@ -940,6 +946,7 @@
           if (typeof gtag === "function") {
             gtag("event", "conversion", { send_to: "AW-11358637592/YtmLCOCulN0cEJicnKgq" });
           }
+          if (typeof fbq === "function") fbq("track", "Schedule", { content_name: state.serviceKey || "" });
         } catch (e) { /* non-fatal */ }
         showStep("confirm");
         return;
@@ -970,6 +977,10 @@
           gtag("event", "conversion", {
             send_to: "AW-11358637592/YtmLCOCulN0cEJicnKgq"
           });
+        }
+        // Meta Pixel "Schedule" — lets Meta see which ad clicks booked.
+        if (typeof fbq === "function") {
+          fbq("track", "Schedule", { content_name: state.serviceKey || "" });
         }
       } catch (e) { /* non-fatal — booking already succeeded */ }
       showStep("confirm");

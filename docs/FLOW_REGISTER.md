@@ -8861,3 +8861,33 @@ is shared it does nothing.
   marker).
 
 **Mac steps:** `docs/ONE_APP_MAC_BUILD.md`.
+
+## 2026-10-07 — LEAD-SOURCE-01: bookings record which ad or website sent the customer; Meta Pixel added (no PASS flow touched)
+
+**Why:** Patrick launched a Facebook/Instagram fall-closing ad (tagged
+`utm_source={{site_source_name}}&utm_medium=paid_social&utm_campaign=fall_closing_oct2026`)
+pointing at `book.html` and asked whether the site knows a booking came from the ad. It didn't.
+
+**What changed:**
+- `_partials/analytics.html` (every page): Meta Pixel for dataset 1523620959798270 (PageView), plus
+  a small script that remembers the visitor's source in localStorage (`pjl_attribution_v1`, 90 days).
+  A tagged click (utm_*, fbclid, gclid) always replaces what is stored; a plain referring site is
+  stored only when nothing is. Exposes `window.pjlAttribution()`.
+- `js/booking.js` (`?v=8`): sends `attribution` with `/api/booking/reserve`; fires Meta
+  `Schedule` next to the existing Google Ads conversion. Both wrapped so tracking can never break a
+  booking.
+- `server/server.js`: `normalizeAttribution()` / `leadSourceLabel()` — the one place that cleans the
+  data and names it ("Facebook ad", "Google search", …). `validateLead` stores it as
+  `lead.context.attribution` only when present; the reserve route passes it through. Additive:
+  leads without a source are byte-identical to before.
+- `server/admin.js`: lead drawer source line adds "Came from: Facebook ad (fall_closing_oct2026)".
+- `privacy-policy.html`: names GA, Clarity and the Meta Pixel.
+
+**Whole workflow:** customer sees nothing new. Patrick sees "Came from" on the lead. Capacity,
+calendar, work orders, invoices, portal: untouched. Admin bookings (bound-lead path) carry no
+attribution by design.
+
+**Tests:** `scripts/test-lead-attribution.mjs` (24 checks; crashes on the parent — the function
+doesn't exist). Existing booking tests re-run: test-booking-guards, -hold, -lifecycle, -funnel,
+asset-versioning, build --check, booking-link lint all pass. `test-book` (Babel parse) and
+`test-reserve-receipts` fail identically on the parent — pre-existing, not touched here.
