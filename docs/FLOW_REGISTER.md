@@ -2,6 +2,45 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-07 (A booked customer can be moved like any other stop — and a hand-ordered day no longer
+pins them last):** Patrick, Oct 14 again, after the optimiser fix went live and the day came back
+*"Ordered by hand"* with 72 minutes of waiting: *"If we start off with Cynthia like we needed to,
+first stop, and moved to Richmond Hill, then Woodbridge we'd be fine."* — *"wherever a personally
+booked appointment sits, you cannot adjust or re-arrange like you can for the season schedule."*
+Both true. A self-booked customer is not in `day.morning`/`day.afternoon`, so the up/down arrows
+never existed for one, and `assignments.sequenceWithBookings` appended every booked row AFTER the
+plan stops of its half-day — harmless on an automatic day (the optimiser reorders), but a
+hand-ordered day walks that list as written, so Markham could only ever follow Woodbridge. The
+first arrow press also froze the STORED order, not the one on the screen. Now: ONE rule,
+`season-plans.bucketOrderWithBooked(day, bucket, bookedKeys)`, says where each booked row sits
+(`day.bookedOrder[key] = { before: planCode | null }`, kept through `validate`); `reorderStop`
+takes the sequencer's own `__bk:<key>` tokens and edits the merged half-day, adopting the displayed
+order (`currentOrder` from the resolved day's timeline) on the first press of an automatic day;
+`clearManualOrder` drops the positions; the sequencer builds its lists through the same rule; the
+page gives a booked row the same arrows (`bookedRow(b, date, bucket)`), named by the customer.
+Deliberately left alone: `geo-filter.js` still shapes a day for the booking page's cheap-add test
+from plan stops in stored order plus bookings by clock time; `moveStop`/`addStop` do not touch
+`bookedOrder` (a stop that leaves the half-day makes any "before it" position fall to the end,
+by the rule, not by a cascade). `scripts/test-booked-order.mjs` (38) pins all of it and reproduces
+the Oct 14 shape on the old code: Cynthia forced last, 56 min waiting. In build:check.
+
+**2026-10-06, late (The route optimiser stops burning driving to avoid waiting):** Patrick, on
+the Oct 14 (R8) day card after an *after 11:00* window went onto 94 Dianawood Ridge: *"can you
+figure out why this moved around?"* — *"look at the stupid driving sequence."* The morning had been
+sent Richmond Hill (180 Valleymede) → Markham (Cynthia Tam, self-booked) → BACK to Richmond Hill
+(24 Fanshawe, a minute from Valleymede) → Woodbridge, arriving at the gate at 11:00 sharp. It was
+doing exactly what `resequence.bestConstrainedOrder` scored: with any window on the day the order
+was chosen lexicographically by (misses, **least waiting**, least driving, home), so a *not before*
+window made a time-killing detour beat sitting still for nine minutes. Now the second component is
+the day's total clock — driving + waiting + the leg home — and least driving is the tiebreak among
+orders that get home at the same minute. A detour that only kills time can never win again; a
+*not after* miss still outranks everything. The sequence re-timed the customers' placeholder
+minutes twice in two minutes (Cynthia 8:20 → 9:04 → 11:30, FLOW-43's retime, arrival window
+unchanged so nothing was sent) — that churn is the symptom, not a second bug. NOT touched: windows
+stay soft (a miss is flagged, never refused); the manual-order path; who set the window (the
+plan's `placed` record covers adds and moves, not windows — named, not built). Coverage: three
+new assertions in `scripts/test-resequence.mjs` (42) on a four-stop fixture that reproduces the
+Oct 14 shape; two of them fail on the old rule.
 **2026-10-06, night (A phone "no" has a home — and every hand-placed stop says how it got
 there):** Patrick, on Oct 7's day card: *"why the fuck is Peter Bazios on the calendar for Oct 7
 still?"* then *"don't only figure that out, but figure out why the fuck it got there, and ensure
@@ -8750,6 +8789,68 @@ is shared it does nothing.
 - **Test:** `scripts/test-wo-duplicate-id-repair.mjs` (in build:check). On the parent it fails
   12 of 24, including "a DRAFT invoice for the fall visit (got paid)" and "GET WO-… is the spring
   visit (got fall_closing)". With the fix, 24 of 24 pass, and a second boot changes nothing.
+
+---
+
+## 2026-10-06 — FIELD-ONE-APP-01: one PJL Field app with Tap to Pay, photos saved to the iPhone library (PJL-114; FLOW-31 touched, re-verified by tests, awaiting the Mac build and device acceptance)
+
+**Ruling (Patrick, 2026-10-06):**
+- One app. Tap to Pay merges into main, and the separate Tap to Pay line is retired only after the
+  new build is proven.
+- Every in-app camera photo is captured at full quality, and its full-size original is saved to the
+  iPhone photo library. No album: "just download them to the library".
+- A separate, smaller copy goes to PJL.
+- Never blocks a work order.
+- Library picks are not re-saved, and markups stay on the work order.
+
+**What changed:**
+
+- **Tap to Pay on main.** The lane's 11 `pjl-field` files come over unchanged:
+  - the Stripe Terminal plugin at 0.0.1-beta.32;
+  - the `proximity-reader.payment.acceptance` entitlement;
+  - `withNoUserScriptSandboxing`;
+  - `src/taptopay/*`, `TapToPaySettings`, and the Tap to Pay pieces of `App.js`, `api.js`,
+    `InvoiceScreen` and `TodayScreen`.
+
+  The lane's two suites (`test-tap-to-pay`, `test-field-script-sandboxing`) and its newer Mac guide
+  come with them. The bundle id is unchanged (`com.pjllandservices.field`).
+- **Runtime.**
+  - main is on `{ "policy": "appVersion" }` at version 1.1.0. The lane's literal pin never comes to
+    main.
+  - The fingerprint stopped being usable as the runtime because the app is built on the Mac, and the
+    Mac and Linux hash the same tree differently (`41661c6f…` against `a7df9c32…`).
+  - What the fingerprint protected, `scripts/field-native-guard.mjs` now protects.
+    `config/field-native.json` records the Linux fingerprint each version was built from
+    (`df302f1b…` for 1.1.0). `field-app-update.yml` refuses to publish a tree that no longer matches
+    it, which replaces the EAS build-list check.
+  - The EAS build workflows still refuse any non-fingerprint tree. No cloud build is made until Apple
+    grants the publishing entitlement.
+- **Photos** (`photos.js`, new `photo-library.js`):
+  - the camera shoots at quality 1;
+  - the original is saved to the library add-only (`requestPermissionsAsync(true)`, never Full
+    Access), not awaited;
+  - refused or failed saves get one quiet note per app run;
+  - the upload copy is made with `expo-image-manipulator`: 2400 px at 0.75 with photoShrink on (and
+    marked `resized`, so `ClosingScreen` doesn't shrink it twice), or JPEG 0.40 with it off;
+  - if making the copy fails, the original goes up (`expo-file-system`);
+  - library picks are unchanged.
+
+**The whole workflow:**
+- **Tech:** sees one iOS "add photos" prompt the first time.
+- **Customer:** nothing changes.
+- **Patrick:** gets his originals in Photos.
+- **Server and sync:** upload sizes stay where PJL-112 put them, and the payload shape is unchanged.
+  The offline queue, delete/move and markup are untouched.
+- **Old installs:** phones on the TestFlight build (runtime `4737af92…`) stop receiving updates from
+  main until they have 1.1.0. The Tap to Pay phone keeps the lane until acceptance passes.
+
+**Tests:**
+- `test-one-app-config.mjs`: 23 of 29 fail on the parent; 35 of 35 pass.
+- `test-photos-save-to-library.mjs`: 22 of 31 fail on the parent; 31 of 31 pass.
+- Updated: `test-ota-channel` (the runtime rule) and `test-photo-markup-offline` (the resized
+  marker).
+
+**Mac steps:** `docs/ONE_APP_MAC_BUILD.md`.
 
 **2026-10-06, late (Unified Booking Source of Truth — Phase 0, the fail-first suites):** P-PJL-39 /
 PJL-132. The inventory (`docs/UBST_PHASE0_INVENTORY.md`) found seven stores that can each say "there is

@@ -447,7 +447,7 @@
       button.type = "button";
       button.className = "sp-nudge-btn";
       button.textContent = direction === "up" ? "↑" : "↓";
-      button.title = `Move ${stop.code} ${direction === "up" ? "earlier" : "later"} in the ${bucket}`;
+      button.title = `Move ${stop.label || stop.code} ${direction === "up" ? "earlier" : "later"} in the ${bucket}`;
       button.setAttribute("aria-label", button.title);
       button.addEventListener("click", async () => {
         wrap.querySelectorAll("button").forEach((b) => { b.disabled = true; });
@@ -460,7 +460,7 @@
           const data = await response.json();
           if (!response.ok || !data.ok) throw new Error((data.errors || ["Reorder failed."]).join(" "));
           render(data.plan);
-          showToast(`${stop.code} moved ${direction === "up" ? "earlier" : "later"}.`);
+          showToast(`${stop.label || stop.code} moved ${direction === "up" ? "earlier" : "later"}.`);
         } catch (error) {
           showToast(error.message, "bad");
           wrap.querySelectorAll("button").forEach((b) => { b.disabled = false; });
@@ -611,7 +611,7 @@
     // on this morning" rather than as a floating extra.
     const rows = [
       ...stops.map((stop) => ({ n: stop.stopNumber, el: () => stopRow(stop, day.date, bucket, arrivals.get(stop.code)) })),
-      ...booked.map((b) => ({ n: b.stopNumber, el: () => bookedRow(b) }))
+      ...booked.map((b) => ({ n: b.stopNumber, el: () => bookedRow(b, day.date, bucket) }))
     ].sort((a, b) => (a.n == null ? 1e9 : a.n) - (b.n == null ? 1e9 : b.n));
     rows.forEach((r) => list.appendChild(r.el()));
     wrap.appendChild(list);
@@ -627,7 +627,7 @@
   // It used to be wrapped in a "Booked appointments" block of its own;
   // now it sits in its own half-day beside the planned stops, told apart
   // by colour (amber) and by the `booked` tag.
-  function bookedRow(b) {
+  function bookedRow(b, date, bucket) {
       const li = document.createElement("li");
     li.className = "sp-stop sp-stop-booked";
     // The row's code is the sequencer mapCode so hovering it lights its
@@ -654,6 +654,14 @@
     // property left the plan's stop list) still owes or carries its
     // confirmation, same as a plan stop.
     if (b.confirmation) li.appendChild(confirmControl(b.confirmation));
+    // THE SAME ARROWS AS A PLAN STOP. A booked customer used to be the one
+    // row on the day with no way to move it, and on a hand-ordered day it
+    // was glued to the end of its half-day — Oct 14, 2026: Markham could
+    // only ever come after Woodbridge. The row's mapCode is the token the
+    // server's merged order understands.
+    if (b.mapCode && date) {
+      li.appendChild(nudgeControl({ code: b.mapCode, label: b.customerName || b.address || "Booked customer" }, date, bucket, null));
+    }
     return li;
   }
 

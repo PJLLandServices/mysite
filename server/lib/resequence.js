@@ -238,12 +238,23 @@ function bestDayOrder(cost, morningIdx, afternoonIdx) {
 // LEXICOGRAPHIC, and the priority order is the whole design:
 //
 //   1. fewest missed "not after" times   — a missed window is a job not done
-//   2. least waiting                     — waiting is unpaid time in a truck
-//   3. least driving                     — the old objective, now third
+//   2. shortest day on the clock         — driving + waiting, to the yard
+//   3. least driving                     — of the orders that tie on the clock
 //   4. finishing nearest the yard        — the existing tiebreak, kept
 //
-// Driving drops to third deliberately. An order that saves four minutes of
-// driving and arrives after a gate is locked has not saved anything.
+// Driving drops below the windows deliberately. An order that saves four
+// minutes of driving and arrives after a gate is locked has not saved
+// anything.
+//
+// WAITING AND DRIVING ARE ONE CLOCK. The first cut ranked "least waiting"
+// above "least driving", and a "not before" window then made the
+// optimiser BURN driving to arrive the minute the gate opened: Patrick,
+// 2026-10-06, an Oct 14 morning sent Richmond Hill → Markham → back to
+// Richmond Hill → Woodbridge rather than finish the two neighbours and
+// wait nine minutes. "Look at the stupid driving sequence." Scoring the
+// day's total time (drive + wait) makes a detour that only kills time
+// never beat sitting still, and the driving component below then prefers
+// the quieter truck among orders that get home at the same minute.
 //
 // Every candidate is scored by walking the real clock, the same walk that
 // produces the printed timeline — so the order chosen and the times shown
@@ -255,11 +266,12 @@ function bestConstrainedOrder(walk, morningIdx, afternoonIdx, cost) {
     for (const a of permutations(afternoonIdx)) {
       const run = walk(m, a);
       const seq = [...m, ...a];
+      const home = seq.length ? cost[seq[seq.length - 1]][0] : 0;
       const score = [
         run.misses.length,
-        run.waitedMinutes,
-        run.driveMinutes + (seq.length ? cost[seq[seq.length - 1]][0] : 0),
-        seq.length ? cost[seq[seq.length - 1]][0] : 0
+        run.driveMinutes + run.waitedMinutes + home,
+        run.driveMinutes + home,
+        home
       ];
       if (bestScore === null || betterScore(score, bestScore)) {
         bestScore = score;

@@ -312,16 +312,21 @@ function sequenceWithBookings({ storedDay, bookedRows, byCode, season, requested
   const rowByMapCode = new Map();
   (bookedRows || []).forEach((row, i) => {
     if (!row || !row.coords || row.coords.lat == null) { if (row) row.mapCode = null; return; }
-    const code = `__bk:${row.bookingId || row.leadId || `i${i}`}`;
+    const key = row.bookingId || row.leadId || `i${i}`;
+    const code = seasonPlans.bookedToken(key);
     row.mapCode = code;
     augByCode.set(code, { code, id: code, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } });
     rowByMapCode.set(code, row);
-    extra[row.bucket === "morning" ? "morning" : "afternoon"].push(code);
+    extra[row.bucket === "morning" ? "morning" : "afternoon"].push(key);
   });
+  // WHERE the booked rows sit among the plan stops is the plan store's
+  // one rule (bucketOrderWithBooked): at the end unless an arrow put them
+  // somewhere, which only a hand-ordered day remembers. The optimiser
+  // reorders an automatic day anyway; on a manual day this IS the route.
   const day = {
     ...(storedDay || {}),
-    morning: [...((storedDay && storedDay.morning) || []), ...extra.morning],
-    afternoon: [...((storedDay && storedDay.afternoon) || []), ...extra.afternoon]
+    morning: seasonPlans.bucketOrderWithBooked(storedDay || {}, "morning", extra.morning),
+    afternoon: seasonPlans.bucketOrderWithBooked(storedDay || {}, "afternoon", extra.afternoon)
   };
   return Promise.resolve(seq(day, { propertiesByCode: augByCode, season, requestedWindows }))
     .then((sequenced) => ({ sequenced, rowByMapCode }));

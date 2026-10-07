@@ -12,6 +12,23 @@ This is a one-time detour. Once the three demo videos go to Apple and the
 **publishing** entitlement is granted, the EAS button build works permanently
 and the Mac is never needed again.
 
+> **2026-09-24: the second Mac build, from current code.** The September
+> build worked but did not stay on the phone long enough to film the videos.
+> This one is built from **`claude/field-taptopay`**: today's app, with Tap to
+> Pay ported onto it. The old `claude/pjl-field-taptopay` branch is history
+> and must **not** be downloaded. What changed from the last run:
+>
+> - **Step 4**: the new branch.
+> - **Step 6c**: `npm ci`, not `npm install`.
+> - **Step 6d** (new): stamp the commit, so the app and the server can both
+>   say which build this is.
+> - **Step 12** (new): what keeps the build on the phone until the videos
+>   are sent.
+>
+> **Before you take a card**, the server half (PR #304) has to be merged and
+> live on Render. Setup and the reader work without it. The payment itself
+> does not.
+
 **What you need in front of you**
 
 - The M2 Mac, macOS updated, Xcode installed.
@@ -98,18 +115,26 @@ a zip file in the browser.
 
 1. In Safari, sign in to **github.com** with the account that owns the repo.
 2. Go to:
-   **https://github.com/PJLLandServices/mysite/tree/claude/pjl-field-taptopay**
+   **https://github.com/PJLLandServices/mysite/tree/claude/field-taptopay**
 
-   That URL matters. It is the **Tap to Pay branch**, not the main code. If
-   the box near the top-left of the file list does not say
-   `claude/pjl-field-taptopay`, you are on the wrong page — do not continue.
+   That URL matters. It is the **Tap to Pay build branch**, not the main code,
+   and not the old September branch (`claude/pjl-field-taptopay`, which is
+   1,000+ commits out of date). If the box near the top-left of the file list
+   does not say exactly `claude/field-taptopay`, you are on the wrong page, so
+   do not continue.
 3. Click the green **Code** button on the right.
 4. Click **Download ZIP** at the bottom of the little menu.
 5. Open **Downloads** in Finder and **double-click the zip file**. macOS
    unzips it into a folder next to it.
 
+6. **Copy the commit id, for Step 6d.** Just above the file list, the
+   latest commit shows a short code of seven letters and numbers. Click it.
+   The address bar now ends in a long id of 40 characters after
+   `/commit/`. Copy that long id into Notes. It is how the phone will prove
+   which build it is running.
+
 **Worked when:** Downloads contains a folder named something like
-`mysite-claude-pjl-field-taptopay`. Open it — you should see folders including
+`mysite-claude-field-taptopay`. Open it — you should see folders including
 `pjl-field`, `server` and `docs`. **Leave this Finder window open**, we drag
 from it in Step 6.
 
@@ -232,8 +257,12 @@ finish — redo it.
 ### 6c. Install the packages
 
 ```
-npm install
+npm ci
 ```
+
+`ci`, not `install`. It installs exactly the versions written in the
+lockfile, including the Stripe SDK at the one version that ran on the phone
+in September. `npm install` is allowed to pick newer ones.
 
 Two to five minutes. A red block starting `npm ERR!` is a real failure — send
 it to me. Everything else in that output is noise, including the two that look
@@ -249,6 +278,21 @@ worst:
   Neither is needed for an iOS build.
 
 **Worked when:** it finishes with a line like `added 723 packages in 10s`.
+
+### 6d. Stamp the commit into the app
+
+Paste this, then replace `PASTE-THE-LONG-ID` with the 40-character id you
+copied in Step 4, part 6:
+
+```
+STAMP_SHA=PASTE-THE-LONG-ID node ../scripts/stamp-field-build-info.mjs build
+```
+
+**Worked when:** it prints `Stamped build: commit` followed by the first
+seven characters of that id. After the app is on the phone, the bottom of
+the Today tab shows `Commit` and the same seven characters. If it says
+`No commit to stamp`, the id was pasted wrong. It must be the long one,
+not the seven-character one.
 
 ---
 
@@ -431,9 +475,43 @@ install. To go back to the everyday app, reinstall it from TestFlight.
    takes a minute.
 
 **Worked when:** the setup screen reports the reader is ready. Then open any
-invoice — **Tap to Pay on iPhone** is the first button in the actions list.
+invoice that is still owed. **Tap to Pay on iPhone** is the first button in
+the actions list. A finished closing now opens straight to its invoice
+from the day, so the button is one tap from the Today schedule.
 
-Do a real card for a small amount on a real invoice before filming anything.
+Do one real card on a small test invoice before filming anything, then
+refund it in the Stripe Dashboard. Afterwards check three things:
+
+- the invoice reads **Paid**;
+- in the CRM, the invoice's payment line reads **Tap to Pay on iPhone**;
+- `/api/admin/field-clients` in the browser shows the commit you stamped in
+  Step 6d.
+
+---
+
+## Step 12 — Keep this build on the phone until Apple has the videos
+
+This build and the TestFlight app are the **same app** to the iPhone, with
+the same bundle id and one icon. Whichever was installed last is the one
+you have. The September build most likely went because TestFlight put the
+everyday app back over it. Until the videos are sent:
+
+1. Open **TestFlight** → **PJL Field** and turn **Automatic Updates** off.
+2. Do **not** tap *Install* or *Update* on PJL Field in TestFlight, and do
+   not delete the app. Either one removes this build.
+3. Updates published from main **cannot** reach this build, and that is
+   deliberate. Its runtime (`41661c6f…`) differs from the TestFlight
+   build's (`4737af92…`), so an update for one never lands on the other.
+   A change to this build means rebuilding on the Mac (Steps 6d and 10b;
+   after the first time, a rebuild takes minutes, not forty).
+4. The signing is good for a **year** on the paid team. If Xcode's Team
+   dropdown ever read `(Personal Team)`, that profile dies after **seven
+   days**. That is the other way a build like this vanishes. Step 8b is
+   where to check.
+
+To go back to the everyday app after Apple has the videos, reinstall PJL
+Field from TestFlight. Before that, open Today and make sure it says
+**Synced**, so nothing recorded on the phone is waiting to upload.
 
 ---
 
@@ -469,6 +547,11 @@ that the EAS button build works and this file becomes history.
 | `Tap to Pay on iPhone` missing from Capabilities | The capability came off the App ID | Tell me — it is a tick box on Apple's portal |
 | Build fails with hundreds of red lines | Almost always a stale generated project | `npx expo prebuild --platform ios --clean`, answer **y**, then Step 8 again |
 | The phone refuses to open the app | Developer Mode is off | Step 9, parts 4 and 5 |
+| Build fails with `Sandbox: find(…) deny(1) file-read-data …` | Xcode's User Script Sandboxing blocked a build script from reading the project | Prebuild now switches it off by itself (`plugins/withNoUserScriptSandboxing.js`, since 2026-09-25). On an older download: TARGETS → PJLField → Build Settings → All → search `sandbox` → **User Script Sandboxing: No**, then Clean Build Folder and ▶ |
+| `No script URL provided … packager is running` on the phone | A **Debug** build, which loads its code from the Mac | Step 10a: Release, then Clean Build Folder and ▶ |
+| The Tap to Pay build is gone and the everyday app is back | TestFlight reinstalled over it | Step 12, then Step 10b again (Steps 1–9 do not need repeating) |
+| `No commit to stamp` in Step 6d | The short id was pasted, or none | Paste the 40-character id from Step 4, part 6 |
+| The reader is ready but the payment says the server refused | PR #304 is not live on Render yet | Merge and deploy #304, then try again |
 
 Send me the **red text**, not a description of it. The exact wording is what
 identifies the cause; "it failed on signing" fits nine different causes.

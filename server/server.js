@@ -28594,13 +28594,29 @@ async function orderDayForDriving(rows) {
     try {
       const session = await requireUser(req);
       const body = await parseRequestBody(req);
+      const orderSeason = seasonPlanOrderMatch[1];
+      const orderYear = Number(seasonPlanOrderMatch[2]);
+      const orderDate = normalizeString(body.date, 10);
+      const orderBucket = normalizeString(body.bucket, 10);
+      // The half-day AS THE SCREEN SHOWS IT — plan stops and booked
+      // customers in sequenced order — so the first arrow press freezes
+      // the displayed order, and the booked rows on it can be moved too.
+      const shown = await resolveSeasonPlan(orderSeason, orderYear);
+      const shownDay = ((shown && shown.days) || []).find((d) => d && d.date === orderDate) || null;
+      const currentOrder = ((shownDay && shownDay.timeline) || [])
+        .filter((t) => t && t.bucket === orderBucket).map((t) => t.propertyCode);
+      const bookedKeys = ((shownDay && shownDay.booked) || [])
+        .filter((b) => b && b.bucket === orderBucket && b.mapCode)
+        .map((b) => seasonPlans.bookedKeyOf(b.mapCode));
       const result = await seasonPlans.reorderStop(
-        seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]),
+        orderSeason, orderYear,
         {
-          date: normalizeString(body.date, 10),
-          bucket: normalizeString(body.bucket, 10),
-          propertyCode: normalizeString(body.propertyCode, 40),
-          direction: normalizeString(body.direction, 4)
+          date: orderDate,
+          bucket: orderBucket,
+          propertyCode: normalizeString(body.propertyCode, 80),
+          direction: normalizeString(body.direction, 4),
+          currentOrder,
+          bookedKeys
         },
         { actor: session?.email || session?.name || "admin" }
       );

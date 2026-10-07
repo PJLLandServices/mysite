@@ -20,15 +20,19 @@
 //   1. The app must NAME a channel.
 //   2. That channel must be one `eas.json` actually builds.
 //   3. There must be an update URL to ask.
-//   4. `runtimeVersion` must stay on the fingerprint policy — it is what
-//      stops a JS bundle landing on a build whose native code cannot run
-//      it. Pin it to a string and an update built against different native
-//      libraries will happily install and crash on launch.
-//      ONE EXCEPTION, TEMPORARY (docs/TTP_RUNTIME_PIN.md): the Tap to Pay
-//      release lane pins exactly the runtime of the phone hand-built from
-//      0c638a8, so its updates reach that phone. Only that value; and no
-//      native build is made while it is present (both build workflows
-//      refuse it, checked below).
+//   4. Something must stop a JS bundle landing on a build whose native
+//      code cannot run it. Pin the runtime to a bare string and an update
+//      built against different native libraries will happily install and
+//      crash on launch.
+//      main (since the one-app build, PJL-114): the appVersion policy, with
+//      the native guard (scripts/field-native-guard.mjs) refusing to publish
+//      a tree whose native fingerprint is not the one its version was built
+//      from. The fingerprint is no longer the runtime because the app is
+//      built on the Mac, and the Mac and Linux never agreed on it.
+//      The Tap to Pay release lane, until it is retired, pins exactly the
+//      runtime of the phone hand-built from 0c638a8 (docs/TTP_RUNTIME_PIN.md).
+//      No cloud build is made from either (both build workflows refuse
+//      anything but the fingerprint policy, checked below).
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -72,7 +76,7 @@ check('there is a URL to ask', () => {
 // docs/TTP_RUNTIME_PIN.md for why, and for when it must go.
 const INSTALLED_TTP_RUNTIME = '41661c6ff465c4c52451347262fc9fc638271ed6';
 
-check('runtimeVersion stays a fingerprint, not a number', () => {
+check('runtimeVersion is guarded: appVersion with the native guard, or the lane pin', () => {
   // The fingerprint is the safety catch. A JS bundle can only land on a
   // build whose native side is identical — so an update published from
   // main can never install onto the Tap to Pay build, which carries an
@@ -84,8 +88,15 @@ check('runtimeVersion stays a fingerprint, not a number', () => {
   // (scripts/ttp-lane-guard.mjs) separately proves the native code under
   // it is unchanged from the build that phone runs.
   if (APP.runtimeVersion === INSTALLED_TTP_RUNTIME) return;
-  assert.deepEqual(APP.runtimeVersion, { policy: 'fingerprint' },
-    'runtimeVersion is no longer a fingerprint — an update can now land on native code that cannot run it');
+  assert.deepEqual(APP.runtimeVersion, { policy: 'appVersion' },
+    'runtimeVersion is neither the appVersion policy nor the lane pin — an update can now land on native code that cannot run it');
+  const record = JSON.parse(read('config/field-native.json'));
+  assert.match(String(record.builds?.[APP.version]?.nativeFingerprint || ''), /^[0-9a-f]{40}$/,
+    `version ${APP.version} has no recorded native build — nothing is listening on its runtime`);
+  const wf = read('.github/workflows/field-app-update.yml');
+  assert.ok(wf.indexOf('node scripts/field-native-guard.mjs') > 0
+    && wf.indexOf('node scripts/field-native-guard.mjs') < wf.indexOf('npx eas-cli@23.2.0 update'),
+    'the update workflow publishes without checking the native code against the build');
 });
 
 check('no native build is made while a runtime is pinned', () => {
