@@ -2,6 +2,28 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-07 (A booked customer can be moved like any other stop — and a hand-ordered day no longer
+pins them last):** Patrick, Oct 14 again, after the optimiser fix went live and the day came back
+*"Ordered by hand"* with 72 minutes of waiting: *"If we start off with Cynthia like we needed to,
+first stop, and moved to Richmond Hill, then Woodbridge we'd be fine."* — *"wherever a personally
+booked appointment sits, you cannot adjust or re-arrange like you can for the season schedule."*
+Both true. A self-booked customer is not in `day.morning`/`day.afternoon`, so the up/down arrows
+never existed for one, and `assignments.sequenceWithBookings` appended every booked row AFTER the
+plan stops of its half-day — harmless on an automatic day (the optimiser reorders), but a
+hand-ordered day walks that list as written, so Markham could only ever follow Woodbridge. The
+first arrow press also froze the STORED order, not the one on the screen. Now: ONE rule,
+`season-plans.bucketOrderWithBooked(day, bucket, bookedKeys)`, says where each booked row sits
+(`day.bookedOrder[key] = { before: planCode | null }`, kept through `validate`); `reorderStop`
+takes the sequencer's own `__bk:<key>` tokens and edits the merged half-day, adopting the displayed
+order (`currentOrder` from the resolved day's timeline) on the first press of an automatic day;
+`clearManualOrder` drops the positions; the sequencer builds its lists through the same rule; the
+page gives a booked row the same arrows (`bookedRow(b, date, bucket)`), named by the customer.
+Deliberately left alone: `geo-filter.js` still shapes a day for the booking page's cheap-add test
+from plan stops in stored order plus bookings by clock time; `moveStop`/`addStop` do not touch
+`bookedOrder` (a stop that leaves the half-day makes any "before it" position fall to the end,
+by the rule, not by a cascade). `scripts/test-booked-order.mjs` (38) pins all of it and reproduces
+the Oct 14 shape on the old code: Cynthia forced last, 56 min waiting. In build:check.
+
 **2026-10-06, late (The route optimiser stops burning driving to avoid waiting):** Patrick, on
 the Oct 14 (R8) day card after an *after 11:00* window went onto 94 Dianawood Ridge: *"can you
 figure out why this moved around?"* — *"look at the stupid driving sequence."* The morning had been
