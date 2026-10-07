@@ -149,14 +149,14 @@
 /* Drop-shadows on hero text — light layer of legibility on top of the card,
    except on the amber-gradient $90 (text-shadow muddies the
    -webkit-text-fill-color: transparent that produces the gradient). */
-.spring-hero h1,
+.spring-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1),
 .spring-hero p,
 .spring-hero-meta,
 .spring-eyebrow,
 .spring-hero .breadcrumbs {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
 }
-.spring-hero h1 em {
+.spring-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) em {
   text-shadow: none;
 }
 /* Tablet portrait + small laptops: video column shrinks slightly so the
@@ -209,13 +209,13 @@
   background: var(--amber-light);
   box-shadow: 0 0 0 3px rgba(245,155,74,.35);
 }
-.spring-hero h1 {
+.spring-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) {
   color: #fff;
   font-size: clamp(38px, 5.6vw, 70px);
   line-height: 1.04; letter-spacing: -.025em;
   margin-bottom: 20px;
 }
-.spring-hero h1 em {
+.spring-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) em {
   font-style: italic;
   background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
   -webkit-background-clip: text; background-clip: text;
@@ -270,7 +270,7 @@
 
 .section { padding: clamp(56px, 8vw, 96px) 0; }
 .section.cream { background: var(--cream); }
-.section h2 {
+.section :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-size: clamp(28px, 3.8vw, 42px);
   color: var(--green);
   margin-bottom: 18px;
@@ -362,7 +362,7 @@
   font-weight: 800; font-size: 18px;
   margin-bottom: 12px;
 }
-.process-step h3 {
+.process-step :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   color: var(--green) !important; font-size: 17px !important;
   margin: 0 0 6px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -377,7 +377,7 @@
   padding: 24px 28px;
   margin: 24px 0;
 }
-.timing-callout h4 {
+.timing-callout :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4) {
   color: var(--green) !important; font-size: 18px !important;
   margin: 0 0 8px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -397,7 +397,7 @@
   display: flex; align-items: center; justify-content: space-between;
   gap: 24px; flex-wrap: wrap;
 }
-.cta-strip h3 {
+.cta-strip :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   color: #fff !important; margin: 0 !important;
   font-size: clamp(22px, 2.6vw, 28px);
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -425,7 +425,7 @@
   transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 .related-service:hover { transform: translateY(-3px); border-color: rgba(74,140,92,.25); box-shadow: 0 10px 26px rgba(15,31,20,.06); }
-.related-service h4 {
+.related-service :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4) {
   color: var(--green) !important; margin: 0 0 4px !important;
   font-size: 16px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -826,7 +826,7 @@
     <p>Newmarket and the GTA's last frost typically lands around <strong>May 24</strong> — but the activation window opens earlier than that. Once overnight temperatures stay above freezing and the ground frost is gone, you can run water through the system safely.</p>
 
     <div class="timing-callout">
-      <h4>The booking timeline that works</h4>
+      <h3 class="hl-h4">The booking timeline that works</h3>
       <p><strong>Early March:</strong> Book your spring opening — pick the date you want. <strong>April 15-30:</strong> Most opening appointments happen here. <strong>May 1-15:</strong> Last-call weeks; service slots get tight. <strong>After May 15:</strong> Most contractors are fully booked into installation season — you're competing for repair-window slots only.</p>
     </div>
 
@@ -880,7 +880,7 @@
   <div class="container" style="max-width:1080px;">
     <h2>Related services &amp; service areas</h2>
     <div class="related-services">
-      <a href="sprinkler-systems.html" class="related-service"><h4>All sprinkler services</h4><p>Install, repair, smart upgrades, full overview.</p></a>
+      <a href="sprinkler-systems.html" class="related-service"><h3 class="hl-h4">All sprinkler services</h3><p>Install, repair, smart upgrades, full overview.</p></a>
       <a href="sprinkler-fall-winterization.html" class="related-service"><h4>Fall winterization</h4><p>Lock in your October fall closing date.</p></a>
       <a href="sprinkler-service-newmarket.html" class="related-service"><h4>Newmarket</h4><p>Our home base — full service.</p></a>
       <a href="sprinkler-service-aurora.html" class="related-service"><h4>Aurora</h4><p>Hills of St Andrew, Bayview Wellington.</p></a>
@@ -893,7 +893,7 @@
 </section>
 
 <!-- @@PJL:footer-START -->
-<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h2 class="hl-h5">Services</h2><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Service Areas</h2><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Company</h2><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Contact</h2><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=3"></script>

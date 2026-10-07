@@ -26,7 +26,7 @@
   pointer-events: none;
   z-index: -1;
 }
-.builder-hero h1 {
+.builder-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: clamp(34px, 4.5vw, 56px);
   font-weight: 800;
@@ -38,7 +38,7 @@
   text-shadow: 0 4px 20px rgba(0,0,0,0.4);
   max-width: 16ch;
 }
-.builder-hero h1 .accent {
+.builder-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) .accent {
   background: linear-gradient(135deg, #F5B14A 0%, #F59B4A 50%, #C96A2A 100%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -651,7 +651,7 @@
 @media (max-width: 460px) {
   .tier-grid { grid-template-columns: 1fr; }
   .builder-hero { padding: 156px 0 36px; }
-  .builder-hero h1 { max-width: none; }
+  .builder-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) { max-width: none; }
   .image-stage__caption { font-size: 12px; }
 }
 

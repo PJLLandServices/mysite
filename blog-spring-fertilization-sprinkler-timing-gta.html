@@ -89,23 +89,23 @@
 .breadcrumbs span{color:rgba(255,255,255,.4);}
 .post-eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:7px 16px;border-radius:99px;margin-bottom:20px;}
 .post-eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--amber-light);box-shadow:0 0 0 3px rgba(245,155,74,.35);}
-.post-hero h1{color:#fff;font-size:clamp(36px,5.4vw,64px);line-height:1.04;letter-spacing:-.025em;margin-bottom:22px;}
-.post-hero h1 em{font-style:italic;background:linear-gradient(135deg,var(--amber-light) 0%,var(--amber) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+.post-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1){color:#fff;font-size:clamp(36px,5.4vw,64px);line-height:1.04;letter-spacing:-.025em;margin-bottom:22px;}
+.post-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) em{font-style:italic;background:linear-gradient(135deg,var(--amber-light) 0%,var(--amber) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
 .post-meta{display:flex;flex-wrap:wrap;gap:14px 22px;color:rgba(255,255,255,.78);font-size:14px;}
 .post-meta-author{display:inline-flex;align-items:center;gap:10px;font-weight:600;color:#fff;}
 .post-meta-author-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--amber) 0%,var(--amber-light) 100%);color:#fff;font-size:13px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;}
 .post-body{padding:clamp(56px,8vw,96px) 0;background:#fff;}
 .post-body-grid{display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr);gap:clamp(24px,4vw,56px);align-items:start;}
 .post-toc{position:sticky;top:120px;background:var(--cream);border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 22px 24px;font-size:14px;}
-.post-toc h4{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:12px;}
+.post-toc :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4){font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:12px;}
 .post-toc ul{list-style:none;padding:0;margin:0;}.post-toc li{margin-bottom:8px;}
 .post-toc a{color:var(--text-mid);border-left:2px solid transparent;padding-left:10px;display:block;line-height:1.45;transition:color .2s ease,border-color .2s ease;}
 .post-toc a:hover{color:var(--green);border-left-color:var(--amber);}
 .post-content{max-width:720px;}
 .post-content p,.post-content li{font-size:17px;line-height:1.75;color:var(--text-mid);}
 .post-content > p{margin-bottom:22px;}
-.post-content h2{font-size:clamp(26px,3.4vw,36px);color:var(--green);margin:48px 0 18px;scroll-margin-top:120px;}
-.post-content h3{font-size:clamp(20px,2.4vw,24px);color:var(--green-mid);margin:32px 0 12px;scroll-margin-top:120px;text-transform:none;letter-spacing:-.005em;}
+.post-content :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2){font-size:clamp(26px,3.4vw,36px);color:var(--green);margin:48px 0 18px;scroll-margin-top:120px;}
+.post-content :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){font-size:clamp(20px,2.4vw,24px);color:var(--green-mid);margin:32px 0 12px;scroll-margin-top:120px;text-transform:none;letter-spacing:-.005em;}
 .post-content ul,.post-content ol{padding-left:26px;margin-bottom:22px;}
 .post-content li{margin-bottom:8px;}.post-content li::marker{color:var(--amber);}
 .post-content strong{color:var(--text);}
@@ -124,7 +124,7 @@
 .timeline-week{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:4px;display:block;}
 .timeline-item.is-green .timeline-week{color:var(--green);}
 .timeline-item.is-warning .timeline-week{color:#c0392b;}
-.timeline-item h3{margin:0 0 6px !important;font-size:18px !important;color:var(--green) !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.timeline-item :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){margin:0 0 6px !important;font-size:18px !important;color:var(--green) !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .timeline-item p{margin:0 !important;font-size:15px !important;line-height:1.6 !important;}
 
 /* Two-column granular vs liquid (post-4 specific) */
@@ -135,7 +135,7 @@
 .compare-card-label{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;padding:4px 12px;border-radius:99px;margin-bottom:12px;}
 .compare-card.granular .compare-card-label{background:var(--amber-pale);color:var(--amber);}
 .compare-card.liquid .compare-card-label{background:#eaf2f9;color:#2c5b86;}
-.compare-card h3{margin:0 0 8px !important;font-size:18px !important;color:var(--green) !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.compare-card :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){margin:0 0 8px !important;font-size:18px !important;color:var(--green) !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .compare-card p{margin:0 !important;font-size:15px !important;line-height:1.55 !important;}
 .compare-card ul{margin-top:10px !important;padding-left:22px !important;}
 .compare-card li{font-size:14px !important;line-height:1.55 !important;margin-bottom:4px !important;}
@@ -143,7 +143,7 @@
 /* Partnership / referral box */
 .partnership-box{margin:32px 0;padding:28px 30px;background:linear-gradient(135deg,#f7faf2 0%,#fdf6ed 100%);border:1px solid var(--border);border-radius:var(--r-lg);}
 .partnership-box-tag{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);background:var(--amber-pale);padding:4px 12px;border-radius:99px;margin-bottom:12px;}
-.partnership-box h3{margin:0 0 10px !important;color:var(--green) !important;font-size:22px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.partnership-box :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){margin:0 0 10px !important;color:var(--green) !important;font-size:22px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .partnership-box p{margin:0 !important;font-size:15px !important;line-height:1.6 !important;}
 .partnership-box p + p{margin-top:10px !important;}
 
@@ -153,7 +153,7 @@
 .callout{margin:40px 0;padding:28px 30px;border-radius:var(--r-lg);background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;position:relative;overflow:hidden;}
 .callout::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 80% at 100% 0%,rgba(224,123,36,.25),transparent 60%);pointer-events:none;}
 .callout-inner{position:relative;z-index:1;}
-.callout h3{color:#fff !important;margin:0 0 8px !important;font-size:22px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.callout :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){color:#fff !important;margin:0 0 8px !important;font-size:22px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .callout p{color:rgba(255,255,255,.85) !important;font-size:15px !important;margin-bottom:18px !important;line-height:1.55 !important;}
 .callout-cta{display:inline-flex;align-items:center;gap:10px;background:var(--amber);color:#fff !important;font-weight:700;padding:12px 22px;border-radius:99px;text-decoration:none !important;transition:background .2s ease,transform .2s ease;}
 .callout-cta:hover{background:var(--amber-light);transform:translateY(-2px);color:#fff !important;}
@@ -161,14 +161,14 @@
 .post-footer{padding:clamp(48px,7vw,80px) 0;background:var(--cream);border-top:1px solid var(--border);}
 .post-author-card{display:flex;gap:20px;align-items:center;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 26px;margin-bottom:40px;}
 .post-author-avatar{flex-shrink:0;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,var(--green) 0%,var(--green-light) 100%);color:#fff;font-size:22px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;}
-.post-author-card h4{color:var(--green);margin-bottom:4px;text-transform:none;letter-spacing:-.005em;}
+.post-author-card :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4){color:var(--green);margin-bottom:4px;text-transform:none;letter-spacing:-.005em;}
 .post-author-card p{color:var(--text-muted);font-size:14px;margin:0;line-height:1.45;}
-.related-section h3{font-size:clamp(22px,2.6vw,28px);color:var(--green);margin-bottom:22px;}
+.related-section :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3){font-size:clamp(22px,2.6vw,28px);color:var(--green);margin-bottom:22px;}
 .related-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;}
 .related-card{display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;}
 .related-card:hover{transform:translateY(-4px);border-color:rgba(74,140,92,.25);box-shadow:0 12px 30px rgba(15,31,20,.08);}
 .related-card-tag{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:10px;}
-.related-card h4{color:var(--green);font-size:17px;margin-bottom:8px;text-transform:none;letter-spacing:-.005em;line-height:1.25;}
+.related-card :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4){color:var(--green);font-size:17px;margin-bottom:8px;text-transform:none;letter-spacing:-.005em;line-height:1.25;}
 .related-card p{font-size:14px;color:var(--text-muted);margin:0;line-height:1.5;}
 .post-sticky-cta{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:inline-flex;align-items:center;gap:12px;background:var(--amber);color:#fff;font-weight:700;font-size:14px;padding:12px 18px 12px 14px;border-radius:99px;box-shadow:0 16px 40px rgba(224,123,36,.45);z-index:900;opacity:0;pointer-events:none;transition:opacity .25s ease,transform .25s ease;}
 .post-sticky-cta.is-visible{opacity:1;pointer-events:auto;transform:translate(-50%,-2px);}
@@ -318,7 +318,7 @@
 <section class="post-body">
   <div class="container">
     <div class="post-body-grid">
-      <aside class="post-toc"><h4>In this article</h4><ul>
+      <aside class="post-toc"><h2 class="hl-h4">In this article</h2><ul>
         <li><a href="#why">Why irrigation timing makes (or breaks) fertilizer</a></li>
         <li><a href="#mistake">The biggest spring mistake</a></li>
         <li><a href="#timeline">The 6-week spring timeline</a></li>
@@ -434,7 +434,7 @@
   <div class="container">
     <div class="post-author-card">
       <span class="post-author-avatar">PL</span>
-      <div><h4>Patrick Lalande</h4><p>Owner &amp; lead technician at PJL Land Services. 10+ years coordinating spring openings with the GTA's best lawn-care companies. Hunter Hydrawise certified.</p></div>
+      <div><h3 class="hl-h4">Patrick Lalande</h3><p>Owner &amp; lead technician at PJL Land Services. 10+ years coordinating spring openings with the GTA's best lawn-care companies. Hunter Hydrawise certified.</p></div>
     </div>
     <div class="related-section">
       <h3>Keep reading</h3>
@@ -468,7 +468,7 @@
 <a href="tel:+19059600181" class="post-sticky-cta" id="postStickyCta" aria-label="Call PJL Land Services"><span class="post-sticky-cta-icon" aria-hidden="true">📞</span><span>Book spring opening: <strong>(905) 960-0181</strong></span></a>
 
 <!-- @@PJL:footer-START -->
-<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h2 class="hl-h5">Services</h2><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Service Areas</h2><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Company</h2><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Contact</h2><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=3"></script>

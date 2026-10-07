@@ -37,7 +37,7 @@
     radial-gradient(circle at 85% 80%, rgba(243,144,25,0.18), transparent 40%);
 }
 .page-hero.quote-hero .quote-hero-content { position: relative; z-index: 2; max-width: 920px; }
-.page-hero.quote-hero h1 {
+.page-hero.quote-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) {
   color: #fff;
   margin-bottom: 12px;
   font-size: clamp(30px, 3.6vw, 44px);
@@ -608,7 +608,7 @@
   margin-bottom: 18px;
   box-shadow: 0 12px 28px rgba(27,77,46,0.22);
 }
-.quote-success h2 {
+.quote-success :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 28px;
   text-transform: uppercase;
