@@ -247,6 +247,49 @@ a.neighborhood{text-decoration:none;}
         y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     })(window, document, "clarity", "script", "ym00qkeupr");
 </script>
+<!-- Meta Pixel (dataset "PJL Land Services Website") — Facebook/Instagram ads -->
+<script>
+  !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+  n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+  n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+  t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+  document,'script','https://connect.facebook.net/en_US/fbevents.js');
+  fbq('init', '1523620959798270');
+  fbq('track', 'PageView');
+</script>
+<!-- Lead-source capture. Remembers where a visitor first came from (an ad's
+     utm_* tags, a Facebook/Google click id, or the referring site) so the
+     booking they make later — even pages later — records it. A tagged ad
+     click always replaces what was stored (latest paid click wins); a plain
+     referring site is only stored when nothing is. Kept for 90 days. js/booking.js reads window.pjlAttribution()
+     and sends it with the booking; the server stores it on the lead. -->
+<script>
+  (function () {
+    var KEY = 'pjl_attribution_v1', TTL = 90 * 864e5;
+    function read() {
+      try {
+        var a = JSON.parse(localStorage.getItem(KEY) || 'null');
+        if (a && a.ts && Date.now() - a.ts < TTL) return a;
+      } catch (e) {}
+      return null;
+    }
+    try {
+      var q = new URLSearchParams(location.search), hit = {}, any = false;
+      ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','fbclid','gclid'].forEach(function (k) {
+        var v = q.get(k); if (v) { hit[k] = v.slice(0, 200); any = true; }
+      });
+      var ref = document.referrer || '';
+      var external = ref && ref.indexOf(location.hostname) === -1;
+      if (any || (external && !read())) {
+        hit.referrer = external ? ref.slice(0, 300) : '';
+        hit.landingPage = (location.pathname + location.search).slice(0, 300);
+        hit.ts = Date.now();
+        localStorage.setItem(KEY, JSON.stringify(hit));
+      }
+    } catch (e) {}
+    window.pjlAttribution = read;
+  })();
+</script>
 <!-- @@PJL:analytics-END -->
 </head>
 <body>
