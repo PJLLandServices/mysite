@@ -151,9 +151,13 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   const photoOptions = { shrink: shrinkOn };
   // The photo just taken, for its "Mark up this photo" button (D-B3).
   const [justTaken, setJustTaken] = useState(null);
-  const attachPhoto = useCallback(async photo => {
+  const attachPhoto = useCallback(async taken => {
     const { queue, key } = field.current;
-    const ready = shrinkOn && shrinkRef.current ? await shrinkRef.current(photo) : photo;
+    // A camera photo arrives already resized on the phone (photos.js,
+    // PJL-114): only a library pick goes through the on-screen shrinker. The
+    // marker that says so stays here; it never goes up with the photo.
+    const { resized, ...photo } = taken;
+    const ready = !resized && shrinkOn && shrinkRef.current ? await shrinkRef.current(photo) : photo;
     const before = new Set((queue.view(key)?.photos || []).map(p => p.clientUploadId));
     // The original is never changed: in the device check it goes up as
     // taken, and the shrunk copy goes up beside it as its own photo.

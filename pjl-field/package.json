@@ -12,9 +12,13 @@
     "built": "node scripts/built.mjs"
   },
   "dependencies": {
+    "@stripe/stripe-terminal-react-native": "0.0.1-beta.32",
     "expo": "~54.0.36",
+    "expo-file-system": "~19.0.24",
+    "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.11",
     "expo-location": "~19.0.8",
+    "expo-media-library": "~18.2.1",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "expo-updates": "~29.0.20",

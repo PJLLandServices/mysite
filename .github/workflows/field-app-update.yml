@@ -8,8 +8,8 @@ name: Field app — publish OTA update
 # a truck, and a step done by hand is a step done inconsistently. GitHub can
 # reach Expo's servers, so it does the publishing.
 #
-# THE PINNED VERSION IS LOAD-BEARING. runtimeVersion is on the `fingerprint`
-# policy, and the fingerprint is computed BY THE CLI. On 2026-09-02 an update
+# THE PINNED VERSION IS LOAD-BEARING. The native guard below computes the
+# fingerprint BY THE CLI. On 2026-09-02 an update
 # published with `eas-cli@latest` hashed an unchanged project differently from
 # the installed build — three files had dropped out of the hashed set between
 # CLI releases — so the update went to a runtime no phone was listening on,
@@ -19,14 +19,16 @@ name: Field app — publish OTA update
 # arriving and nothing says so.
 #
 # Only the app's JavaScript ships this way. A new native module, an icon, an SDK
-# bump, app.json or eas.json changes the fingerprint and needs a real build
-# through TestFlight — run "Field app — build for TestFlight".
+# bump, app.json or eas.json changes the native fingerprint and needs a new
+# version and a real build (on the Mac while Tap to Pay's entitlement is a
+# development one: docs/ONE_APP_MAC_BUILD.md).
 #
 # You do not have to work out which case you are in. Before publishing, this
-# workflow compares the runtime this checkout would publish to against the newest
-# finished build's, and refuses to publish when they differ. That check is the
-# whole point: publishing to a runtime nothing is listening on is not an error in
-# any tool, it is simply nothing happening, and it looks identical to success.
+# workflow checks the tree's native fingerprint against the one recorded for
+# its version (config/field-native.json) and refuses when they differ. That
+# check is the whole point: publishing to a runtime nothing can run is not an
+# error in any tool, it is simply nothing happening, and it looks identical to
+# success.
 
 on:
   push:
@@ -77,79 +79,22 @@ jobs:
 
       # THE CHECK THIS WORKFLOW EXISTS FOR.
       #
-      # An update only reaches a phone whose installed build has the same runtime
-      # version. Nothing in the publish path enforces that: `eas update` computes
-      # the runtime from this checkout, publishes to it, and reports success
-      # whether or not any build is listening. Twice now that silence has cost a
-      # day — once when a CLI release changed the hashed file set, and once when a
-      # one-line `ascAppId` in eas.json (a submit-only setting that cannot affect
-      # the binary) moved the runtime out from under a build made hours earlier.
+      # An update only reaches a phone whose installed build has the same
+      # runtime, and only runs there if it was built against the same native
+      # code. Nothing in the publish path enforces either: `eas update`
+      # publishes and reports success whether or not any phone can take it.
+      # Twice that silence cost a day (a CLI release that changed the hashed
+      # file set; a one-line `ascAppId` that moved the fingerprint).
       #
-      # So: compare before publishing, and fail loudly instead of publishing into
-      # the void. A red X with a sentence beats a green tick that did nothing.
-      - name: Check a build is actually listening
-        working-directory: pjl-field
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -o pipefail
-
-          # What this checkout would publish to. `eas update` delegates the
-          # fingerprint to the project's own expo-updates, so this is the same
-          # number by the same code — not a reimplementation of it.
-          update_rt=$(npx expo-updates fingerprint:generate --platform ios \
-            | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).hash")
-          echo "This update would go to runtime $update_rt"
-
-          # The comparison is done HERE rather than with `build:list
-          # --runtime-version`, which would push it onto a server-side filter
-          # whose behaviour this workflow cannot see. If such a filter ever
-          # stopped matching, every publish would be blocked forever — and that
-          # failure would be exactly as quiet as the one this check exists to
-          # catch. `runtime.version` is the field name from eas-cli's own
-          # BuildFragment, read out of the CLI rather than guessed.
-          cat > "$RUNNER_TEMP/check-runtime.js" <<'JS'
-          const want = process.env.UPDATE_RT || "";
-          let list = null;
-          try {
-            const j = JSON.parse(require("fs").readFileSync(0, "utf8"));
-            list = Array.isArray(j) ? j : (j && Array.isArray(j.builds) ? j.builds : null);
-          } catch (e) { list = null; }
-
-          if (!want || !Array.isArray(list)) {
-            console.log("::error::Could not read the runtime or the build list from EAS, so nothing");
-            console.log("::error::was published. An unreadable check is exactly how the last two");
-            console.log("::error::outages stayed invisible, so this fails rather than guessing.");
-            process.exit(1);
-          }
-
-          const rows = list.map((b) => ({
-            rt: (b && b.runtime && b.runtime.version) || "",
-            no: (b && b.appBuildVersion) || "?",
-            at: (b && b.completedAt) || "",
-          }));
-
-          console.log("Recent finished iOS builds:");
-          for (const r of rows) console.log("  build " + r.no + "  " + (r.rt || "(no runtime)") + "  " + r.at);
-
-          if (rows.some((r) => r.rt && r.rt === want)) {
-            console.log("A build is listening on " + want + ". The phones will get this.");
-            process.exit(0);
-          }
-
-          console.log("::error::No installed build can receive this update, so it was NOT published.");
-          console.log("::error::This checkout publishes to runtime " + want + ", and none of the builds");
-          console.log("::error::above listen on it - something in the native fingerprint changed");
-          console.log("::error::(app.json, eas.json, or a dependency).");
-          console.log("::error::Fix: Actions -> Field app - build for TestFlight -> Run workflow.");
-          console.log("::error::Install it from TestFlight, then re-run this workflow.");
-          process.exit(1);
-          JS
-
-          npx eas-cli@23.2.0 build:list \
-            --platform ios --status finished \
-            --limit 20 --json --non-interactive \
-            | UPDATE_RT="$update_rt" node "$RUNNER_TEMP/check-runtime.js"
+      # Since the one-app build (PJL-114) the runtime is the app version
+      # (runtimeVersion policy appVersion, 1.1.0), because PJL Field is built
+      # on Patrick's Mac and the Mac and Linux never agreed on the
+      # fingerprint. The fingerprint is now the native-code check instead:
+      # config/field-native.json records the fingerprint each version was
+      # built from, and this refuses to publish from a tree that no longer
+      # matches it. A red X with a sentence beats a green tick that did nothing.
+      - name: Check the native code is the build's
+        run: node scripts/field-native-guard.mjs
 
       # Stamp the commit into the bundle, so the installed app can say which
       # commit it runs (Today tab footer) and send it on every request (the

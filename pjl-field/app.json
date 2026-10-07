@@ -3,7 +3,7 @@
     "name": "PJL Field",
     "slug": "pjl-field",
     "owner": "pjllandservices",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -22,7 +22,10 @@
       "infoPlist": {
         "NSCameraUsageDescription": "PJL Field uses the camera to photograph findings and the water shut-off during a service visit.",
         "NSPhotoLibraryUsageDescription": "PJL Field lets you attach photos you have already taken to a work order.",
-        "NSLocationWhenInUseUsageDescription": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order."
+        "NSLocationWhenInUseUsageDescription": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order, and where a card payment was taken, which Stripe requires for in-person payments."
+      },
+      "entitlements": {
+        "com.apple.developer.proximity-reader.payment.acceptance": true
       }
     },
     "android": {
@@ -47,12 +50,28 @@
       }
     },
     "runtimeVersion": {
-      "policy": "fingerprint"
+      "policy": "appVersion"
     },
     "plugins": [
       "expo-image-picker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "PJL Field lets you attach photos you have already taken to a work order.",
+          "savePhotosPermission": "PJL Field saves the photos you take on a visit to your Photos, so you have your own copy.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       "expo-location",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "@stripe/stripe-terminal-react-native",
+        {
+          "bluetoothBackgroundMode": false,
+          "locationWhenInUsePermission": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order, and where a card payment was taken, which Stripe requires for in-person payments."
+        }
+      ],
+      "./plugins/withNoUserScriptSandboxing"
     ]
   }
 }

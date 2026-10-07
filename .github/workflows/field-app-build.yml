@@ -76,8 +76,8 @@ jobs:
           node -e "
             const rt = JSON.parse(require('fs').readFileSync('app.json', 'utf8')).expo.runtimeVersion;
             if (!rt || typeof rt !== 'object' || rt.policy !== 'fingerprint') {
-              console.error('::error::app.json pins runtimeVersion to ' + JSON.stringify(rt) + '. That is the Tap to Pay release lane pin, which is for over-the-air updates to the installed phone only.');
-              console.error('::error::No native build is made while it is present. Remove the pin first: docs/TTP_RUNTIME_PIN.md, Removing it.');
+              console.error('::error::app.json runtimeVersion is ' + JSON.stringify(rt) + ', not the fingerprint policy, so no cloud build is made from this tree.');
+              console.error('::error::main is on the appVersion policy since the one-app build (PJL-114): it is built on the Mac in Xcode (docs/ONE_APP_MAC_BUILD.md) until Apple grants the Tap to Pay publishing entitlement. The lane pin is docs/TTP_RUNTIME_PIN.md.');
               process.exit(1);
             }
             console.log('runtimeVersion is the fingerprint policy; a native build may proceed.');

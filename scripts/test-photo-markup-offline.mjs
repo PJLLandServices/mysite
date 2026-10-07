@@ -243,7 +243,9 @@ await test('shrinking runs only while the server switch is on, and falls back to
   assert.match(screen, /queue\.photo\(key, shrinkCompare \? photo : ready\);/, 'compare mode must upload the untouched original');
   assert.match(screen, /label: `Shrink test/);
   assert.match(screen, /\{shrinkOn \? <PhotoShrinker onReady=\{onShrinkerReady\} \/> : null\}/, 'the shrinker is mounted without the switch');
-  assert.match(screen, /const ready = shrinkOn && shrinkRef\.current \? await shrinkRef\.current\(photo\) : photo;/);
+  // A camera photo is already resized on the phone (PJL-114); a library pick still goes through the shrinker.
+  assert.match(screen, /const ready = !resized && shrinkOn && shrinkRef\.current \? await shrinkRef\.current\(photo\) : photo;/);
+  assert.match(screen, /const \{ resized, \.\.\.photo \} = taken;/, 'the resized marker must not go up with the photo');
   const shrinker = read('pjl-field/src/PhotoShrinker.js');
   assert.match(shrinker, /const TIMEOUT_MS = 10000;/);
   assert.match(shrinker, /setTimeout\(\(\) => \{ waiting\.current\.delete\(id\); resolve\(payload\); \}, TIMEOUT_MS\)/, 'no answer must mean the original');
