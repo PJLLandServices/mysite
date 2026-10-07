@@ -190,6 +190,21 @@ function validate(input) {
       if (Object.keys(kept).length) day.placed = kept;
     }
 
+    // Where each self-booked customer sits among the hand-ordered stops —
+    // { bookedKey: { before: planCode | null } }, null meaning "after the
+    // last plan stop". Written by reorderStop, read by bucketOrderWithBooked.
+    // Same reason as the rest: validate() rebuilds the day, so a position
+    // not copied here is lost on the next save.
+    if (src.bookedOrder && typeof src.bookedOrder === "object") {
+      const kept = {};
+      for (const [key, raw] of Object.entries(src.bookedOrder)) {
+        if (!raw || typeof raw !== "object") continue;
+        const before = raw.before == null || raw.before === "" ? null : String(raw.before).slice(0, 40);
+        kept[String(key).slice(0, 60)] = { before };
+      }
+      if (Object.keys(kept).length) day.bookedOrder = kept;
+    }
+
     for (const bucket of BUCKETS) {
       const list = src[bucket];
       if (list == null) continue;
@@ -464,6 +479,66 @@ async function setBucketCap(season, year, { bucketCap }, { actor = "admin" } = {
   return { plan: revalidated, warnings, bucketCap: n };
 }
 
+// ---- One half-day, plan stops AND booked customers, in driving order ----
+//
+// A self-booked customer rides in the sequencer as `__bk:<key>` (key = the
+// booking id, the lead id, or an index — whatever sequenceWithBookings
+// stamps as the row's mapCode). This is THE rule for where those tokens sit
+// among the plan codes of a half-day; the arrows edit this list and the
+// sequencer walks it, so the two can never disagree.
+//
+//   no stored position → after the last plan stop (what every day did
+//                        before 2026-10-07, and still what an automatic
+//                        day does before the optimiser reorders it)
+//   { before: code }   → immediately before that plan code, if the code is
+//                        still in this half-day; otherwise at the end
+//   { before: null }   → at the end, on purpose
+const BOOKED_PREFIX = "__bk:";
+const bookedToken = (key) => `${BOOKED_PREFIX}${key}`;
+const isBookedToken = (token) => String(token || "").startsWith(BOOKED_PREFIX);
+const bookedKeyOf = (token) => String(token || "").slice(BOOKED_PREFIX.length);
+
+function bucketOrderWithBooked(day, bucket, bookedKeys = []) {
+  const out = [...((day && day[bucket]) || [])];
+  const positions = (day && day.bookedOrder) || {};
+  for (const key of bookedKeys || []) {
+    const slot = positions[key];
+    const before = slot && slot.before ? String(slot.before) : null;
+    const at = before ? out.indexOf(before) : -1;
+    if (at >= 0) out.splice(at, 0, bookedToken(key));
+    else out.push(bookedToken(key));
+  }
+  return out;
+}
+
+// Write a merged half-day back: plan codes to day[bucket], each booked
+// token's place to day.bookedOrder as "before the next plan code".
+function applyBucketOrder(day, bucket, merged) {
+  day[bucket] = merged.filter((t) => !isBookedToken(t));
+  const positions = { ...(day.bookedOrder || {}) };
+  merged.forEach((token, i) => {
+    if (!isBookedToken(token)) return;
+    const next = merged.slice(i + 1).find((t) => !isBookedToken(t)) || null;
+    positions[bookedKeyOf(token)] = { before: next };
+  });
+  if (Object.keys(positions).length) day.bookedOrder = positions;
+  else delete day.bookedOrder;
+}
+
+// Freeze a half-day AS DISPLAYED: the sequenced order the screen shows,
+// with anything the display left out (an unroutable stop, a booked row
+// without coordinates) kept at the end in stored order.
+function adoptBucketOrder(day, bucket, displayed, bookedKeys) {
+  const planCodes = new Set((day && day[bucket]) || []);
+  const bookedTokens = new Set((bookedKeys || []).map(bookedToken));
+  const merged = displayed.filter((t, i) => displayed.indexOf(t) === i
+    && (isBookedToken(t) ? bookedTokens.has(t) : planCodes.has(t)));
+  const seen = new Set(merged);
+  for (const code of planCodes) if (!seen.has(code)) merged.push(code);
+  for (const token of bookedTokens) if (!seen.has(token)) merged.push(token);
+  applyBucketOrder(day, bucket, merged);
+}
+
 // Move one stop up or down inside its own bucket.
 //
 // The optimiser is very good at the thing it can see — driving minutes —
@@ -482,7 +557,27 @@ async function setBucketCap(season, year, { bucketCap }, { actor = "admin" } = {
 // gaps, so an address that was a cheap insert may stop being one. That is
 // not a bug — the filter is measuring the route that will actually be
 // driven — but it is a consequence, and the screen says so.
-async function reorderStop(season, year, { date, bucket, propertyCode, direction }, { actor = "admin" } = {}) {
+//
+// BOOKED CUSTOMERS MOVE TOO. A self-booked appointment is not a plan stop
+// (it is not in day.morning/day.afternoon), and until 2026-10-07 a
+// hand-ordered day glued every one of them to the END of its half-day with
+// no arrow to move them. Oct 14: Patrick wanted Markham first, then
+// Richmond Hill, then Woodbridge; the screen could only ever put Markham
+// last. "Wherever a personally booked appointment sits, you cannot adjust
+// or re-arrange like you can for the season schedule."
+//
+// So the arrows work on the MERGED half-day — plan codes plus booked rows
+// (`__bk:<key>` tokens, the sequencer's own mapCodes) — and a booked row's
+// place is stored in day.bookedOrder as "before <plan code>". ONE rule
+// builds that merged list, bucketOrderWithBooked(), and the sequencer reads
+// the same rule, so the order the arrows edit is the order that is driven.
+//
+// `currentOrder` is the order the screen is showing (the sequenced
+// timeline for this half-day). The first arrow press on an automatic day
+// adopts it before moving anything, so the day freezes AS DISPLAYED — not
+// in whatever order the store happened to hold, with the booked rows
+// snapping to the end.
+async function reorderStop(season, year, { date, bucket, propertyCode, direction, currentOrder, bookedKeys }, { actor = "admin" } = {}) {
   const key = planKey(season, year);
   const code = String(propertyCode || "").trim();
   if (!isRealDate(String(date || ""))) throw new Error(`Not a calendar date: "${date}".`);
@@ -496,16 +591,22 @@ async function reorderStop(season, year, { date, bucket, propertyCode, direction
   const day = plan.days[date];
   if (!day) throw new Error(`${date} is not a route day in this plan.`);
 
-  const list = day[bucket] || [];
+  const keys = Array.isArray(bookedKeys) ? bookedKeys.map((k) => String(k || "").trim()).filter(Boolean) : [];
+  if (!day.manualOrder && Array.isArray(currentOrder) && currentOrder.length) {
+    adoptBucketOrder(day, bucket, currentOrder.map((t) => String(t || "").trim()), keys);
+  }
+  const list = bucketOrderWithBooked(day, bucket, keys);
+  const who = isBookedToken(code) ? "That booked customer" : code;
   const from = list.indexOf(code);
-  if (from < 0) throw new Error(`${code} is not in the ${bucket} of ${date}.`);
+  if (from < 0) throw new Error(`${who} is not in the ${bucket} of ${date}.`);
   const to = direction === "up" ? from - 1 : from + 1;
   if (to < 0 || to >= list.length) {
-    throw new Error(`${code} is already ${direction === "up" ? "first" : "last"} in the ${bucket}.`);
+    throw new Error(`${who} is already ${direction === "up" ? "first" : "last"} in the ${bucket}.`);
   }
 
   list.splice(from, 1);
   list.splice(to, 0, code);
+  applyBucketOrder(day, bucket, list);
   day.manualOrder = true;
 
   const { plan: revalidated, warnings } = validate(plan);
@@ -529,6 +630,7 @@ async function clearManualOrder(season, year, { date }, { actor = "admin" } = {}
   if (!day.manualOrder) throw new Error(`${day.label || date} is already optimised automatically.`);
 
   delete day.manualOrder;
+  delete day.bookedOrder; // a position only means something on a hand-ordered day
   const { plan: revalidated, warnings } = validate(plan);
   revalidated.updatedAt = new Date().toISOString();
   revalidated.updatedBy = String(actor || "admin").slice(0, 80);
@@ -619,6 +721,11 @@ function codesByDate(plan) {
 }
 
 module.exports = {
+  bucketOrderWithBooked,
+  bookedToken,
+  isBookedToken,
+  bookedKeyOf,
+  BOOKED_PREFIX,
   moveDay,
   setStopWindow,
   setBucketCap,
