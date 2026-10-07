@@ -788,7 +788,13 @@ const LEGACY_REDIRECTS = {
   // Sprinkler System Builder was briefly published publicly (Jul 10 2026)
   // then moved behind the staff login. 301 the old public URL to the
   // gated route (which itself redirects anonymous users to /login).
-  "/sitebuilder.html": "/admin/sitebuilder"
+  "/sitebuilder.html": "/admin/sitebuilder",
+  // Old /blog/<slug> addresses whose slug doesn't match the flat file name
+  // (the /blog/* wildcard below only covers exact matches). These were the
+  // canonical URLs on three posts until Oct 2026, so Google may have them.
+  "/blog/landscape-lighting-newmarket-gta-homes": "/blog-landscape-lighting-newmarket.html",
+  "/blog/spring-sprinkler-opening-newmarket-gta": "/blog-spring-sprinkler-opening.html",
+  "/blog/lawn-sprinkler-installation-newmarket-gta": "/blog-sprinkler-installation-newmarket.html"
 };
 
 function normalizeString(value, maxLength = 400) {
