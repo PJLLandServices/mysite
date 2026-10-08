@@ -44,6 +44,7 @@ const { PJL_BASE } = require("./geocode");
 const { routeOrigin } = require("./route-origin");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, parseHHmmToMinutes, minutesToHHmm } = require("./availability");
 const { deriveSeasonalKey, effectiveZoneCount } = require("./pricing");
+const { isHandOrdered } = require("./season-plans");
 
 const BUCKETS = ["morning", "afternoon"];
 
@@ -418,7 +419,7 @@ async function sequenceDay(day, opts = {}) {
   // Everything else still runs: the day is still timed, the noon rule is
   // still checked, and an overrun is still flagged. A manual day is not an
   // unchecked day — it is an unoptimised one.
-  const manual = Boolean(day.manualOrder);
+  const manual = isHandOrdered(day);
 
   // Walk the clock ONCE, here, and let the search call the same function to
   // score candidates. Two implementations of "when does this day happen" is

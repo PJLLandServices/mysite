@@ -27469,6 +27469,8 @@ async function orderDayForDriving(rows) {
         territory: "",
         weekday,
         bookedOnly: true,
+        // No stored day, so nothing to hand-order and nothing to hand back.
+        manualOrder: false,
         morning: [],
         afternoon: [],
         counts: { morning: 0, afternoon: 0, total: 0 },
@@ -27528,6 +27530,10 @@ async function orderDayForDriving(rows) {
       territory: day.territory || "",
       frost: day.frost || "",
       weekday,
+      // The fact, not just the sequencer's flag text: the page draws
+      // "ordered by hand · Back to automatic" from THIS, and it was never
+      // sent, so the button never once appeared (seasonPlans.isHandOrdered).
+      manualOrder: seasonPlans.isHandOrdered(day),
       morning,
       afternoon,
       counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
