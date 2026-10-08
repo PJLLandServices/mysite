@@ -172,7 +172,7 @@
           + Custom time
         </button>
         <div class="tp-custom-body" data-custom-body hidden>
-          <p class="tp-custom-help">Use any date and time, outside the standard slot grid.</p>
+          <p class="tp-custom-help">Books this exact date and time, outside the standard slot grid. The route plans around it, nothing re-times it, and the customer is told the exact time.</p>
           <div class="tp-custom-fields">
             <label class="tp-custom-field">
               <span>Date</span>

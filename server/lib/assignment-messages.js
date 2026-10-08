@@ -38,6 +38,7 @@ const fs = require("fs");
 const path = require("path");
 const { BOOKING_BUCKETS } = require("./availability");
 const { priceForBooking } = require("./pricing");
+const bookings = require("./bookings");
 
 const STORE_FILE = path.resolve(__dirname, "..", "data", "assignment-templates.json");
 
@@ -49,7 +50,7 @@ const MERGE_FIELDS = Object.freeze({
   name: "The customer's full name",
   street: "The street address, without town (\"90 Oriole Drive\")",
   date: "The appointment date (\"Monday, September 28\")",
-  bucket: "The window (\"Morning (8 AM – 12 PM)\"), or the time you set on the stop (\"Morning, after 9:30 AM\")",
+  bucket: "The window (\"Morning (8 AM – 12 PM)\"), the time you set on the stop (\"Morning, after 9:30 AM\"), or an exact time (\"at 7:00 AM\")",
   appointmentLink: "Their appointment page — confirm, reschedule, or cancel in one place (built at send time)",
   price: "The customer's price for the service (their profile override, or the tier price)",
   oldDate: "The PREVIOUS date, when a route day or a single stop was moved (\"Monday, September 28\")",
@@ -495,7 +496,13 @@ function timeLabelOf(hhmm) {
 // stop (day.constraints[code]), because the booking is what that
 // customer actually asked for this time. null = no window, the half-day
 // stands.
+//
+// AN EXACT TIME BEATS BOTH (2026-10-08): Patrick set the minute himself
+// ("if I select 7am — it needs to be booked at 7am"), so the promise is
+// that minute, expressed as a window that opens and closes at it.
 function promisedWindow(booking, planWindow = null) {
+  const exact = bookings.exactTimeOf(booking);
+  if (exact) return { notBefore: exact, notAfter: exact };
   const pick = (w) => (w && (w.notBefore || w.notAfter))
     ? { notBefore: w.notBefore || null, notAfter: w.notAfter || null } : null;
   return pick(booking && booking.requestedWindow) || pick(planWindow);
@@ -506,8 +513,10 @@ function promisedWindow(booking, planWindow = null) {
 //   after only         "Morning, after 9:30 AM"
 //   before only        "Morning, before 10:00 AM"
 //   both               "between 9:00 AM and 9:30 AM"
+//   exact (both equal) "at 7:00 AM"
 function windowLabelOf(bucketKey, window = null) {
   if (!window || (!window.notBefore && !window.notAfter)) return bucketLabelOf(bucketKey);
+  if (window.notBefore && window.notBefore === window.notAfter) return `at ${timeLabelOf(window.notBefore)}`;
   const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
   const word = bucket ? (bucket.key === "morning" ? "Morning" : "Afternoon") : "";
   if (window.notBefore && window.notAfter) {
@@ -531,16 +540,29 @@ function dateLabelOf(scheduledFor) {
 // cadence looks it up); it is not a merge field itself — it shapes
 // {bucket} through promisedWindow(), so every message states the time
 // that was set rather than the bare half-day.
+// The half-day a booking is promised. The record's own `bucket` is the
+// promise (PJL-133: every booking carries it, and a reschedule rewrites
+// it); `assignment.bucket` is where the writer first put it and can be
+// stale after an admin reschedule, so it is only the fallback.
+function bucketKeyOf(booking) {
+  return booking?.bucket || booking?.assignment?.bucket
+    || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon");
+}
+
+// THE time a customer is told, as words: the one label every message,
+// the appointment page and the time notice's "has it changed?" check use.
+function promisedLabel(booking, planWindow = null) {
+  return windowLabelOf(bucketKeyOf(booking), promisedWindow(booking, planWindow));
+}
+
 function contextForBooking(booking, extraIn = {}) {
   const { planWindow = null, ...extra } = extraIn || {};
-  const bucketKey = booking?.assignment?.bucket
-    || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon");
   return {
     firstName: firstNameOf(booking?.customerName),
     name: String(booking?.customerName || "").trim() || "there",
     street: streetOf(booking?.address),
     date: dateLabelOf(booking?.scheduledFor),
-    bucket: windowLabelOf(bucketKey, promisedWindow(booking, planWindow)),
+    bucket: promisedLabel(booking, planWindow),
     appointmentLink: "[appointment-link]",
     // The tier price for the booking's service. Callers holding the
     // PROPERTY pass extra.price from resolveSeasonalPrice() so a
@@ -578,6 +600,8 @@ function renderAllForBooking(booking, extra = {}) {
 }
 
 module.exports = {
+  bucketKeyOf,
+  promisedLabel,
   timeLabelOf,
   promisedWindow,
   windowLabelOf,

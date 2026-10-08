@@ -77,6 +77,41 @@ function bucketFor(iso) {
   return new Date(t).getHours() < 12 ? "morning" : "afternoon";
 }
 
+// ---- An exact time, set by Patrick --------------------------------------
+//
+// Patrick, 2026-10-08: "if I select 7am — it needs to be booked at 7am."
+// Customers book (and re-book) a half-day; the minute inside it is the
+// route's, and the route-time sync moves it freely. An EXACT time is the
+// one exception, and only an admin sets it: the appointment is at that
+// minute, the route plans around it, nothing re-times it, and the
+// customer is told "at 7:00 AM".
+//
+// Stored as `exactTime: "HH:MM"` on the booking (and on lead.booking for
+// a self-booked customer, which the lead mirror copies across). THE RULE,
+// once: the exact time holds only while the appointment still starts at
+// that local minute. Anything that moves the start elsewhere — a customer
+// picking a new half-day, a plain reschedule — voids it without needing
+// to remember to clear it, so a stale flag can never pin a moved visit.
+const EXACT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function localHHMM(iso) {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+// `rec` is a canonical booking ({ exactTime, scheduledFor }) or a lead's
+// booking envelope ({ exactTime, start }). Returns "HH:MM" or null.
+function exactTimeOf(rec) {
+  if (!rec || !EXACT_TIME_RE.test(String(rec.exactTime || ""))) return null;
+  return localHHMM(rec.scheduledFor || rec.start) === rec.exactTime ? rec.exactTime : null;
+}
+// The same local date at an "HH:MM" — the start an exact time books.
+function atLocalTime(dateOrIso, hhmm) {
+  const base = new Date(dateOrIso);
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m, 0, 0).toISOString();
+}
+
 async function ensureFile() {
   await fs.mkdir(path.dirname(FILE), { recursive: true });
   if (!fsSync.existsSync(FILE)) {
@@ -650,6 +685,8 @@ async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
     existing.propertyId = lead.propertyId || existing.propertyId;
     existing.scheduledFor = booking.start || existing.scheduledFor;
     existing.bucket = booking.bucketKey || existing.bucket || bucketFor(existing.scheduledFor);
+    // The lead holds the exact time for a self-booked customer; mirror it.
+    if (exactTimeOf(booking)) existing.exactTime = booking.exactTime;
     existing.durationMinutes = Number(booking.durationMinutes) || existing.durationMinutes;
     existing.serviceKey = booking.serviceKey || existing.serviceKey;
     existing.serviceLabel = booking.serviceLabel || existing.serviceLabel;
@@ -689,6 +726,7 @@ async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
   next.leadId = lead.id;
   next.scheduledFor = booking.start || null;
   next.bucket = booking.bucketKey || bucketFor(next.scheduledFor);
+  if (exactTimeOf(booking)) next.exactTime = booking.exactTime;
   next.durationMinutes = Number(booking.durationMinutes) || 0;
   next.serviceKey = booking.serviceKey || "";
   next.serviceLabel = booking.serviceLabel || "";
@@ -806,6 +844,10 @@ async function createDirect(fields, { by = "system", note = "", action = "create
   // season writer's records; the assignment block carries what it needs
   // to be reversed and audited (season, year, plan date, bucket, code).
   if (fields.source) next.source = fields.source;
+  // An admin custom time is an exact time (see exactTimeOf).
+  if (EXACT_TIME_RE.test(String(fields.exactTime || "")) && localHHMM(next.scheduledFor) === fields.exactTime) {
+    next.exactTime = fields.exactTime;
+  }
   if (fields.assignment && typeof fields.assignment === "object") {
     next.assignment = { ...fields.assignment };
   }
@@ -880,18 +922,25 @@ async function update(id, patch) {
 // reschedule (same start) returns the existing record unchanged. The
 // caller is responsible for verifying slot availability before invoking
 // this — the helper assumes the slot has already been validated.
-async function reschedule(id, { scheduledFor, bucket = null, by = "admin", actorName = "", reason = "" } = {}) {
+//
+// `exactTime: true` is Patrick's custom time: the new start is the exact
+// minute (see exactTimeOf). Any other reschedule — a half-day slot, the
+// customer's own move — ends an exact time.
+async function reschedule(id, { scheduledFor, bucket = null, exactTime = false, by = "admin", actorName = "", reason = "" } = {}) {
   if (!scheduledFor) throw new Error("scheduledFor is required.");
   if (Number.isNaN(Date.parse(scheduledFor))) throw new Error("Invalid scheduledFor.");
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
   if (idx === -1) return null;
   const current = records[idx];
-  if (current.scheduledFor === scheduledFor) return current;
+  const wantExact = exactTime ? localHHMM(scheduledFor) : null;
+  if (current.scheduledFor === scheduledFor && (exactTimeOf(current) || null) === wantExact) return current;
 
   const previous = current.scheduledFor;
   const next = { ...current };
   next.scheduledFor = scheduledFor;
+  if (wantExact) next.exactTime = wantExact;
+  else delete next.exactTime;
   // A reschedule is a new promise: the half-day follows the new start
   // unless the caller names the window it offered.
   next.bucket = (bucket === "morning" || bucket === "afternoon") ? bucket : bucketFor(scheduledFor);
@@ -908,6 +957,7 @@ async function reschedule(id, { scheduledFor, bucket = null, by = "admin", actor
     note: [
       actorName ? `${actorName} (${by})` : by,
       `${previous || "(unscheduled)"} → ${scheduledFor}`,
+      wantExact ? `exact time ${wantExact}` : "",
       reason ? `reason: ${reason}` : ""
     ].filter(Boolean).join(" · ")
   }];
@@ -1063,6 +1113,8 @@ async function setRouteTime(id, scheduledFor, { by = "route", note = "" } = {}) 
   const current = records[idx];
   const iso = new Date(scheduledFor).toISOString();
   if (current.scheduledFor === iso) return current;
+  // An exact time is Patrick's, not the route's: the route never moves it.
+  if (exactTimeOf(current)) return current;
   if (current.bucket && bucketFor(iso) !== current.bucket) {
     const err = new Error(`${id}: a route re-time cannot move a ${current.bucket} visit to the ${bucketFor(iso)} — that is a reschedule.`);
     err.code = "BUCKET_MISMATCH";
@@ -1208,6 +1260,7 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
   const now = new Date().toISOString();
   const outreach = { ...(current.assignment.outreach || {}) };
   const history = [...(current.history || [])];
+  const exactOnMove = exactTimeOf(current);
 
   if (resetResponse && outreach.respondedAt) {
     history.push({
@@ -1237,12 +1290,54 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
 
   const next = {
     ...current,
-    scheduledFor: new Date(scheduledFor).toISOString(),
-    bucket,
-    assignment: { ...current.assignment, date: toDate, bucket, outreach },
+    // An exact time travels with the visit: 7:00 on the old day is 7:00 on
+    // the new one, not wherever the new day's route would put it.
+    scheduledFor: exactOnMove ? atLocalTime(`${toDate}T12:00:00`, exactOnMove) : new Date(scheduledFor).toISOString(),
+    ...(exactOnMove ? { exactTime: exactOnMove } : {}),
+    bucket: exactOnMove ? bucketFor(atLocalTime(`${toDate}T12:00:00`, exactOnMove)) : bucket,
+    assignment: { ...current.assignment, date: toDate, bucket: exactOnMove ? bucketFor(atLocalTime(`${toDate}T12:00:00`, exactOnMove)) : bucket, outreach },
     updatedAt: now,
     history
   };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Patrick sets (or clears) an exact time on an existing booking without
+// changing its day — the Season plan's "Exact time" on a booked stop.
+// Not a reschedule: the customer keeps their one self-serve move, and the
+// day is the same. `time` "HH:MM" books that minute; null hands the
+// minute back to the route (the next time sync re-times it inside the
+// half-day). The half-day follows the minute — 7:00 is a morning visit.
+async function setExactTime(id, { time = null, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (time != null && !EXACT_TIME_RE.test(String(time))) throw new Error(`"${time}" is not a time — it must look like 07:00.`);
+  const now = new Date().toISOString();
+  const next = { ...current, updatedAt: now, history: [...(current.history || [])] };
+  if (time) {
+    const iso = atLocalTime(current.scheduledFor, time);
+    if (exactTimeOf(current) === time && current.scheduledFor === iso) return current;
+    next.scheduledFor = iso;
+    next.exactTime = time;
+    next.bucket = bucketFor(iso);
+    if (next.assignment) next.assignment = { ...next.assignment, bucket: next.bucket };
+    next.history.push({ ts: now, action: "exact_time_set", by, note: `${current.scheduledFor || "(unscheduled)"} → ${iso} (exact ${time})` });
+  } else {
+    if (!current.exactTime) return current;
+    delete next.exactTime;
+    // Back inside the half-day it is promised: a 7:00 start with no exact
+    // time behind it would sit before the 8 AM morning the customer is now
+    // told. The route-time sync then places the minute as usual.
+    const { BOOKING_BUCKETS } = require("./availability");   // lazy: availability never needs bookings
+    const half = BOOKING_BUCKETS.find((b) => b.key === (current.bucket || bucketFor(current.scheduledFor)));
+    const hhmm = localHHMM(current.scheduledFor);
+    if (half && hhmm && (hhmm < half.from || hhmm >= half.to)) next.scheduledFor = atLocalTime(current.scheduledFor, half.from);
+    next.history.push({ ts: now, action: "exact_time_cleared", by, note: `was exactly ${current.exactTime}; the route times it again` });
+  }
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -1475,6 +1570,9 @@ module.exports = {
   setAssignmentOutreach: withStoreLock(setAssignmentOutreach),
   markAssignmentResponded: withStoreLock(markAssignmentResponded),
   moveAssignmentDay: withStoreLock(moveAssignmentDay),
+  setExactTime: withStoreLock(setExactTime),
+  exactTimeOf,
+  localHHMM,
   setFreeBucket: withStoreLock(setFreeBucket),
   setRequestedWindow: withStoreLock(setRequestedWindow),
   setDeclaredZones: withStoreLock(setDeclaredZones),

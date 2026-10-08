@@ -303,13 +303,14 @@ const fresh = (id) => bookings.get(id);
   ok("10a. saving a window queues the time notice and the reply says whether the customer will be told",
     /assignments\.queueTimeNotice\(season, year/.test(server) && /window: result\.window, timeNotice \}/.test(server));
   ok("10b. the Save toast says whether the customer will hear about it",
-    /data\.timeNotice/.test(page) && /the customer will be told/.test(page));
+    /noteFor\(last\.timeNotice\)/.test(page) && /the customer will be told/.test(page));
   ok("10e. every appointment-page reply carries the promised time",
     (server.match(/bucketLabel: await promisedTimeLabel\(/g) || []).length >= 7, String((server.match(/bucketLabel: await promisedTimeLabel\(/g) || []).length));
   ok("10c. the new messages are editable on the Messages page",
     /stopmove_email/.test(msgPage) && /timeset_email/.test(msgPage));
   ok("10d. {bucket} is built through promisedWindow, once", (read("server/lib/assignment-messages.js").match(/function promisedWindow/g) || []).length === 1
-    && /windowLabelOf\(bucketKey, promisedWindow\(booking, planWindow\)\)/.test(read("server/lib/assignment-messages.js")));
+    && /windowLabelOf\(bucketKeyOf\(booking\), promisedWindow\(booking, planWindow\)\)/.test(read("server/lib/assignment-messages.js"))
+    && /bucket: promisedLabel\(booking, planWindow\)/.test(read("server/lib/assignment-messages.js")));
 }
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });

@@ -477,10 +477,11 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
     // Every step message states the promised time, so it is also what the
     // customer was last told — the time notice compares against this.
     const told = assignmentMessages.promisedWindow(booking, planWindow);
+    const label = assignmentMessages.promisedLabel(booking, planWindow);
     await setOutreach(booking.id, {
       token,
       steps: { [String(step.n)]: { at: new Date().toISOString(), attempted: channels } },
-      timeNotice: { told, at: new Date().toISOString(), via: `step_${step.n}` }
+      timeNotice: { told, label, at: new Date().toISOString(), via: `step_${step.n}` }
     }, { action: `cadence_step_${step.n}`, by, note: channels.join("+") });
   }
 
@@ -602,6 +603,7 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
   // The move notice states the time on the new day, so it also tells any
   // time change that was waiting — one message, not two.
   const told = assignmentMessages.promisedWindow(booking, planWindow);
+  const toldLabel = assignmentMessages.promisedLabel(booking, planWindow);
 
   const capability = gate.capability;
   const attempted = [];
@@ -618,7 +620,7 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
     token,
     pendingDayMove: null,
     pendingTimeNotice: null,
-    timeNotice: { told, at: new Date().toISOString(), via: "move_notice" },
+    timeNotice: { told, label: toldLabel, at: new Date().toISOString(), via: "move_notice" },
     dayMoveNotice: { ...pending, template, at: new Date().toISOString(), attempted }
   }, { action: "day_move_notice", by, note: `${pending.oldDate} → ${pending.newDate}, ${template}, ${attempted.join("+")}` });
 
@@ -688,16 +690,24 @@ async function sendTimeNoticeForBooking(booking, { season, year, deps = {}, by =
       { action: "time_notice_skipped", by, note: reason });
     return { skipped: true, reason };
   };
-  // The stop moved off that day since — the move notice states the time.
-  if (pending.date && pending.date !== booking.assignment.date) return skip("moved_since");
-  if (booking.requestedWindow && (booking.requestedWindow.notBefore || booking.requestedWindow.notAfter)) {
+  // The visit moved off that day since — the move notice states the time.
+  if (pending.date && pending.date !== localDateKey(new Date(booking.scheduledFor))) return skip("moved_since");
+  if (!bookings.exactTimeOf(booking)
+    && booking.requestedWindow && (booking.requestedWindow.notBefore || booking.requestedWindow.notAfter)) {
     return skip("customer_window");
   }
 
   const planWindow = await planWindowFor(booking, deps);
   const now = assignmentMessages.promisedWindow(booking, planWindow);
-  const last = booking.assignment.outreach?.timeNotice ? booking.assignment.outreach.timeNotice.told : null;
-  if (sameWindow(now, last)) return skip("nothing_changed");
+  const label = assignmentMessages.promisedLabel(booking, planWindow);
+  // What were they last told? The words, when recorded — that catches a
+  // half-day change (Morning → Afternoon) as well as a window change.
+  // Older records carry only the window.
+  const lastNotice = booking.assignment.outreach?.timeNotice || null;
+  const unchanged = lastNotice && lastNotice.label
+    ? lastNotice.label === label
+    : sameWindow(now, lastNotice ? lastNotice.told : null);
+  if (unchanged) return skip("nothing_changed");
 
   const property = booking.propertyId ? await getProperty(booking.propertyId) : null;
   const gate = cadenceGates(property, season, year);
@@ -722,8 +732,8 @@ async function sendTimeNoticeForBooking(booking, { season, year, deps = {}, by =
   await setOutreach(booking.id, {
     token,
     pendingTimeNotice: null,
-    timeNotice: { told: now, at: new Date().toISOString(), via: "time_notice", attempted }
-  }, { action: "time_notice", by, note: `${assignmentMessages.windowLabelOf(booking.assignment.bucket, now)}, ${attempted.join("+")}` });
+    timeNotice: { told: now, label, at: new Date().toISOString(), via: "time_notice", attempted }
+  }, { action: "time_notice", by, note: `${label}, ${attempted.join("+")}` });
 
   const unsubscribe = property.optOutTokens ? outreach.buildUnsubscribeUrls(property) : { email: "", all: "" };
   const sent = [];
@@ -756,7 +766,7 @@ async function sendTimeNoticeForBooking(booking, { season, year, deps = {}, by =
     else errors.push({ channel: "sms", error: r.error || r.reason || "failed" });
   }
   await setOutreach(booking.id, {
-    timeNotice: { told: now, at: new Date().toISOString(), via: "time_notice", attempted, sent, ...(errors.length ? { errors } : {}) }
+    timeNotice: { told: now, label, at: new Date().toISOString(), via: "time_notice", attempted, sent, ...(errors.length ? { errors } : {}) }
   }, { action: "time_notice_result", by, note: `sent ${sent.join("+") || "nothing"}` });
   if (sent.length) {
     await recordTouch(property.id, {

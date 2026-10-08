@@ -351,24 +351,35 @@
   // positioned popover would be clipped by the panel's own scrolling.
   function windowControl(stop, date) {
     const has = Boolean(stop.notBefore || stop.notAfter);
+    const exact = stop.exactTime || "";
+    // An exact time needs an appointment to pin: a stop with no booking
+    // behind it has no customer to promise a minute to yet.
+    const canExact = stop.bookingState === "on_day" && Boolean(stop.bookingId);
 
     const button = document.createElement("button");
     button.type = "button";
-    button.className = has ? "sp-window-btn is-set" : "sp-window-btn";
-    button.textContent = has
-      ? [stop.notBefore ? `after ${stop.notBefore}` : "", stop.notAfter ? `before ${stop.notAfter}` : ""]
-        .filter(Boolean).join(" · ")
-      : "Time window";
-    button.title = "When can this stop be done?";
+    button.className = (has || exact) ? "sp-window-btn is-set" : "sp-window-btn";
+    button.textContent = exact
+      ? `at ${exact}`
+      : has
+        ? [stop.notBefore ? `after ${stop.notBefore}` : "", stop.notAfter ? `before ${stop.notAfter}` : ""]
+          .filter(Boolean).join(" · ")
+        : "Time window";
+    button.title = exact ? "Booked at an exact time — press to change" : "When can this stop be done?";
 
     const form = document.createElement("form");
     form.className = "sp-window-form";
     form.hidden = true;
 
     const rows = {};
-    for (const [field, label, hint] of [
-      ["notBefore", "After", "do not arrive before this time"],
-      ["notAfter", "Before", "must be done by this time"]
+    for (const [field, label, hint, value] of [
+      // EXACT TIME (2026-10-08). Patrick: "if I select 7am — it needs to be
+      // booked at 7am." Books the appointment at exactly this minute, even
+      // before the 8 AM start; the route plans around it and the customer
+      // is told "at 7:00 AM". Customers themselves only ever pick a half-day.
+      ["exact", "Exact time", "book the appointment at exactly this time and tell the customer", exact],
+      ["notBefore", "After", "do not arrive before this time", stop.notBefore || ""],
+      ["notAfter", "Before", "must be done by this time", stop.notAfter || ""]
     ]) {
       const line = document.createElement("label");
       line.className = "sp-window-line";
@@ -378,7 +389,7 @@
       const input = document.createElement("input");
       input.type = "time";
       input.step = 300;
-      input.value = stop[field] || "";
+      input.value = value;
       input.setAttribute("aria-label", `${label} — ${hint}, ${stop.code}`);
       const clear = document.createElement("button");
       clear.type = "button";
@@ -386,8 +397,20 @@
       clear.textContent = "Clear";
       clear.addEventListener("click", () => { input.value = ""; input.focus(); });
       line.appendChild(name); line.appendChild(input); line.appendChild(clear);
+      if (field === "exact" && !canExact) {
+        input.disabled = true; clear.disabled = true;
+        line.title = "Book this stop first (Book now), then set its exact time.";
+      }
       rows[field] = input;
       form.appendChild(line);
+      if (field === "exact") {
+        const note = document.createElement("p");
+        note.className = "sp-window-note";
+        note.textContent = canExact
+          ? "Exact time books the appointment at that minute and tells the customer. Leave it empty to use After/Before."
+          : "Exact time: book this stop first (Book now).";
+        form.appendChild(note);
+      }
     }
 
     const foot = document.createElement("div");
@@ -401,44 +424,68 @@
 
     const close = () => {
       form.hidden = true; button.hidden = false;
+      rows.exact.value = exact;
       rows.notBefore.value = stop.notBefore || "";
       rows.notAfter.value = stop.notAfter || "";
     };
     button.addEventListener("click", () => {
       form.hidden = false; button.hidden = true;
-      rows.notBefore.focus();
+      (canExact ? rows.exact : rows.notBefore).focus();
     });
     cancel.addEventListener("click", close);
 
+    // Say whether the CUSTOMER will hear about it — never leave it to be
+    // assumed (Patrick, 2026-10-08: "that never got announced").
+    const told = {
+      queued: "the customer will be told by email + text within a few minutes",
+      not_messaged: "not sent to the customer — they haven't had their first message yet; it will include this time",
+      flexible: "not sent — this customer is on the free bucket (the tech calls ahead)",
+      customer_window: "not sent — the customer set their own time on their page, and theirs is what the route uses",
+      no_booking: "no booking on this stop yet, so nobody was told",
+      error: "saved, but the customer notice could not be queued — tell them yourself"
+    };
+    const noteFor = (timeNotice) => {
+      const note = timeNotice ? told[timeNotice.queued ? "queued" : timeNotice.reason] || "" : "";
+      return note ? ` ${note[0].toUpperCase()}${note.slice(1)}.` : "";
+    };
+    const patch = async (path, body) => {
+      const response = await fetch(`${base()}/${path}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Failed."]).join(" "));
+      return data;
+    };
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const exactTime = rows.exact.value;
       const notBefore = rows.notBefore.value;
       const notAfter = rows.notAfter.value;
+      const exactChanged = canExact && exactTime !== exact;
+      const windowChanged = notBefore !== (stop.notBefore || "") || notAfter !== (stop.notAfter || "");
       save.disabled = true;
       try {
-        const response = await fetch(`${base()}/stop-window`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date, propertyCode: stop.code, notBefore, notAfter })
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error((data.errors || ["Failed."]).join(" "));
-        render(data.plan);
-        const said = [notBefore ? `after ${notBefore}` : "", notAfter ? `before ${notAfter}` : ""]
-          .filter(Boolean).join(" and ");
-        // Say whether the CUSTOMER will hear about it — never leave it to
-        // be assumed (Patrick, 2026-10-08: "that never got announced").
-        const told = {
-          queued: "the customer will be told by email + text within a few minutes",
-          not_messaged: "not sent to the customer — they haven't had their first message yet; it will include this time",
-          flexible: "not sent — this customer is on the free bucket (the tech calls ahead)",
-          customer_window: "not sent — the customer set their own time on their page, and theirs is what the route uses",
-          no_booking: "no booking on this stop yet, so nobody was told",
-          error: "saved, but the customer notice could not be queued — tell them yourself"
-        };
-        const note = data.timeNotice ? told[data.timeNotice.queued ? "queued" : data.timeNotice.reason] || "" : "";
-        showToast(`${stop.code}: ${said || "time window cleared"}.${note ? ` ${note[0].toUpperCase()}${note.slice(1)}.` : ""}`,
-          data.timeNotice && data.timeNotice.reason === "error" ? "bad" : undefined);
+        const said = [];
+        let last = null;
+        let notice = "";
+        if (exactChanged) {
+          last = await patch("stop-exact-time", { date, propertyCode: stop.code, time: exactTime });
+          said.push(exactTime ? `booked at exactly ${exactTime}` : "exact time removed — the route times it again");
+          notice = noteFor(last.timeNotice);
+        }
+        if (windowChanged || !exactChanged) {
+          last = await patch("stop-window", { date, propertyCode: stop.code, notBefore, notAfter });
+          const w = [notBefore ? `after ${notBefore}` : "", notAfter ? `before ${notAfter}` : ""].filter(Boolean).join(" and ");
+          if (windowChanged || !said.length) said.push(w || "time window cleared");
+          // An exact time is what the customer hears; a window under it changes nothing they were told.
+          if (!exactTime) notice = noteFor(last.timeNotice) || notice;
+        }
+        if (last) render(last.plan);
+        showToast(`${stop.code}: ${said.join("; ")}.${notice}`,
+          last && last.timeNotice && last.timeNotice.reason === "error" ? "bad" : undefined);
       } catch (error) {
         showToast(error.message, "bad");
         save.disabled = false;
@@ -661,7 +708,8 @@
       + (url ? `<a href="${url}" target="_blank" rel="noopener">${who}</a>` : who)
       + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
       + `</span>`
-      + `<span class="sp-tag is-booked">booked</span>`;
+      + `<span class="sp-tag is-booked">booked</span>`
+      + (b.exactTime ? `<span class="sp-tag is-exact" title="Booked at an exact time — change it from the customer's reschedule">at ${escapeHtml(b.exactTime)}</span>` : "");
     // An assignment booking sitting on the day as a booked row (its
     // property left the plan's stop list) still owes or carries its
     // confirmation, same as a plan stop.

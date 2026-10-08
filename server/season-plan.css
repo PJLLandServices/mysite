@@ -436,6 +436,9 @@
 .sp-tag.is-warn { background: var(--pjl-amber-pale); color: var(--pjl-amber); }
 .sp-tag.is-bad { background: #FBE3E3; color: #A32020; }
 .sp-tag.is-placed { background: #EEF2FF; color: #3B4CA8; }
+/* Booked at an exact time Patrick set (2026-10-08). */
+.sp-tag.is-exact { background: #FFF4E5; color: #8A4B00; font-weight: 600; }
+.sp-window-note { margin: 0 0 6px; font-size: 12px; color: #5A6470; }
 .sp-count {
   font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums;
   padding: 2px 8px; border-radius: 999px;

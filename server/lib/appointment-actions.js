@@ -65,11 +65,7 @@ async function ensureToken(bookingId, { getBooking = bookings.get, setOutreach =
 // 12 PM" (2026-10-08). `planWindow` is the window on the plan stop; the
 // server looks it up (assignment-cadence.planWindowFor) and passes it.
 function bucketLabelOf(booking, planWindow = null) {
-  const key = booking?.assignment?.bucket
-    || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon");
-  const bucket = BOOKING_BUCKETS.find((b) => b.key === key);
-  if (!bucket) return key;
-  return assignmentMessages.windowLabelOf(key, assignmentMessages.promisedWindow(booking, planWindow));
+  return assignmentMessages.promisedLabel(booking, planWindow);
 }
 
 // Everything the page needs to render, and nothing it shouldn't have:
