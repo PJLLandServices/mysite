@@ -108,6 +108,22 @@ const today = async () => {
 };
 const townsOf = (rows) => rows.map((r) => (r.town || r.address || "").split(",")[0].trim());
 
+// ONE SECTION'S DAY, AS THE SERVER WOULD HOLD IT. The server keeps two
+// stores for a self-booked customer — the lead, and its bookings.json
+// mirror — and its own sweeps (the boot route-time sync, the lead heal)
+// write that mirror for every lead they see. Swapping leads.json alone
+// between sections left the previous section's mirror behind whenever a
+// sweep had reached it, and the next section's day then carried a
+// stranger: CI 2026-10-08, "a morning booking stays in the morning —
+// ["L-TH2","L-NM1"]" (L-NM1 is section 1's). Production never deletes a
+// lead out from under its mirror; only this test does, so the test resets
+// both stores together.
+const seedDay = (leads) => {
+  write("bookings", []);
+  write("work-orders", []);
+  write("leads", leads);
+};
+
 try {
   write("bookings", []); write("work-orders", []); write("customers", []); write("properties", []);
   write("leads", []);
@@ -122,6 +138,10 @@ try {
     try { await fetch(`http://127.0.0.1:${PORT}/api/booking/services`); up = true; } catch {}
   }
   if (!up) throw new Error("server never came up:\n" + logs.slice(-2000));
+  // Let the boot sweeps (route-time sync, lead heal) read the empty stores
+  // and finish before any section writes. A sweep that is still starting
+  // when section 1's leads land would re-time and mirror them mid-test.
+  await new Promise((r) => setTimeout(r, 1500));
 
   // The field app is logged in — this endpoint is not public.
   const login = await fetch(`http://127.0.0.1:${PORT}/api/login`, {
@@ -136,7 +156,7 @@ try {
   // Booked in the order Newmarket, Thornhill, Newmarket — which is exactly
   // what three strangers clicking produces. All three are MORNING, so
   // sequencing is free to fix it without touching anyone's promise.
-  write("leads", [
+  seedDay([
     lead("L-NM1", "Newmarket", NEWMARKET, "08:00", "Newmarket One"),
     lead("L-TH1", "Thornhill", THORNHILL, "09:30", "Thornhill One"),
     lead("L-NM2", "Newmarket", NEWMARKET, "11:00", "Newmarket Two")
@@ -163,7 +183,7 @@ try {
   // Thornhill in the morning, both Newmarkets in the afternoon. The day
   // still drives out and back — and it MUST, because the alternative is
   // moving a customer who was told "morning" into the afternoon.
-  write("leads", [
+  seedDay([
     lead("L-TH2", "Thornhill", THORNHILL, "09:00", "Thornhill Morning"),
     lead("L-NM3", "Newmarket", NEWMARKET, "13:00", "Newmarket Afternoon"),
     lead("L-NM4", "Newmarket", NEWMARKET, "15:00", "Newmarket Late")
@@ -189,7 +209,7 @@ try {
   // Driven through a REAL booking, because the re-stamp hangs off
   // syncBookingFromLead — the one wrapper every booking path goes through.
   // Seeding leads.json alone would prove nothing.
-  write("leads", [
+  seedDay([
     lead("L-A", "Newmarket", NEWMARKET, "08:00", "Newmarket A"),
     lead("L-B", "Thornhill", THORNHILL, "08:30", "Thornhill B"),
     lead("L-C", "Newmarket", NEWMARKET, "09:00", "Newmarket C")
