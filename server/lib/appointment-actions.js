@@ -29,6 +29,7 @@ const properties = require("./properties");
 const customers = require("./customers");
 const { BOOKING_BUCKETS, BOOKABLE_SERVICES } = require("./availability");
 const { deriveSeasonalKey, effectiveZoneCount } = require("./pricing");
+const assignmentMessages = require("./assignment-messages");
 
 const CHANGE_CUTOFF_HOURS = 24;
 
@@ -58,12 +59,17 @@ async function ensureToken(bookingId, { getBooking = bookings.get, setOutreach =
   return token;
 }
 
-function bucketLabelOf(booking) {
+// The time the page shows is the time every message states — the same
+// rule, assignment-messages.windowLabelOf(promisedWindow()), so the email
+// saying "Morning, after 9:30 AM" never lands on a page saying "8 AM –
+// 12 PM" (2026-10-08). `planWindow` is the window on the plan stop; the
+// server looks it up (assignment-cadence.planWindowFor) and passes it.
+function bucketLabelOf(booking, planWindow = null) {
   const key = booking?.assignment?.bucket
     || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon");
   const bucket = BOOKING_BUCKETS.find((b) => b.key === key);
   if (!bucket) return key;
-  return `${key === "morning" ? "Morning" : "Afternoon"} (${bucket.windowLabel})`;
+  return assignmentMessages.windowLabelOf(key, assignmentMessages.promisedWindow(booking, planWindow));
 }
 
 // Everything the page needs to render, and nothing it shouldn't have:
@@ -343,6 +349,7 @@ async function setZones(token, {
 }
 
 module.exports = {
+  bucketLabelOf,
   markSeen,
   CHANGE_CUTOFF_HOURS,
   findByToken,

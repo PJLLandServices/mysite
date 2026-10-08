@@ -318,6 +318,11 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   }
 
   let from = null;
+  // THE TIME WINDOW TRAVELS WITH THE STOP. It is keyed by property code
+  // under the day, and a move used to leave it behind on the old day —
+  // so "not before 11" on a customer silently vanished the moment their
+  // stop changed days (found 2026-10-08, alongside the time notice).
+  let window = null;
   for (const [dateKey, day] of Object.entries(plan.days)) {
     for (const bucket of BUCKETS) {
       const i = (day[bucket] || []).indexOf(code);
@@ -325,6 +330,11 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
         day[bucket].splice(i, 1);
         from = { date: dateKey, bucket };
         if (day.placed) delete day.placed[code];   // the record travels with the stop
+        if (day.constraints && day.constraints[code]) {
+          window = day.constraints[code];
+          delete day.constraints[code];
+          if (!Object.keys(day.constraints).length) delete day.constraints;
+        }
       }
     }
   }
@@ -332,6 +342,7 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
 
   plan.days[toDate][toBucket] = plan.days[toDate][toBucket] || [];
   plan.days[toDate][toBucket].push(code);
+  if (window) plan.days[toDate].constraints = { ...(plan.days[toDate].constraints || {}), [code]: window };
   recordPlaced(plan.days[toDate], code, { by: actor, via, from: from.date });
 
   const { plan: revalidated, warnings } = validate(plan);

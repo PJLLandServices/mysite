@@ -54,7 +54,10 @@ const EXPECTED_KEYS = [
   "followup_email", "followup_sms",
   "nudge_email", "nudge_sms",
   "reminder24_sms",
-  "daymove_email", "daymove_sms"
+  "daymove_email", "daymove_sms",
+  // 2026-10-08: one stop moved by hand, and a time Patrick set on a stop.
+  "stopmove_email", "stopmove_sms",
+  "timeset_email", "timeset_sms"
 ];
 
 ok("every cadence step has its templates — the universe is exactly the spec's",
@@ -79,7 +82,7 @@ for (const key of EXPECTED_KEYS) {
 // that asks for an answer carries exactly one {appointmentLink}, where
 // the customer decides (confirm / reschedule / cancel). Two links
 // doubled the URLs and split each SMS into extra segments.
-for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms", "nudge_email", "nudge_sms", "daymove_email", "daymove_sms"]) {
+for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms", "nudge_email", "nudge_sms", "daymove_email", "daymove_sms", "stopmove_email", "stopmove_sms", "timeset_email", "timeset_sms"]) {
   const links = [...messages.DEFAULT_TEMPLATES[key].body.matchAll(/\{appointmentLink\}/g)].length;
   ok(`${key} carries exactly ONE appointment link`, links === 1, `${links} links`);
   ok(`${key} carries no legacy split links`,
@@ -353,8 +356,13 @@ ok("the messages module never calls sendBulk",
 
   // The email footer: appointment emails no longer say "or reply to this email".
   const cadenceSrc = fs.readFileSync(path.join(ROOT, "server/lib/assignment-cadence.js"), "utf8");
-  ok("both cadence email sends turn the footer's 'reply to this email' off",
-    (cadenceSrc.match(/invitesReply: false/g) || []).length === 2);
+  // Every cadence email send — the steps, the move notice and (2026-10-08)
+  // the time notice — turns it off. Counted against the sends themselves,
+  // so a new sender that forgets is caught rather than a fixed number.
+  const emailSends = (cadenceSrc.match(/await sendEmail\(\{/g) || []).length;
+  ok("every cadence email send turns the footer's 'reply to this email' off",
+    emailSends >= 3 && (cadenceSrc.match(/invitesReply: false/g) || []).length === emailSends,
+    `${emailSends} sends`);
 }
 
 // ---- Report ----------------------------------------------------------

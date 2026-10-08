@@ -49,10 +49,10 @@ const MERGE_FIELDS = Object.freeze({
   name: "The customer's full name",
   street: "The street address, without town (\"90 Oriole Drive\")",
   date: "The appointment date (\"Monday, September 28\")",
-  bucket: "The window (\"Morning (8 AM – 12 PM)\")",
+  bucket: "The window (\"Morning (8 AM – 12 PM)\"), or the time you set on the stop (\"Morning, after 9:30 AM\")",
   appointmentLink: "Their appointment page — confirm, reschedule, or cancel in one place (built at send time)",
   price: "The customer's price for the service (their profile override, or the tier price)",
-  oldDate: "The PREVIOUS date, when a whole route day was moved (\"Monday, September 28\")",
+  oldDate: "The PREVIOUS date, when a route day or a single stop was moved (\"Monday, September 28\")",
   phone: "The PJL phone number"
 });
 
@@ -66,7 +66,11 @@ const TEMPLATE_KEYS = Object.freeze({
   nudge_sms: { label: "Steps 3–5 — The nudge (text)", channel: "sms", hasSubject: false },
   reminder24_sms: { label: "Step 6 — 24-hour reminder (text)", channel: "sms", hasSubject: false },
   daymove_email: { label: "Day moved — re-notify (email)", channel: "email", hasSubject: true },
-  daymove_sms: { label: "Day moved — re-notify (text)", channel: "sms", hasSubject: false }
+  daymove_sms: { label: "Day moved — re-notify (text)", channel: "sms", hasSubject: false },
+  stopmove_email: { label: "One appointment moved — re-notify (email)", channel: "email", hasSubject: true },
+  stopmove_sms: { label: "One appointment moved — re-notify (text)", channel: "sms", hasSubject: false },
+  timeset_email: { label: "Time set — tell the customer (email)", channel: "email", hasSubject: true },
+  timeset_sms: { label: "Time set — tell the customer (text)", channel: "sms", hasSubject: false }
 });
 
 // TWO WAYS TO CONFIRM (Patrick, 2026-09-26): press Confirm on the link,
@@ -209,6 +213,68 @@ const DEFAULT_TEMPLATES = Object.freeze({
   daymove_sms: {
     body: "PJL Land Services: your winterization day has MOVED — was {oldDate}, now {date} ({bucket}) "
       + "at {street}. Reply YES to confirm the new day or tap to change: {appointmentLink} "
+      + "Automated number - to reach us, call or text {phone}."
+  },
+  // ONE appointment moved, not the whole day (Patrick, 2026-10-08). He
+  // used "Move to…" on a single stop and the customer was told "weather
+  // and routing sometimes move one of our whole service days" — which
+  // was not what happened. Same shape as the day-move notice (was/now,
+  // confirm the new day), without the whole-day excuse.
+  stopmove_email: {
+    subject: "Your appointment has moved — now {date}",
+    body: [
+      "Hi {firstName},",
+      "",
+      "We've moved your appointment to a new time:",
+      "",
+      "Was: {oldDate}",
+      "Now: {date} — {bucket}",
+      "{street}",
+      "",
+      "Everything else stays the same — same service, same price ({price}).",
+      "To confirm the new day, tap the button below and press Confirm — or reply YES to our text.",
+      "To make a change, use the same page:",
+      "{appointmentLink}",
+      "",
+      "Questions? Call or text us at {phone}.",
+      "",
+      ...REPLY_NOTE,
+      "",
+      "— PJL Land Services"
+    ].join("\n")
+  },
+  stopmove_sms: {
+    body: "PJL Land Services: your winterization appointment has MOVED — was {oldDate}, now {date} ({bucket}) "
+      + "at {street}. Reply YES to confirm or tap to change: {appointmentLink} "
+      + "Automated number - to reach us, call or text {phone}."
+  },
+  // A time Patrick set on the stop ("after 9:30", "between 9 and 10"),
+  // told to the customer (Patrick, 2026-10-08: "I changed it to after
+  // 7:00 but that never got announced … can we make this a thing?").
+  // It does not ask them to confirm again — a time is usually set
+  // because they asked for it — but it gives them the page to change it.
+  timeset_email: {
+    subject: "Your appointment time — {date}, {bucket}",
+    body: [
+      "Hi {firstName},",
+      "",
+      "Here is the time we've set for your fall winterization:",
+      "",
+      "{date} — {bucket}",
+      "{street}",
+      "",
+      "Everything else stays the same — same service, same price ({price}).",
+      "If this time doesn't work, you can change it on your appointment page:",
+      "{appointmentLink}",
+      "",
+      "Questions? Call or text us at {phone}.",
+      "",
+      "— PJL Land Services"
+    ].join("\n")
+  },
+  timeset_sms: {
+    body: "PJL Land Services: your winterization time is set — {date}, {bucket}, at {street}. "
+      + "To change it, tap: {appointmentLink} "
       + "Automated number - to reach us, call or text {phone}."
   }
 });
@@ -412,6 +478,45 @@ function bucketLabelOf(bucketKey) {
   return `${word} (${bucket.windowLabel})`;
 }
 
+// "07:00" -> "7:00 AM", "13:30" -> "1:30 PM". Anything else comes back
+// as written, so a bad value is visible rather than silently dropped.
+function timeLabelOf(hhmm) {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m) return String(hhmm || "");
+  const h = Number(m[1]);
+  const suffix = h < 12 ? "AM" : "PM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m[2]} ${suffix}`;
+}
+
+// THE TIME THE CUSTOMER IS PROMISED. One rule, the sequencer's own
+// precedence: a window the customer asked for on their appointment page
+// (booking.requestedWindow) wins over the one Patrick set on the plan
+// stop (day.constraints[code]), because the booking is what that
+// customer actually asked for this time. null = no window, the half-day
+// stands.
+function promisedWindow(booking, planWindow = null) {
+  const pick = (w) => (w && (w.notBefore || w.notAfter))
+    ? { notBefore: w.notBefore || null, notAfter: w.notAfter || null } : null;
+  return pick(booking && booking.requestedWindow) || pick(planWindow);
+}
+
+// The {bucket} merge field: the half-day, or the time that was set.
+//   no window          "Morning (8 AM – 12 PM)"
+//   after only         "Morning, after 9:30 AM"
+//   before only        "Morning, before 10:00 AM"
+//   both               "between 9:00 AM and 9:30 AM"
+function windowLabelOf(bucketKey, window = null) {
+  if (!window || (!window.notBefore && !window.notAfter)) return bucketLabelOf(bucketKey);
+  const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
+  const word = bucket ? (bucket.key === "morning" ? "Morning" : "Afternoon") : "";
+  if (window.notBefore && window.notAfter) {
+    return `between ${timeLabelOf(window.notBefore)} and ${timeLabelOf(window.notAfter)}`;
+  }
+  const part = window.notBefore ? `after ${timeLabelOf(window.notBefore)}` : `before ${timeLabelOf(window.notAfter)}`;
+  return word ? `${word}, ${part}` : part;
+}
+
 function dateLabelOf(scheduledFor) {
   const d = new Date(scheduledFor);
   if (Number.isNaN(d.getTime())) return "";
@@ -421,14 +526,21 @@ function dateLabelOf(scheduledFor) {
 // Build the merge context from an assignment booking record. The link
 // defaults to a LOUD placeholder — stage 4 must supply the real URL and
 // must refuse to send anything still carrying a bracketed placeholder.
-function contextForBooking(booking, extra = {}) {
+//
+// `extra.planWindow` is the window Patrick set on the plan stop (the
+// cadence looks it up); it is not a merge field itself — it shapes
+// {bucket} through promisedWindow(), so every message states the time
+// that was set rather than the bare half-day.
+function contextForBooking(booking, extraIn = {}) {
+  const { planWindow = null, ...extra } = extraIn || {};
+  const bucketKey = booking?.assignment?.bucket
+    || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon");
   return {
     firstName: firstNameOf(booking?.customerName),
     name: String(booking?.customerName || "").trim() || "there",
     street: streetOf(booking?.address),
     date: dateLabelOf(booking?.scheduledFor),
-    bucket: bucketLabelOf(booking?.assignment?.bucket
-      || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon")),
+    bucket: windowLabelOf(bucketKey, promisedWindow(booking, planWindow)),
     appointmentLink: "[appointment-link]",
     // The tier price for the booking's service. Callers holding the
     // PROPERTY pass extra.price from resolveSeasonalPrice() so a
@@ -466,6 +578,9 @@ function renderAllForBooking(booking, extra = {}) {
 }
 
 module.exports = {
+  timeLabelOf,
+  promisedWindow,
+  windowLabelOf,
   retireOldTextWording,
   retireOldEmailWording,
   REPLY_YES_KEYS,
