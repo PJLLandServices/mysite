@@ -159,7 +159,7 @@ const merged = async () => { try { return plans.bucketOrderWithBooked(await day(
     j(await merged()) === j(["VAL", "FAN", "__bk:BK-1", "FRANK"]), j(await merged()));
   ok("…the reply says what moved", r.reordered && r.reordered.propertyCode === "__bk:BK-1" && r.reordered.from === 3 && r.reordered.to === 2, j(r.reordered));
   ok("…the day is now hand-ordered", (await day()).manualOrder === true);
-  ok("…stored as 'before FRANK', not as a copy of the list", j((await day()).bookedOrder) === j({ "BK-1": { before: "FRANK" } }), j((await day()).bookedOrder));
+  ok("…stored as 'before FRANK', not as a copy of the list", j((await day()).bookedOrder) === j({ "BK-1": { before: "FRANK", rank: 0 } }), j((await day()).bookedOrder));
   ok("…and the plan codes themselves did not move", j((await day()).morning) === j(["VAL", "FAN", "FRANK"]));
 
   await press("__bk:BK-1", "up");
@@ -186,6 +186,9 @@ const merged = async () => { try { return plans.bucketOrderWithBooked(await day(
   ok("…and a junk position is dropped, a null one kept",
     (() => { const v = plans.validate({ ...SEED, days: { "2026-10-14": { ...SEED.days["2026-10-14"], bookedOrder: { A: { before: null }, B: "junk", C: { before: "X" } } } } });
       return j(v.plan.days["2026-10-14"].bookedOrder) === j({ A: { before: null }, C: { before: "X" } }); })());
+  ok("…and a rank is kept through validate as well",
+    j(plans.validate({ ...SEED, days: { "2026-10-14": { ...SEED.days["2026-10-14"], bookedOrder: { A: { before: "VAL", rank: 2 }, B: { before: "VAL", rank: -1 } } } } }).plan.days["2026-10-14"].bookedOrder)
+      === j({ A: { before: "VAL", rank: 2 }, B: { before: "VAL" } }));
 
   await throws("3g. a booked customer who is not on this half-day is refused",
     () => lib("reorderStop")("fall", 2026, { date: "2026-10-14", bucket: "morning", propertyCode: "__bk:NOPE", direction: "up", bookedKeys: ["BK-1"] }),
@@ -225,6 +228,41 @@ const merged = async () => { try { return plans.bucketOrderWithBooked(await day(
   await press("__bk:BK-1", "down", ["FAN", "FRANK", "VAL", "__bk:BK-1"]);
   ok("4d. on a day already hand-ordered the screen's list is NOT re-adopted",
     j(await merged()) === j(["VAL", "__bk:BK-1", "FAN", "FRANK"]), j(await merged()));
+}
+
+// ---- 4½. Two booked customers can swap with each other --------------------
+// Patrick, 2026-10-07, minutes after the first version went live: "two
+// personally booked appointments can't jump each other now either." Both
+// rows read "before FRANK", so a swap wrote the same position for each and
+// the merge put them back in arrival order.
+{
+  await reseed();
+  const press2 = (propertyCode, direction, currentOrder) => lib("reorderStop")("fall", 2026,
+    { date: "2026-10-14", bucket: "morning", propertyCode, direction, currentOrder, bookedKeys: ["BK-1", "BK-2"] }, { actor: "patrick" })
+    .catch((e) => ({ error: e.message }));
+  const merged2 = async () => plans.bucketOrderWithBooked(await day(), "morning", ["BK-1", "BK-2"]);
+  // Screen: VAL, FAN, FRANK, Cynthia (BK-1), Kirk (BK-2). ↑ on Kirk.
+  const r = await press2("__bk:BK-2", "up", ["VAL", "FAN", "FRANK", "__bk:BK-1", "__bk:BK-2"]);
+  ok("4½a. ↑ on the second booked customer hops it over the first",
+    j(await merged2()) === j(["VAL", "FAN", "FRANK", "__bk:BK-2", "__bk:BK-1"]), `${j(await merged2())} ${j(r.error)}`);
+  await press2("__bk:BK-2", "up", null);
+  await press2("__bk:BK-1", "up", null);
+  ok("4½b. …and again with a plan stop between them: FRANK, Kirk, Cynthia → Kirk, FRANK, Cynthia → Kirk, Cynthia, FRANK",
+    j(await merged2()) === j(["VAL", "FAN", "__bk:BK-2", "__bk:BK-1", "FRANK"]), j(await merged2()));
+  await press2("__bk:BK-1", "up", null);
+  ok("4½c. two booked rows side by side, same plan stop ahead of both: ↑ swaps them",
+    j(await merged2()) === j(["VAL", "FAN", "__bk:BK-1", "__bk:BK-2", "FRANK"]), j(await merged2()));
+  await press2("__bk:BK-1", "down", null);
+  ok("4½d. ↓ swaps them back", j(await merged2()) === j(["VAL", "FAN", "__bk:BK-2", "__bk:BK-1", "FRANK"]), j(await merged2()));
+  await plans.savePlan("fall", 2026, await plans.getPlan("fall", 2026), { actor: "test" });
+  ok("4½e. the swap survives a save-and-reload", j(await merged2()) === j(["VAL", "FAN", "__bk:BK-2", "__bk:BK-1", "FRANK"]), j((await day()).bookedOrder));
+  // Both at the END of the half-day (no plan stop after them) swap too.
+  await reseed();
+  await press2("__bk:BK-2", "up", ["VAL", "FAN", "FRANK", "__bk:BK-1", "__bk:BK-2"]);
+  await press2("__bk:BK-2", "down", null);
+  await press2("__bk:BK-1", "down", null);
+  ok("4½f. two booked rows at the end of the half-day swap as well",
+    j(await merged2()) === j(["VAL", "FAN", "FRANK", "__bk:BK-2", "__bk:BK-1"]), j(await merged2()));
 }
 
 // ---- 5. Back to automatic forgets the positions ---------------------------

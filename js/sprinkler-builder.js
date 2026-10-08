@@ -57,7 +57,7 @@
   const qsName             = document.getElementById('qsName');
 
   // ── Image filename derivation ────────────────────────────────
-  // Builds e.g. "images/builder/T2_FRONT_TCG.png" from current state.
+  // Builds e.g. "images/builder/T2_FRONT_TCG.jpg" from current state.
   function getImageFilename(yard) {
     if (!state.tier) return null;
 
@@ -68,7 +68,7 @@
     order.forEach(k => { if (features[k]) flags += k; });
     if (flags === '') flags = 'BARE';
 
-    return `images/builder/T${state.tier}_${yard}_${flags}.png`;
+    return `images/builder/T${state.tier}_${yard}_${flags}.jpg`;
   }
 
   // ── Build a human-readable feature list ──────────────────────
@@ -178,7 +178,7 @@
         const link = document.createElement('link');
         link.rel = 'preload';
         link.as = 'image';
-        link.href = `images/builder/T${tier}_${yard}_${flag}.png`;
+        link.href = `images/builder/T${tier}_${yard}_${flag}.jpg`;
         document.head.appendChild(link);
       });
     });

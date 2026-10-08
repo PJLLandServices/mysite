@@ -87,11 +87,23 @@ try {
   assert.equal(read("leads").length, 1, "a retry with the same id does not book twice");
   assert.equal(read("bookings").length, 1, "…one canonical booking");
 
+  // A DIFFERENT id is judged on its own merits, never replayed. Whether it
+  // books depends on the slot: a timed slot is now taken (4xx), but a
+  // morning/afternoon bucket legitimately holds several bookings (201).
+  // The first offered slot is date-driven, so accept either outcome and
+  // assert what the receipt store is responsible for.
   const third = await reserve("op-2");
-  assert.ok(third.status >= 400, `a DIFFERENT id for the same slot is judged on its own merits (slot now taken): ${third.status}`);
+  assert.notEqual(third.body.replayed, true, `a DIFFERENT id is never answered with a replay: ${third.status}`);
+  if (third.status === 201) {
+    assert.notEqual(third.body.leadId, first.body.leadId, "…a different id that books gets its own lead");
+    assert.equal(read("leads").length, 2, "…and adds exactly one lead");
+  } else {
+    assert.ok(third.status >= 400, `…or is refused on its own merits (slot taken): ${third.status}`);
+    assert.equal(read("leads").length, 1, "…and a refusal writes nothing");
+  }
 
   const receipts = JSON.parse(fs.readFileSync(path.join(DATA, "reserve-receipts.json"), "utf8"));
-  assert.equal(receipts.length, 1, "only successes are filed");
+  assert.equal(receipts.length, third.status === 201 ? 2 : 1, "only successes are filed, one per id");
 
   console.log("test-reserve-receipts: all checks passed");
 } finally {

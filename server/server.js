@@ -792,11 +792,59 @@ const LEGACY_REDIRECTS = {
   // Sprinkler System Builder was briefly published publicly (Jul 10 2026)
   // then moved behind the staff login. 301 the old public URL to the
   // gated route (which itself redirects anonymous users to /login).
-  "/sitebuilder.html": "/admin/sitebuilder"
+  "/sitebuilder.html": "/admin/sitebuilder",
+  // Old /blog/<slug> addresses whose slug doesn't match the flat file name
+  // (the /blog/* wildcard below only covers exact matches). These were the
+  // canonical URLs on three posts until Oct 2026, so Google may have them.
+  "/blog/landscape-lighting-newmarket-gta-homes": "/blog-landscape-lighting-newmarket.html",
+  "/blog/spring-sprinkler-opening-newmarket-gta": "/blog-spring-sprinkler-opening.html",
+  "/blog/lawn-sprinkler-installation-newmarket-gta": "/blog-sprinkler-installation-newmarket.html"
 };
 
 function normalizeString(value, maxLength = 400) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+// ----- Lead source (marketing attribution) -------------------------------
+// The site's analytics partial remembers where a visitor came from (ad
+// utm_* tags, a Facebook/Google click id, or the referring site) and
+// js/booking.js sends it with the booking as `attribution`. This is the ONE
+// place that cleans it and decides the human label ("Facebook ad", "Google
+// search", ...). The label is stored on the lead at write time, so every
+// reader (CRM lead drawer, exports) shows the same answer.
+// Returns null when there is nothing worth keeping.
+const ATTRIBUTION_FIELDS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid", "gclid", "referrer", "landingPage"];
+function leadSourceLabel(a) {
+  const src = String(a.utm_source || "").toLowerCase();
+  const med = String(a.utm_medium || "").toLowerCase();
+  const ref = String(a.referrer || "").toLowerCase();
+  const paid = /paid|cpc|ppc|ads?$/.test(med) || Boolean(a.fbclid && src) || Boolean(a.gclid);
+  if (/instagram|^ig$/.test(src)) return paid ? "Instagram ad" : "Instagram";
+  if (/facebook|^fb$|^meta$|messenger|audience_network/.test(src)) return paid ? "Facebook ad" : "Facebook";
+  if (/google/.test(src) || a.gclid) return paid ? "Google ad" : "Google";
+  if (src) return paid ? `${a.utm_source} ad` : a.utm_source;
+  if (a.fbclid) return "Facebook / Instagram";
+  if (/instagram\./.test(ref)) return "Instagram";
+  if (/facebook\.|fb\.com/.test(ref)) return "Facebook";
+  if (/google\./.test(ref)) return "Google search";
+  if (/bing\.|duckduckgo\.|yahoo\./.test(ref)) return "Web search";
+  if (ref) {
+    try { return new URL(a.referrer).hostname.replace(/^www\./, ""); } catch { return "Another website"; }
+  }
+  return "";
+}
+function normalizeAttribution(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = {};
+  for (const key of ATTRIBUTION_FIELDS) {
+    const v = normalizeString(raw[key], key === "referrer" || key === "landingPage" ? 300 : 200);
+    if (v) out[key] = v;
+  }
+  const ts = Number(raw.ts);
+  if (Number.isFinite(ts) && ts > 0) out.firstSeenAt = new Date(ts).toISOString();
+  if (!Object.keys(out).some((k) => k !== "firstSeenAt" && k !== "landingPage")) return null;
+  out.label = leadSourceLabel(out) || "Unknown";
+  return out;
 }
 
 function parseCookies(req) {
@@ -2109,6 +2157,8 @@ function validateLead(payload) {
         pageUrl: normalizeString(payload && payload.pageUrl, 500),
         userAgent: normalizeString(payload && payload.userAgent, 500),
         mode: normalizeString(payload && payload.mode, 60),
+        // Only present when the visitor carried a source (keeps other leads unchanged).
+        ...(normalizeAttribution(payload && payload.attribution) ? { attribution: normalizeAttribution(payload && payload.attribution) } : {}),
         // AI-diagnose source carries the chat transcript so Patrick can read
         // what the AI told the customer. Capped at 50K chars (typical chat is
         // ~5K). Empty for non-AI sources.
@@ -25777,6 +25827,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         features: [],
         pageUrl: normalizeString(payload.pageUrl, 500),
         userAgent: normalizeString(payload.userAgent, 500),
+        attribution: payload.attribution,
         mode: "booking"
       };
       const result = validateLead(intakePayload);

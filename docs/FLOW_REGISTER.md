@@ -2,6 +2,16 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-07, minutes later (Two booked customers can swap with each other):** Patrick, as soon as
+the arrows went live: *"two personally booked appointments can't jump each other now either."*
+`day.bookedOrder[key]` stored only `{ before: planCode }`, so two booked rows ahead of the same plan
+stop (or both at the end of the half-day) wrote the same position and `bucketOrderWithBooked`
+put them back in arrival order — the ↑ press "worked" and nothing moved. Now the position also
+carries `rank`, the row's place among the booked rows sharing that `before`; `applyBucketOrder`
+assigns it from the merged list, the merge sorts by it (unranked rows from older data go after, in
+arrival order), `validate` keeps it. `scripts/test-booked-order.mjs` section 4½ (45 total)
+reproduces the no-op swap on the previous code and pins the fix.
+
 **2026-10-07 (A booked customer can be moved like any other stop — and a hand-ordered day no longer
 pins them last):** Patrick, Oct 14 again, after the optimiser fix went live and the day came back
 *"Ordered by hand"* with 72 minutes of waiting: *"If we start off with Cynthia like we needed to,
@@ -8851,6 +8861,36 @@ is shared it does nothing.
   marker).
 
 **Mac steps:** `docs/ONE_APP_MAC_BUILD.md`.
+
+## 2026-10-07 — LEAD-SOURCE-01: bookings record which ad or website sent the customer; Meta Pixel added (no PASS flow touched)
+
+**Why:** Patrick launched a Facebook/Instagram fall-closing ad (tagged
+`utm_source={{site_source_name}}&utm_medium=paid_social&utm_campaign=fall_closing_oct2026`)
+pointing at `book.html` and asked whether the site knows a booking came from the ad. It didn't.
+
+**What changed:**
+- `_partials/analytics.html` (every page): Meta Pixel for dataset 1523620959798270 (PageView), plus
+  a small script that remembers the visitor's source in localStorage (`pjl_attribution_v1`, 90 days).
+  A tagged click (utm_*, fbclid, gclid) always replaces what is stored; a plain referring site is
+  stored only when nothing is. Exposes `window.pjlAttribution()`.
+- `js/booking.js` (`?v=8`): sends `attribution` with `/api/booking/reserve`; fires Meta
+  `Schedule` next to the existing Google Ads conversion. Both wrapped so tracking can never break a
+  booking.
+- `server/server.js`: `normalizeAttribution()` / `leadSourceLabel()` — the one place that cleans the
+  data and names it ("Facebook ad", "Google search", …). `validateLead` stores it as
+  `lead.context.attribution` only when present; the reserve route passes it through. Additive:
+  leads without a source are byte-identical to before.
+- `server/admin.js`: lead drawer source line adds "Came from: Facebook ad (fall_closing_oct2026)".
+- `privacy-policy.html`: names GA, Clarity and the Meta Pixel.
+
+**Whole workflow:** customer sees nothing new. Patrick sees "Came from" on the lead. Capacity,
+calendar, work orders, invoices, portal: untouched. Admin bookings (bound-lead path) carry no
+attribution by design.
+
+**Tests:** `scripts/test-lead-attribution.mjs` (24 checks; crashes on the parent — the function
+doesn't exist). Existing booking tests re-run: test-booking-guards, -hold, -lifecycle, -funnel,
+asset-versioning, build --check, booking-link lint all pass. `test-book` (Babel parse) and
+`test-reserve-receipts` fail identically on the parent — pre-existing, not touched here.
 
 **2026-10-06, late (Unified Booking Source of Truth — Phase 0, the fail-first suites):** P-PJL-39 /
 PJL-132. The inventory (`docs/UBST_PHASE0_INVENTORY.md`) found seven stores that can each say "there is

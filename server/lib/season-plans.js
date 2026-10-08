@@ -200,7 +200,9 @@ function validate(input) {
       for (const [key, raw] of Object.entries(src.bookedOrder)) {
         if (!raw || typeof raw !== "object") continue;
         const before = raw.before == null || raw.before === "" ? null : String(raw.before).slice(0, 40);
-        kept[String(key).slice(0, 60)] = { before };
+        const rec = { before };
+        if (Number.isInteger(raw.rank) && raw.rank >= 0) rec.rank = raw.rank;
+        kept[String(key).slice(0, 60)] = rec;
       }
       if (Object.keys(kept).length) day.bookedOrder = kept;
     }
@@ -498,12 +500,24 @@ const bookedToken = (key) => `${BOOKED_PREFIX}${key}`;
 const isBookedToken = (token) => String(token || "").startsWith(BOOKED_PREFIX);
 const bookedKeyOf = (token) => String(token || "").slice(BOOKED_PREFIX.length);
 
+//
+// TWO BOOKED CUSTOMERS SIDE BY SIDE. "before FRANK" alone cannot tell two
+// of them apart, so the first version wrote the same position for both and
+// a swap changed nothing (Patrick, 2026-10-07: "two personally booked
+// appointments can't jump each other now either"). `rank` is the row's
+// place among the booked customers sharing the same `before`; a row
+// without one (older data) goes after the ranked ones, in arrival order.
 function bucketOrderWithBooked(day, bucket, bookedKeys = []) {
   const out = [...((day && day[bucket]) || [])];
   const positions = (day && day.bookedOrder) || {};
-  for (const key of bookedKeys || []) {
+  const rows = (bookedKeys || []).map((key, i) => {
     const slot = positions[key];
     const before = slot && slot.before ? String(slot.before) : null;
+    const rank = slot && Number.isInteger(slot.rank) ? slot.rank : Infinity;
+    return { key, before, rank, i };
+  });
+  rows.sort((a, b) => (a.rank - b.rank) || (a.i - b.i));
+  for (const { key, before } of rows) {
     const at = before ? out.indexOf(before) : -1;
     if (at >= 0) out.splice(at, 0, bookedToken(key));
     else out.push(bookedToken(key));
@@ -512,14 +526,19 @@ function bucketOrderWithBooked(day, bucket, bookedKeys = []) {
 }
 
 // Write a merged half-day back: plan codes to day[bucket], each booked
-// token's place to day.bookedOrder as "before the next plan code".
+// token's place to day.bookedOrder as "before the next plan code" plus its
+// rank among the booked rows that share that plan code.
 function applyBucketOrder(day, bucket, merged) {
   day[bucket] = merged.filter((t) => !isBookedToken(t));
   const positions = { ...(day.bookedOrder || {}) };
+  const seen = new Map();   // before (or "") -> how many booked rows already placed there
   merged.forEach((token, i) => {
     if (!isBookedToken(token)) return;
     const next = merged.slice(i + 1).find((t) => !isBookedToken(t)) || null;
-    positions[bookedKeyOf(token)] = { before: next };
+    const group = next || "";
+    const rank = seen.get(group) || 0;
+    seen.set(group, rank + 1);
+    positions[bookedKeyOf(token)] = { before: next, rank };
   });
   if (Object.keys(positions).length) day.bookedOrder = positions;
   else delete day.bookedOrder;

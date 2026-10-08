@@ -424,7 +424,14 @@ function renderDetail() {
   detailName.textContent = text(lead.contact?.name);
   detailAddress.textContent = text(lead.contact?.address) || "No address provided";
   const sourceLabel = lead.sourceLabel || sources[lead.source]?.label || "General Lead";
-  detailSource.textContent = `Source: ${sourceLabel} · ${daysSinceUpdate(lead)}d since update`;
+  // "Came from" = the marketing source the server stored at booking time
+  // (lead.context.attribution.label — e.g. "Facebook ad"). Absent on leads
+  // that arrived with no ad tags or referring site.
+  const cameFrom = lead.context?.attribution?.label;
+  const campaign = lead.context?.attribution?.utm_campaign;
+  detailSource.textContent = `Source: ${sourceLabel}`
+    + (cameFrom ? ` · Came from: ${cameFrom}${campaign ? ` (${campaign})` : ""}` : "")
+    + ` · ${daysSinceUpdate(lead)}d since update`;
   detailValue.textContent = moneyText(lead.totals?.expectedTotal);
   callLink.href = `tel:${text(lead.contact?.phone).replace(/[^\d+]/g, "")}`;
   emailLink.href = `mailto:${text(lead.contact?.email)}`;
