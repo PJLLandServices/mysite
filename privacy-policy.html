@@ -51,7 +51,7 @@
   padding: 150px 0 68px;
   background: linear-gradient(135deg, var(--dark), var(--green-mid));
 }
-.page-hero h1 {
+.page-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) {
   color: #fff;
   margin-bottom: 12px;
   max-width: min(18ch, 100%);
@@ -93,7 +93,7 @@
   padding: 28px 32px;
   margin-bottom: 48px;
 }
-.legal-toc h2 {
+.legal-toc :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-family: 'DM Sans', sans-serif;
   font-size: 12px;
   font-weight: 600;
@@ -136,7 +136,7 @@
   margin-bottom: 40px;
   scroll-margin-top: 140px;
 }
-.legal-prose h2 {
+.legal-prose :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-size: clamp(22px, 2.6vw, 28px);
   color: var(--dark);
   margin-bottom: 16px;
@@ -145,7 +145,7 @@
   align-items: baseline;
   gap: 14px;
 }
-.legal-prose h2 .legal-num {
+.legal-prose :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) .legal-num {
   font-family: 'DM Sans', sans-serif;
   font-size: 13px;
   font-weight: 700;
@@ -195,7 +195,7 @@
   border-radius: var(--r-lg);
   border: 1px solid var(--green-pale);
 }
-.legal-contact h3 {
+.legal-contact :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   font-size: 22px;
   color: var(--green);
   margin-bottom: 8px;
@@ -227,10 +227,10 @@
 
 @media (max-width: 720px) {
   .page-hero { padding: var(--hero-nav-clearance) 0 52px; }
-  .page-hero h1 { font-size: clamp(32px, 9vw, 42px); }
+  .page-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) { font-size: clamp(32px, 9vw, 42px); }
   .legal-toc { padding: 22px 24px; }
   .legal-toc ol { grid-template-columns: 1fr; }
-  .legal-prose h2 {
+  .legal-prose :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
     flex-direction: column;
     gap: 4px;
   }
@@ -484,7 +484,7 @@
 </section>
 
 <!-- @@PJL:footer-START -->
-<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h2 class="hl-h5">Services</h2><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Service Areas</h2><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Company</h2><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Contact</h2><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
 <!-- @@PJL:footer-END -->
 <script src="nav.js?v=3"></script>
 </body>

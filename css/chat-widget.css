@@ -296,7 +296,7 @@ body.has-savings-float .pjl-chat-launcher {
   max-width: 92%;
   box-shadow: 0 2px 8px rgba(15, 31, 20, .06);
 }
-.pjl-chat-form-bubble h3 {
+.pjl-chat-form-bubble :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
   font-size: 24px;
   font-weight: 700;
@@ -519,7 +519,7 @@ body.has-savings-float .pjl-chat-launcher {
   font-size: 32px; font-weight: 700;
   box-shadow: 0 6px 18px rgba(15, 31, 20, .25);
 }
-.pjl-chat-ty h2 {
+.pjl-chat-ty :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
   font-size: 32px;
   font-weight: 700;
@@ -602,7 +602,7 @@ body.has-savings-float .pjl-chat-launcher {
   margin-bottom: 22px;
   text-align: left;
 }
-.pjl-chat-ty-upsell h3 {
+.pjl-chat-ty-upsell :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
   font-size: 18px;
   font-weight: 700;

@@ -151,14 +151,14 @@
 /* Drop-shadows on hero text — extra layer of legibility over the card,
    except on the amber-gradient em (text-shadow muddies the
    -webkit-text-fill-color: transparent that produces the gradient). */
-.drip-hero h1,
+.drip-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1),
 .drip-hero p,
 .drip-hero-meta,
 .drip-eyebrow,
 .drip-hero .breadcrumbs {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
 }
-.drip-hero h1 em {
+.drip-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) em {
   text-shadow: none;
 }
 /* Tablet portrait + small laptops: video column shrinks slightly so the
@@ -211,13 +211,13 @@
   background: var(--amber-light);
   box-shadow: 0 0 0 3px rgba(245,155,74,.35);
 }
-.drip-hero h1 {
+.drip-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) {
   color: #fff;
   font-size: clamp(38px, 5.6vw, 70px);
   line-height: 1.04; letter-spacing: -.025em;
   margin-bottom: 20px;
 }
-.drip-hero h1 em {
+.drip-hero :where(h1:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h1) em {
   font-style: italic;
   background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
   -webkit-background-clip: text; background-clip: text;
@@ -255,12 +255,12 @@
 
 .section { padding: clamp(56px, 8vw, 96px) 0; }
 .section.cream { background: var(--cream); }
-.section h2 {
+.section :where(h2:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h2) {
   font-size: clamp(28px, 3.8vw, 42px);
   color: var(--green);
   margin-bottom: 18px;
 }
-.section h3 {
+.section :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   font-size: clamp(20px, 2.2vw, 26px);
   color: var(--text);
   margin: 32px 0 12px;
@@ -308,7 +308,7 @@
   font-size: 20px;
   margin-bottom: 12px;
 }
-.drip-feature h4 {
+.drip-feature :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4) {
   color: var(--text) !important; font-size: 17px !important;
   margin: 0 0 6px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -334,7 +334,7 @@
 }
 .use-card:hover { transform: translateY(-3px); border-color: rgba(74,140,92,.30); box-shadow: 0 10px 24px rgba(15,31,20,.08); }
 .use-card__emoji { font-size: 30px; margin-bottom: 10px; display: block; }
-.use-card h3 {
+.use-card :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   color: var(--green) !important; font-size: 18px !important;
   margin: 0 0 8px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -376,14 +376,14 @@
 }
 .path-card.is-included .path-card__pill { background: var(--green-pale); color: var(--green); }
 .path-card.is-retrofit .path-card__pill { background: rgba(224,123,36,0.10); color: var(--amber); }
-.path-card h3 {
+.path-card :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   color: var(--green) !important;
   font-size: 22px !important;
   margin: 0 0 10px !important;
   text-transform: none !important;
   letter-spacing: -.005em !important;
 }
-.path-card.is-retrofit h3 { color: #8E3F14 !important; }
+.path-card.is-retrofit :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) { color: #8E3F14 !important; }
 .path-card p { font-size: 15px !important; color: var(--text-mid) !important; margin: 0 0 14px !important; line-height: 1.55 !important; }
 .path-card__price {
   font-family: 'Barlow Condensed', sans-serif;
@@ -439,7 +439,7 @@
   font-weight: 800; font-size: 17px;
   margin-bottom: 10px;
 }
-.process-step h3 {
+.process-step :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) {
   color: var(--green) !important; font-size: 16px !important;
   margin: 0 0 6px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -468,7 +468,7 @@
   flex-shrink: 0;
   box-shadow: 0 6px 16px rgba(27,77,46,0.22);
 }
-.cred-callout h4 {
+.cred-callout :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4) {
   color: var(--green) !important; font-size: 17px !important;
   margin: 0 0 4px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -481,7 +481,7 @@
   color: #fff; padding: 48px 0;
 }
 .cta-strip-inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
-.cta-strip h3 { color: #fff !important; margin: 0 !important; font-size: clamp(22px, 2.6vw, 28px); text-transform: none !important; letter-spacing: -.005em !important; }
+.cta-strip :where(h3:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h3) { color: #fff !important; margin: 0 !important; font-size: clamp(22px, 2.6vw, 28px); text-transform: none !important; letter-spacing: -.005em !important; }
 .cta-strip p { color: rgba(255,255,255,.85) !important; margin: 6px 0 0 !important; font-size: 15px !important; }
 .cta-strip-actions { display: flex; gap: 12px; flex-wrap: wrap; }
 .cta-strip-actions a { padding: 14px 24px; border-radius: 99px; font-weight: 700; }
@@ -505,7 +505,7 @@
   transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 .related-service:hover { transform: translateY(-3px); border-color: rgba(74,140,92,.25); box-shadow: 0 10px 26px rgba(15,31,20,.06); }
-.related-service h4 {
+.related-service :where(h4:not(.hl-h1,.hl-h2,.hl-h3,.hl-h4,.hl-h5,.hl-h6),.hl-h4) {
   color: var(--green) !important; margin: 0 0 4px !important;
   font-size: 16px !important;
   text-transform: none !important; letter-spacing: -.005em !important;
@@ -671,7 +671,7 @@
     <div class="drip-features">
       <div class="drip-feature">
         <div class="drip-feature__icon">💧</div>
-        <h4>Slow, targeted application</h4>
+        <h3 class="hl-h4">Slow, targeted application</h3>
         <p>A fraction of a gallon per hour at each emitter. Water has time to wick into the soil instead of pooling, running off, or evaporating into the air before it gets where it's going.</p>
       </div>
       <div class="drip-feature">
@@ -837,7 +837,7 @@
     <div class="cred-callout">
       <div class="cred-callout__shield">📡</div>
       <div>
-        <h4>Per-zone scheduling, weather skipping, runtime history</h4>
+        <h3 class="hl-h4">Per-zone scheduling, weather skipping, runtime history</h3>
         <p>Every drip zone runs on its own deep-soak schedule with weather-skipping and per-zone runtime history. We program these at install based on what's growing and the soil profile — and re-tune them at every spring opening.</p>
       </div>
     </div>
@@ -889,7 +889,7 @@
   <div class="container" style="max-width:1080px;">
     <h2>Related services &amp; service areas</h2>
     <div class="related-services">
-      <a href="sprinkler-installation.html" class="related-service"><h4>Sprinkler Installation</h4><p>Drip zones designed in on every full property install.</p></a>
+      <a href="sprinkler-installation.html" class="related-service"><h3 class="hl-h4">Sprinkler Installation</h3><p>Drip zones designed in on every full property install.</p></a>
       <a href="sprinkler-hydrawise.html" class="related-service"><h4>Hydrawise Smart Controller</h4><p>Per-zone scheduling for drip + turf on one controller.</p></a>
       <a href="sprinkler-systems.html" class="related-service"><h4>All sprinkler services</h4><p>Install, repair, smart upgrades, full overview.</p></a>
       <a href="sprinkler-repair.html" class="related-service"><h4>Sprinkler Repair</h4><p>Drip-line leaks, clogged emitters, valve replacements.</p></a>
@@ -902,7 +902,7 @@
 </section>
 
 <!-- @@PJL:footer-START -->
-<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year install warranty and 1-year service guarantee.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h2 class="hl-h5">Services</h2><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Service Areas</h2><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Company</h2><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h2 class="hl-h5">Contact</h2><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=3"></script>
