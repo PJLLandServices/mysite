@@ -2,6 +2,33 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-08, evening (An exact appointment time, admin only — "if I select 7am, it needs to be
+booked at 7am"):** Patrick: *"Most — if not all — reschedules should only be capable of booking either
+morning or afternoon … I'd like the option when I (me only, admin) am changing the schedule to schedule
+it for a specific time."* The admin reschedule's **Custom time** (`source: "admin_custom"`) already
+existed, but nothing held it: for a self-booked customer `retimeCustomerBooking` re-timed it into the
+half-day within ten minutes (`lead.booking.dayLocked` is read there and written nowhere), the route
+never planned around it, and a season (assignment) customer Patrick rescheduled was told nothing — the
+reschedule email only goes to leads. Now an exact time is a booking state with ONE rule,
+`bookings.exactTimeOf(rec)`: `exactTime: "HH:MM"` holds only while the visit still starts at that local
+minute, so any later move voids it without needing to clear it. Writers: `reschedule({ exactTime })`
+(admin custom sets it, every other reschedule ends it), `setExactTime` (the Season plan's new **Exact
+time** box on a booked stop, route `PATCH …/stop-exact-time`, admin only), `createDirect`/the reserve
+and follow-up custom-time paths (born exact), the lead mirror (`upsertFromLead` copies
+`lead.booking.exactTime`), `moveAssignmentDay` (the clock time travels to the new day). Readers that
+now honour it: `setRouteTime` (no-op), `syncAssignedTimes` and `retimeCustomerBooking` (skip),
+`requestedWindowsFor` and `sequenceWithBookings` (pin the stop to the minute), `resequence.walk` (a
+pinned first stop before the half-day opens starts the day early — `early_start` flag names the yard
+departure), `orderDayForDriving` (field-app order), `assignment-messages.promisedWindow`/`promisedLabel`
+("at 7:00 AM" in every message, the time notice and the appointment page). Also: the admin reschedule
+of an assignment customer now queues the cadence's move notice (new day) or time notice (same day),
+and the promised half-day reads `booking.bucket` before the stale `assignment.bucket`, so a Morning →
+Afternoon move is told as Afternoon (the time notice compares the words it last told). Customers still
+only ever pick a half-day. Deliberately left alone: the customer reschedule flow (half-days only, and it
+ends an exact time); capacity counts a 7:00 visit in the morning like any other. `scripts/test-exact-time.mjs`
+(41, in build:check) fails 38 on the old code — there a stop pinned to 7:00 arrived at 8:57 and was
+flagged missed.
+
 **2026-10-08 (One stop moved gets its own notice; a time set on a stop is told to the customer):**
 Patrick moved Jaswinder Chatrath's single stop (61 French Dr) from Oct 9 to Oct 17 with *Move to…*
 and she was emailed *"Weather and routing sometimes move one of our whole service days, and yours

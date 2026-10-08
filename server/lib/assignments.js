@@ -281,6 +281,9 @@ async function requestedWindowsFor(season, year, listBookings = bookings.list) {
       if (!b || b.source !== "assignment" || !b.assignment) continue;
       if (b.assignment.season !== season || Number(b.assignment.year) !== Number(year)) continue;
       if (b.status !== "confirmed") continue;
+      // Patrick's exact time pins the stop to that minute (2026-10-08).
+      const exact = bookings.exactTimeOf(b);
+      if (exact) { out[b.assignment.code] = { notBefore: exact, notAfter: exact }; continue; }
       const w = b.requestedWindow;
       if (w && (w.notBefore || w.notAfter)) {
         out[b.assignment.code] = { notBefore: w.notBefore || null, notAfter: w.notAfter || null };
@@ -328,7 +331,13 @@ function sequenceWithBookings({ storedDay, bookedRows, byCode, season, requested
     morning: seasonPlans.bucketOrderWithBooked(storedDay || {}, "morning", extra.morning),
     afternoon: seasonPlans.bucketOrderWithBooked(storedDay || {}, "afternoon", extra.afternoon)
   };
-  return Promise.resolve(seq(day, { propertiesByCode: augByCode, season, requestedWindows }))
+  // A self-booked customer Patrick gave an exact time is pinned to it,
+  // the same way an assigned stop is (requestedWindowsFor).
+  const windows = { ...(requestedWindows || {}) };
+  for (const [code, row] of rowByMapCode) {
+    if (row && row.exactTime) windows[code] = { notBefore: row.exactTime, notAfter: row.exactTime };
+  }
+  return Promise.resolve(seq(day, { propertiesByCode: augByCode, season, requestedWindows: windows }))
     .then((sequenced) => ({ sequenced, rowByMapCode }));
 }
 
@@ -925,6 +934,7 @@ async function syncAssignedTimes(season, year, deps = {}) {
     && b.status === "confirmed"
     && (Number(b.rescheduleCount) || 0) === 0
     && !(Array.isArray(b.workOrderIds) && b.workOrderIds.length)
+    && !bookings.exactTimeOf(b)          // Patrick's exact minute is not the route's to move
     && plan.days[b.assignment.date]
     && inScope(b.assignment.date));
 
@@ -1116,28 +1126,54 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
 //   flexible          a free-bucket customer: the tech calls ahead anyway
 //   customer_window   the customer set their own time on their page, and
 //                     theirs is what the route honours
-async function queueTimeNotice(season, year, { date, code }, deps = {}) {
+// The live assignment booking for one plan stop on one day, or null.
+async function stopBookingFor(season, year, { date, code }, deps = {}) {
   const listBookings = deps.listBookings || bookings.list;
   const listProperties = deps.listProperties || properties.list;
-  const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
-  const actor = deps.actor || "admin";
   const all = (await listProperties()) || [];
   const property = all.find((p) => p && p.code === code);
-  const b = ((await listBookings()) || []).find((x) =>
+  return ((await listBookings()) || []).find((x) =>
     x && x.source === "assignment" && x.assignment && x.status === "confirmed"
     && x.assignment.season === season && Number(x.assignment.year) === Number(year)
     && x.assignment.date === date && localDateKey(x.scheduledFor) === date
-    && (x.assignment.code === code || (property && x.propertyId === property.id)));
+    && (x.assignment.code === code || (property && x.propertyId === property.id))) || null;
+}
+
+async function queueTimeNotice(season, year, { date, code }, deps = {}) {
+  const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
+  const actor = deps.actor || "admin";
+  const b = deps.booking || await stopBookingFor(season, year, { date, code }, deps);
   if (!b) return { queued: false, reason: "no_booking" };
   if (!b.assignment.outreach?.steps?.["1"]) return { queued: false, reason: "not_messaged", bookingId: b.id };
   if (b.flexBucket) return { queued: false, reason: "flexible", bookingId: b.id };
-  if (b.requestedWindow && (b.requestedWindow.notBefore || b.requestedWindow.notAfter)) {
+  // The customer's own window governs — unless Patrick set an exact time,
+  // which beats it (assignment-messages.promisedWindow).
+  if (!bookings.exactTimeOf(b) && b.requestedWindow && (b.requestedWindow.notBefore || b.requestedWindow.notAfter)) {
     return { queued: false, reason: "customer_window", bookingId: b.id };
   }
   await setOutreach(b.id, {
     pendingTimeNotice: { date, queuedAt: new Date().toISOString() }
   }, { action: "time_notice_queued", by: actor, note: `time window changed on ${date}` });
   return { queued: true, bookingId: b.id, customerName: b.customerName || "" };
+}
+
+// ---- An exact time on a plan stop (2026-10-08) ---------------------------
+//
+// Patrick: "go with the exact time — but if I select 7am, it needs to be
+// booked at 7am." The Season plan's Exact time on a stop books its
+// appointment at that minute (bookings.setExactTime), pins the stop there
+// in the route (requestedWindowsFor), and queues the time notice so the
+// customer hears "at 7:00 AM". `time` null hands the minute back to the
+// route. Needs a live booking: an exact time is a promise to a customer,
+// and a stop nobody is booked on has no one to promise it to yet.
+async function setStopExactTime(season, year, { date, code, time = null }, deps = {}) {
+  const setExact = deps.setExactTime || bookings.setExactTime;
+  const actor = deps.actor || "admin";
+  const b = await stopBookingFor(season, year, { date, code }, deps);
+  if (!b) return { ok: false, reason: "no_booking" };
+  const updated = await setExact(b.id, { time, by: actor });
+  const timeNotice = await queueTimeNotice(season, year, { date, code }, { ...deps, booking: updated, actor });
+  return { ok: true, bookingId: b.id, exactTime: bookings.exactTimeOf(updated), scheduledFor: updated && updated.scheduledFor, timeNotice };
 }
 
 // ---- The bookings follow the plan -------------------------------------
@@ -1246,4 +1282,4 @@ module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
   planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES, skippedThisSeason,
-  priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, queueTimeNotice, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+  priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, queueTimeNotice, setStopExactTime, stopBookingFor, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

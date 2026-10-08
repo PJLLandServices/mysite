@@ -5916,9 +5916,16 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
 
   // 1) Push the canonical bookings.json record (with the half-day the
   //    customer was offered, so the promise lives on the record).
+  // Patrick's Custom time is an EXACT time (2026-10-08: "if I select 7am
+  // — it needs to be booked at 7am"): the visit is at that minute, the
+  // route-time sync never moves it, and the customer is told the minute.
+  // Any other reschedule — a half-day slot, the customer's own move —
+  // ends an exact time (bookings.reschedule clears it).
+  const isExact = source === "admin_custom" && actor !== "customer";
   const updatedBooking = await bookings.reschedule(bookingId, {
     scheduledFor: startDate.toISOString(),
     bucket: matched.bucketKey || null,
+    exactTime: isExact,
     by: actor,
     actorName,
     reason
@@ -5935,6 +5942,8 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
     lead.booking.bucketKey = matched.bucketKey || null;
     lead.booking.bucketWindow = matched.bucketWindow || null;
     lead.booking.bucketLabel = matched.timeLabel || null;
+    if (isExact) lead.booking.exactTime = bookings.localHHMM(startDate.toISOString());
+    else delete lead.booking.exactTime;
     lead.crm = lead.crm || {};
     lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
     const prev = bookingRec.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
@@ -5964,6 +5973,28 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
       portalUrl: lead.portal?.token ? joinUrl(resolvePublicBaseUrl(), `/portal/${lead.portal.token}`) : null
     };
     notifyCustomer("rescheduled", aliasLead, { baseUrl }).catch(() => {});
+  }
+
+  // 4b) A season (assignment) customer has no lead, so step 4 never told
+  //     them anything when Patrick moved them here. Their messages come
+  //     from the cadence: a new day queues the "your appointment has
+  //     moved" notice, a new time on the same day queues the time notice.
+  //     Both state the new time ("at 7:00 AM" for an exact time). Only
+  //     customers already messaged — an unmessaged booking's first
+  //     message will carry it — and never for the customer's own move.
+  if (!lead && actor !== "customer" && updatedBooking && updatedBooking.source === "assignment"
+      && updatedBooking.assignment?.outreach?.steps?.["1"] && !updatedBooking.flexBucket) {
+    const dayOf = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+    const fromDay = bookingRec.scheduledFor ? dayOf(bookingRec.scheduledFor) : null;
+    const toDay = dayOf(startDate.toISOString());
+    const queuedAt = new Date().toISOString();
+    const patch = fromDay && fromDay !== toDay
+      ? { pendingDayMove: { oldDate: updatedBooking.assignment.outreach.pendingDayMove?.oldDate || fromDay, newDate: toDay, kind: "stop", queuedAt } }
+      : { pendingTimeNotice: { date: toDay, queuedAt } };
+    await bookings.setAssignmentOutreach(updatedBooking.id, patch, {
+      action: patch.pendingDayMove ? "day_move_queued" : "time_notice_queued", by: actorName || actor,
+      note: `admin reschedule → ${startDate.toISOString()}${isExact ? " (exact)" : ""}`
+    }).catch((err) => console.warn(`[reschedule] customer notice not queued for ${updatedBooking.id}:`, err?.message));
   }
 
   // 5) Page Patrick when the customer drove the change. A lead-less
@@ -15445,7 +15476,8 @@ async function handleApi(req, res, pathname) {
             status: "confirmed",
             prepNotes: notes ? `Follow-up scope: ${notes}` : "",
             workOrderIds: [followup.id],
-            source: forcedByAdmin ? "admin_custom" : "slot"
+            source: forcedByAdmin ? "admin_custom" : "slot",
+            ...(forcedByAdmin ? { exactTime: bookings.localHHMM(startDate.toISOString()) } : {})
           }, { by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}`, action: "created_followup" });
           // The work order names its Booking (both sides).
           await bookingLifecycle.linkWorkOrder(newBooking.id, followup.id, { by: "system" });
@@ -25708,6 +25740,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
           bucketWindow: matched.bucketWindow || null,
           bucketLabel: matched.timeLabel || null,
           forcedByAdmin,
+          // Patrick's Custom time is an exact time (bookings.exactTimeOf).
+          ...(forcedByAdmin ? { exactTime: bookings.localHHMM(startDate.toISOString()) } : {}),
           // Null unless our own address lookup failed — see the gate above.
           verification: addressUnverified,
           serviceKey,
@@ -25960,6 +25994,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Surfaces as a badge in admin UIs and as a history entry on the
         // canonical Booking record for audit.
         forcedByAdmin,
+        // Patrick's Custom time is an exact time (bookings.exactTimeOf).
+        ...(forcedByAdmin ? { exactTime: bookings.localHHMM(startDate.toISOString()) } : {}),
         // Null unless our own address lookup failed — see the gate above.
         verification: addressUnverified,
         serviceKey,
@@ -26162,15 +26198,22 @@ async function orderDayForDriving(rows) {
 
     const byCode = new Map();
     const day = { morning: [], afternoon: [] };
+    // A visit Patrick booked at an exact time is pinned there, so the
+    // field app's order puts a 7:00 job first instead of wherever the
+    // drive would like it (2026-10-08).
+    const canonicalById = new Map(((await bookings.list().catch(() => [])) || []).map((r) => [r.id, r]));
+    const requestedWindows = {};
     rows.forEach((row, i) => {
       if (!row || !row.coords || row.coords.lat == null) return;
       const code = `__row:${i}`;
       byCode.set(code, { code, id: code, coords: row.coords });
       const hour = row.start ? new Date(row.start).getHours() : 12;
       day[hour < 12 ? "morning" : "afternoon"].push(code);
+      const exact = bookings.exactTimeOf(row.bookingId ? canonicalById.get(row.bookingId) : null);
+      if (exact) requestedWindows[code] = { notBefore: exact, notAfter: exact };
     });
 
-    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
+    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, requestedWindows });
     const order = [...(sequenced?.morning || []), ...(sequenced?.afternoon || [])];
     if (!order.length) return rows;
 
@@ -27582,6 +27625,10 @@ async function orderDayForDriving(rows) {
       const st = confirm && typeof confirm.stopState === "function" ? confirm.stopState(code, date) : null;
       stop.bookingState = (st && st.state) || "unassigned";
       if (st && st.bookingId) stop.bookingId = st.bookingId;
+      // Patrick's exact time on this stop's appointment, so the card shows
+      // "at 07:00" and the form opens on it.
+      const bk = confirm && stop.bookingId && confirm.byId ? confirm.byId.get(stop.bookingId) : null;
+      stop.exactTime = bookings.exactTimeOf(bk);
       return stop;
     };
     // Plan stops only — the synthetic booked codes are dropped from the
@@ -28599,6 +28646,42 @@ async function orderDayForDriving(rows) {
 
   // A stop's time window: "not before", "not after". Both optional; sending
   // both empty clears it.
+  // An EXACT time on a plan stop's appointment (2026-10-08). Patrick:
+  // "if I select 7am — it needs to be booked at 7am." Books the stop's
+  // appointment at that minute, pins it in the route, and queues the
+  // time notice that tells the customer. `time` empty hands the minute
+  // back to the route. Admin only; a customer only ever picks a half-day.
+  const seasonPlanExactMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-exact-time$/);
+  if (seasonPlanExactMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      if (session?.role !== "admin") return sendJson(res, 403, { ok: false, errors: ["Only an admin can set an exact time."] });
+      const season = seasonPlanExactMatch[1];
+      const year = Number(seasonPlanExactMatch[2]);
+      const body = await parseRequestBody(req);
+      const date = normalizeString(body.date, 10);
+      const code = normalizeString(body.propertyCode, 40);
+      const time = normalizeString(body.time, 5) || null;
+      if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        return sendJson(res, 422, { ok: false, errors: [`"${time}" is not a time — it must look like 07:00.`] });
+      }
+      const result = await assignments.setStopExactTime(season, year, { date, code, time },
+        { actor: session?.email || session?.name || "admin" });
+      if (!result.ok) {
+        return sendJson(res, 422, { ok: false, code: result.reason, errors: [
+          "This stop has no booked appointment yet. Press Book now first, then set its exact time."
+        ] });
+      }
+      // The rest of the day re-times around the pinned stop.
+      await syncRoutedTimes(season, year, { dates: [date] })
+        .catch((e) => console.warn("[assignments] time sync after exact time failed:", e?.message));
+      const plan = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan, exact: result, timeNotice: result.timeNotice });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set that exact time."] });
+    }
+  }
+
   const seasonPlanWindowMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-window$/);
   if (seasonPlanWindowMatch && req.method === "PATCH") {
     try {
@@ -30557,6 +30640,9 @@ async function gatherBookedRows({ plan, season, year, all, leads }) {
   const nearYard = (c) => c && c.lat != null
     && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
   const out = new Map();
+  // Exact times live on the canonical record (and on the lead for a
+  // self-booking) — the merged rows below carry neither, so look them up.
+  const canonicalById = new Map(((await bookings.list().catch(() => [])) || []).map((r) => [r.id, r]));
   for (const b of await activeBookings()) {
     const startD = new Date(b.start);
     if (Number.isNaN(startD.getTime())) continue;
@@ -30585,6 +30671,8 @@ async function gatherBookedRows({ plan, season, year, all, leads }) {
       durationMinutes: b.end ? Math.max(1, Math.round((new Date(b.end).getTime() - startD.getTime()) / 60000)) : null,
       timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
       bucket: startD.getHours() < 12 ? "morning" : "afternoon",
+      exactTime: bookings.exactTimeOf(b.bookingId ? canonicalById.get(b.bookingId) : null)
+        || bookings.exactTimeOf(lead && lead.booking) || null,
       coords,
       propertyId,
       leadId: b.leadId || null,
@@ -30635,6 +30723,8 @@ async function retimeCustomerBooking(row, start, durationMinutes) {
   // freeze the fall stop's time, and its date must not follow the route.
   const wos = rec ? bookings.workOrdersForVisit(rec, allWos) : allWos;
   if (wos.some((w) => w && w.arrivedAt)) return false;
+  // Patrick's exact time is not the route's to move (2026-10-08).
+  if (bookings.exactTimeOf(rec)) return false;
 
   if (row.leadId) {
     const all = await readLeads();
@@ -30642,6 +30732,7 @@ async function retimeCustomerBooking(row, start, durationMinutes) {
     if (idx === -1 || !all[idx].booking) return false;
     const lead = all[idx];
     if (lead.booking.dayLocked) return false;
+    if (bookings.exactTimeOf(lead.booking)) return false;
     const wasStart = lead.booking.start;
     lead.booking.start = startIso;
     lead.booking.end = endIso;

@@ -459,9 +459,22 @@ async function sequenceDay(day, opts = {}) {
     let waitedMinutes = 0;
     const misses = [];
 
+    let startedEarly = null;
     for (const bucket of BUCKETS) {
       const order = bucket === "morning" ? mOrder : aOrder;
       if (clock < windows[bucket].from) clock = windows[bucket].from;
+      // AN EARLY FIRST STOP STARTS THE DAY EARLY (2026-10-08). Patrick sets
+      // an exact 7:00 on a customer; the half-day opens at 8:00. If that
+      // stop leads the morning, the truck leaves the yard early enough to
+      // be there at 7:00 instead of arriving at 8:xx and calling it a miss.
+      // Only the day's first stop can do this — anything earlier in the
+      // order would mean starting work before the customer who asked.
+      if (bucket === "morning" && at === 0 && order.length) {
+        const first = stops[order[0] - 1];
+        const w = stopWindows.get(first.code);
+        const leave = w && w.notBefore != null ? w.notBefore - matrix[0][order[0]] : null;
+        if (leave != null && leave < clock) { clock = leave; startedEarly = { leaveAt: leave, propertyCode: first.code, arriveAt: w.notBefore }; }
+      }
       for (const idx of order) {
         const stop = stops[idx - 1];
         const drive = matrix[at][idx];
@@ -513,7 +526,7 @@ async function sequenceDay(day, opts = {}) {
       }
       ends[bucket] = Math.round(clock);
     }
-    return { timeline, ends, driveMinutes, waitedMinutes, misses, lastIndex: at };
+    return { timeline, ends, driveMinutes, waitedMinutes, misses, lastIndex: at, startedEarly };
   }
 
 
@@ -554,6 +567,16 @@ async function sequenceDay(day, opts = {}) {
   let driveMinutes = walked.driveMinutes;
   const homeDrive = stops.length ? matrix[walked.lastIndex][0] : 0;
   driveMinutes += homeDrive;
+
+  if (walked.startedEarly) {
+    flags.push({
+      code: "early_start",
+      propertyCode: walked.startedEarly.propertyCode,
+      leaveAt: minutesToHHmm(Math.round(walked.startedEarly.leaveAt)),
+      message: `Day starts early: leave the yard at ${minutesToHHmm(Math.round(walked.startedEarly.leaveAt))} `
+        + `to be at the first stop for ${minutesToHHmm(Math.round(walked.startedEarly.arriveAt))}.`
+    });
+  }
 
   if (manual) {
     flags.push({
