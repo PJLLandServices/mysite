@@ -2,6 +2,32 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-08 (One stop moved gets its own notice; a time set on a stop is told to the customer):**
+Patrick moved Jaswinder Chatrath's single stop (61 French Dr) from Oct 9 to Oct 17 with *Move to…*
+and she was emailed *"Weather and routing sometimes move one of our whole service days, and yours
+has moved … Now: Saturday, October 17 — Morning (8 AM – 12 PM)"*. Then: *"I changed it to 'after
+7:00' but that never got announced … I have selected a specific time for this customer, which could
+happen again. Can we make this a thing?"* Three gaps in one workflow. (1) `followPlanMoves` and
+`moveDayBookings` both queued the same `daymove` notice; `moveAssignmentDay` now takes `kind`
+("day" | "stop", a stop anywhere in an unsent chain wins), the sweep picks `stopmove_*` for a stop
+and keeps `daymove_*` for a whole day, and the history note says which. (2) A window on a plan stop
+(`day.constraints`) only steered the route. Now `{bucket}` in EVERY message is rendered through one
+rule, `assignment-messages.promisedWindow(booking, planWindow)` (customer's own `requestedWindow`
+wins, the sequencer's precedence) and `windowLabelOf` ("Morning, after 9:30 AM", "between 9:00 AM and
+9:30 AM"); the cadence reads the plan window at send time (`planWindowFor`). Saving a window calls
+`assignments.queueTimeNotice` → `outreach.pendingTimeNotice`; the sweep sends `timeset_*` with the
+window AS IT IS THEN (edits coalesce; a change back to what was last told — `outreach.timeNotice.told`,
+also stamped by every step and move notice — sends nothing; a cleared window they were told is told
+as the half-day). A pending move notice states the time and consumes the time notice. Not told, and
+the Save toast says why: never messaged (their first message carries the time), free bucket, the
+customer set their own window, no booking on that stop/day. (3) `moveStop` left the window behind
+on the old day; it now travels with the stop. The customer's appointment page shows the same time (`appointment-actions.bucketLabelOf(booking, planWindow)` via `promisedTimeLabel` on every reply), and a booking the customer moved off its plan day never inherits that day's window. The messages page lists the four new templates.
+Deliberately left alone: self-booked customers have no window control; the route clock still opens
+at the bucket start, so an "after 7:00" in an 8 AM morning is told as written but changes no
+arrival. `scripts/test-time-notice.mjs` (46, in build:check) reproduces Jaswinder's exact email
+on the old code (24 fail) and pins all three; `test-assignment-messages` now requires every cadence
+email sender to turn the reply invite off.
+
 **2026-10-07, minutes later (Two booked customers can swap with each other):** Patrick, as soon as
 the arrows went live: *"two personally booked appointments can't jump each other now either."*
 `day.bookedOrder[key]` stored only `{ before: planCode }`, so two booked rows ahead of the same plan

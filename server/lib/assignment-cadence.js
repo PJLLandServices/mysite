@@ -56,6 +56,7 @@ const properties = require("./properties");
 const outreach = require("./outreach");
 const notify = require("./notify-customer");
 const assignmentMessages = require("./assignment-messages");
+const seasonPlans = require("./season-plans");
 const { resolveSeasonalPrice } = require("./pricing");
 const { resolvePublicBaseUrl } = require("./public-base-url");
 
@@ -263,6 +264,28 @@ function cadenceGates(property, season, year) {
   return { ok: true, capability: outreach.channelCapability(property) };
 }
 
+// The window Patrick set on this booking's plan stop, or null. Read from
+// the plan at send time, so a message always states the time as it is
+// now. Fails soft: no plan, no day, an unreadable file — the half-day
+// stands, and nothing is ever refused for want of a window.
+async function planWindowFor(booking, deps = {}) {
+  try {
+    const a = booking && booking.assignment;
+    if (!a || !a.date || !a.code) return null;
+    // A booking the customer moved off its plan day is theirs: the plan
+    // stop's window belongs to the day it no longer sits on.
+    if (localDateKey(new Date(booking.scheduledFor)) !== a.date) return null;
+    const plan = await (deps.getPlan || seasonPlans.getPlan)(a.season, Number(a.year));
+    const w = plan && plan.days && plan.days[a.date] && plan.days[a.date].constraints
+      && plan.days[a.date].constraints[a.code];
+    return w && (w.notBefore || w.notAfter) ? { notBefore: w.notBefore || null, notAfter: w.notAfter || null } : null;
+  } catch {
+    return null;
+  }
+}
+const sameWindow = (a, b) => (a?.notBefore || null) === (b?.notBefore || null)
+  && (a?.notAfter || null) === (b?.notAfter || null);
+
 // Render one step's messages for a booking, with the REAL link. Refuses
 // to hand back anything still carrying a bracketed placeholder — the
 // stage-3 rule this engine is bound by.
@@ -406,7 +429,10 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
     const resolved = resolveSeasonalPrice(property, family);
     if (resolved?.label) priceExtra = { price: resolved.label };
   } catch { /* contextForBooking's tier fallback stands */ }
-  const messages = renderStep(booking, step, token, priceExtra);
+  // The time set on the stop, so a reminder says "after 9:30 AM" rather
+  // than the bare half-day.
+  const planWindow = await planWindowFor(booking, deps);
+  const messages = renderStep(booking, step, token, { ...priceExtra, planWindow });
   const capability = gate.capability;
 
   const wants = {
@@ -448,9 +474,13 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   // erase the evidence before the send that depends on it.
   const priorStep = booking.assignment?.outreach?.steps?.[String(step.n)] || null;
   if (!catchUp) {
+    // Every step message states the promised time, so it is also what the
+    // customer was last told — the time notice compares against this.
+    const told = assignmentMessages.promisedWindow(booking, planWindow);
     await setOutreach(booking.id, {
       token,
-      steps: { [String(step.n)]: { at: new Date().toISOString(), attempted: channels } }
+      steps: { [String(step.n)]: { at: new Date().toISOString(), attempted: channels } },
+      timeNotice: { told, at: new Date().toISOString(), via: `step_${step.n}` }
     }, { action: `cadence_step_${step.n}`, by, note: channels.join("+") });
   }
 
@@ -562,8 +592,16 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
     const resolved = resolveSeasonalPrice(property, season === "spring" ? "spring_opening" : "fall_closing");
     if (resolved?.label) priceExtra = { price: resolved.label };
   } catch { /* tier fallback stands */ }
-  const step = { n: "daymove", template: "daymove", channels: ["email", "sms"] };
-  const messages = renderStep(booking, step, token, { oldDate: oldDateLabel, ...priceExtra });
+  // A single stop moved by hand gets its own wording; a whole route day
+  // keeps the "weather and routing" notice. A notice queued before moves
+  // carried a kind is a day move — that was the only kind there was.
+  const template = pending.kind === "stop" ? "stopmove" : "daymove";
+  const step = { n: "daymove", template, channels: ["email", "sms"] };
+  const planWindow = await planWindowFor(booking, deps);
+  const messages = renderStep(booking, step, token, { oldDate: oldDateLabel, ...priceExtra, planWindow });
+  // The move notice states the time on the new day, so it also tells any
+  // time change that was waiting — one message, not two.
+  const told = assignmentMessages.promisedWindow(booking, planWindow);
 
   const capability = gate.capability;
   const attempted = [];
@@ -579,8 +617,10 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
   await setOutreach(booking.id, {
     token,
     pendingDayMove: null,
-    dayMoveNotice: { ...pending, at: new Date().toISOString(), attempted }
-  }, { action: "day_move_notice", by, note: `${pending.oldDate} → ${pending.newDate}, ${attempted.join("+")}` });
+    pendingTimeNotice: null,
+    timeNotice: { told, at: new Date().toISOString(), via: "move_notice" },
+    dayMoveNotice: { ...pending, template, at: new Date().toISOString(), attempted }
+  }, { action: "day_move_notice", by, note: `${pending.oldDate} → ${pending.newDate}, ${template}, ${attempted.join("+")}` });
 
   const unsubscribe = property.optOutTokens ? outreach.buildUnsubscribeUrls(property) : { email: "", all: "" };
   const sent = [];
@@ -617,8 +657,107 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
     else errors.push({ channel: "sms", error: r.error || r.reason || "failed" });
   }
   await setOutreach(booking.id, {
-    dayMoveNotice: { ...pending, at: new Date().toISOString(), attempted, sent, ...(errors.length ? { errors } : {}) }
+    dayMoveNotice: { ...pending, template, at: new Date().toISOString(), attempted, sent, ...(errors.length ? { errors } : {}) }
   }, { action: "day_move_notice_result", by, note: `sent ${sent.join("+") || "nothing"}` });
+  if (sent.length) {
+    await recordTouch(property.id, {
+      season, year, channels: sent, by,
+      messageBatchId: booking.assignment.batchId || null,
+      type: "assignment", step: 0
+    });
+  }
+  return { sent, errors };
+}
+
+// The time notice (2026-10-08). Patrick set or changed the time window
+// on this customer's stop; tell them the time as it stands NOW. Same
+// mark-before-send discipline as the day-move notice. Sends nothing when
+// the time is what they were last told (an edit and its undo, or a
+// cleared window they never heard about), or when they set their own.
+async function sendTimeNoticeForBooking(booking, { season, year, deps = {}, by = "cadence-sweep" }) {
+  const getProperty = deps.getProperty || properties.get;
+  const sendEmail = deps.sendEmail || notify.sendOutreachEmail;
+  const sendSms = deps.sendSms || notify.sendOutreachSms;
+  const recordTouch = deps.recordTouch || properties.recordOutreachTouch;
+  const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
+
+  const pending = booking.assignment.outreach?.pendingTimeNotice;
+  if (!pending) return { skipped: true, reason: "nothing_pending" };
+  const skip = async (reason) => {
+    await setOutreach(booking.id, { pendingTimeNotice: null },
+      { action: "time_notice_skipped", by, note: reason });
+    return { skipped: true, reason };
+  };
+  // The stop moved off that day since — the move notice states the time.
+  if (pending.date && pending.date !== booking.assignment.date) return skip("moved_since");
+  if (booking.requestedWindow && (booking.requestedWindow.notBefore || booking.requestedWindow.notAfter)) {
+    return skip("customer_window");
+  }
+
+  const planWindow = await planWindowFor(booking, deps);
+  const now = assignmentMessages.promisedWindow(booking, planWindow);
+  const last = booking.assignment.outreach?.timeNotice ? booking.assignment.outreach.timeNotice.told : null;
+  if (sameWindow(now, last)) return skip("nothing_changed");
+
+  const property = booking.propertyId ? await getProperty(booking.propertyId) : null;
+  const gate = cadenceGates(property, season, year);
+  if (!gate.ok) return skip(gate.reason);
+
+  const token = booking.assignment.outreach?.token || mintToken();
+  let priceExtra = {};
+  try {
+    const resolved = resolveSeasonalPrice(property, season === "spring" ? "spring_opening" : "fall_closing");
+    if (resolved?.label) priceExtra = { price: resolved.label };
+  } catch { /* tier fallback stands */ }
+  const step = { n: "timeset", template: "timeset", channels: ["email", "sms"] };
+  const messages = renderStep(booking, step, token, { ...priceExtra, planWindow });
+
+  const capability = gate.capability;
+  const attempted = [];
+  if (messages.email && capability.emailChannel.possible) attempted.push("email");
+  if (messages.sms && capability.sms.possible) attempted.push("sms");
+  if (!attempted.length) return skip("no_deliverable_channel");
+
+  // Mark first — consume the pending flag before any send.
+  await setOutreach(booking.id, {
+    token,
+    pendingTimeNotice: null,
+    timeNotice: { told: now, at: new Date().toISOString(), via: "time_notice", attempted }
+  }, { action: "time_notice", by, note: `${assignmentMessages.windowLabelOf(booking.assignment.bucket, now)}, ${attempted.join("+")}` });
+
+  const unsubscribe = property.optOutTokens ? outreach.buildUnsubscribeUrls(property) : { email: "", all: "" };
+  const sent = [];
+  const errors = [];
+  if (attempted.includes("email")) {
+    const r = await sendEmail({
+      to: capability.email,
+      firstName: assignmentMessages.contextForBooking(booking).firstName,
+      propertyAddress: "", seasonName: "",
+      portalLink: appointmentLinkFor(token),
+      ctaLabel: "See or change my appointment",
+      invitesReply: false,
+      subject: messages.email.subject,
+      emailBody: messages.email.body,
+      unsubscribeUrlEmail: unsubscribe.email,
+      unsubscribeUrlAll: unsubscribe.all,
+      refId: booking.id
+    });
+    if (r.ok) sent.push("email");
+    else errors.push({ channel: "email", error: r.error || r.reason || "failed" });
+  }
+  if (attempted.includes("sms")) {
+    const r = await sendSms({
+      to: capability.phone,
+      firstName: assignmentMessages.contextForBooking(booking).firstName,
+      propertyAddress: "", seasonName: "", portalLink: "",
+      smsBody: messages.sms.body
+    });
+    if (r.ok) sent.push("sms");
+    else errors.push({ channel: "sms", error: r.error || r.reason || "failed" });
+  }
+  await setOutreach(booking.id, {
+    timeNotice: { told: now, at: new Date().toISOString(), via: "time_notice", attempted, sent, ...(errors.length ? { errors } : {}) }
+  }, { action: "time_notice_result", by, note: `sent ${sent.join("+") || "nothing"}` });
   if (sent.length) {
     await recordTouch(property.id, {
       season, year, channels: sent, by,
@@ -775,6 +914,13 @@ async function sweepDue(season, year, { deps = {}, now = new Date(), appointment
         if (outcome.skipped) result.skipped += 1;
         else if (outcome.sent && outcome.sent.length) result.sent += 1;
         else result.errors += 1;
+      } else if (outreachState.pendingTimeNotice) {
+        // A move notice states the new time itself (and consumes this
+        // flag), so the time notice only goes out on its own.
+        const outcome = await sendTimeNoticeForBooking(b, { season, year, deps });
+        if (outcome.skipped) result.skipped += 1;
+        else if (outcome.sent && outcome.sent.length) result.sent += 1;
+        else result.errors += 1;
       }
       for (const step of STEPS) {
         if (step.blast) continue;
@@ -915,6 +1061,8 @@ module.exports = {
   status,
   sendStepForBooking,
   sendDayMoveForBooking,
+  sendTimeNoticeForBooking,
+  planWindowFor,
   channelsOwed,
   owedForBooking,
   stepStillWanted,

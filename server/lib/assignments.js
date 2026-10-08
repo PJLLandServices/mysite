@@ -1074,6 +1074,7 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
       oldDate: from,
       resetResponse: !flexible,
       queueNotice: blasted && !flexible,
+      kind: "day",
       by: actor
     });
     summary.moved += 1;
@@ -1084,6 +1085,51 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
     }
   }
   return { ok: true, from, to, ...summary };
+}
+
+// ---- A time set on a stop is a promise to tell -------------------------
+//
+// Patrick, 2026-10-08: "I changed it to 'after 7:00' but that never got
+// announced … I have selected a specific time for this customer, which
+// could happen again. Can we make this a thing?" A window on a plan stop
+// (day.constraints) only ever steered the route; the customer was never
+// told, and every later message still said "Morning (8 AM – 12 PM)".
+//
+// Called after a window is saved or cleared. Queues ONE time notice on the
+// stop's live assignment booking for the cadence sweep to send inside the
+// send window. The sweep renders the window AS IT IS WHEN IT SENDS, so a
+// few quick edits become one message with the final time, and a change
+// back to what the customer was last told sends nothing.
+//
+// Nothing is queued — and the reason is returned for the screen — when:
+//   no_booking        no confirmed assignment booking for this stop on this day
+//   not_messaged      the customer was never sent step 1 (nothing promised yet;
+//                     the time will be in the first message they get)
+//   flexible          a free-bucket customer: the tech calls ahead anyway
+//   customer_window   the customer set their own time on their page, and
+//                     theirs is what the route honours
+async function queueTimeNotice(season, year, { date, code }, deps = {}) {
+  const listBookings = deps.listBookings || bookings.list;
+  const listProperties = deps.listProperties || properties.list;
+  const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
+  const actor = deps.actor || "admin";
+  const all = (await listProperties()) || [];
+  const property = all.find((p) => p && p.code === code);
+  const b = ((await listBookings()) || []).find((x) =>
+    x && x.source === "assignment" && x.assignment && x.status === "confirmed"
+    && x.assignment.season === season && Number(x.assignment.year) === Number(year)
+    && x.assignment.date === date && localDateKey(x.scheduledFor) === date
+    && (x.assignment.code === code || (property && x.propertyId === property.id)));
+  if (!b) return { queued: false, reason: "no_booking" };
+  if (!b.assignment.outreach?.steps?.["1"]) return { queued: false, reason: "not_messaged", bookingId: b.id };
+  if (b.flexBucket) return { queued: false, reason: "flexible", bookingId: b.id };
+  if (b.requestedWindow && (b.requestedWindow.notBefore || b.requestedWindow.notAfter)) {
+    return { queued: false, reason: "customer_window", bookingId: b.id };
+  }
+  await setOutreach(b.id, {
+    pendingTimeNotice: { date, queuedAt: new Date().toISOString() }
+  }, { action: "time_notice_queued", by: actor, note: `time window changed on ${date}` });
+  return { queued: true, bookingId: b.id, customerName: b.customerName || "" };
 }
 
 // ---- The bookings follow the plan -------------------------------------
@@ -1174,6 +1220,7 @@ async function followPlanMoves(season, year, { codes = null, dryRun = false, act
         oldDate: b.assignment.date,
         resetResponse: !flexible,
         queueNotice: blasted && !flexible,
+        kind: "stop",
         by: actor
       });
       summary.moved += 1;
@@ -1191,4 +1238,4 @@ module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
   planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES, skippedThisSeason,
-  priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+  priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, queueTimeNotice, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

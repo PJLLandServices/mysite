@@ -91,7 +91,9 @@
     { title: "Step 2 — Follow-up, 15 days before (non-responders only)", keys: ["followup_email", "followup_sms"] },
     { title: "Steps 3–5 — Your nudge, at 10 / 7 / 5 days (non-responders only)", keys: ["nudge_email", "nudge_sms"] },
     { title: "Step 6 — 24-hour reminder (text, sent to everyone)", keys: ["reminder24_sms"] },
-    { title: "Day moved — sent when you slide a whole route day", keys: ["daymove_email", "daymove_sms"] }
+    { title: "Day moved — sent when you slide a whole route day", keys: ["daymove_email", "daymove_sms"] },
+    { title: "One appointment moved — sent when you move a single stop to another day", keys: ["stopmove_email", "stopmove_sms"] },
+    { title: "Time set — sent when you set or change a stop's time window", keys: ["timeset_email", "timeset_sms"] }
   ];
 
   function renderEditors() {

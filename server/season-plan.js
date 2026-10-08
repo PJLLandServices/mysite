@@ -426,7 +426,19 @@
         render(data.plan);
         const said = [notBefore ? `after ${notBefore}` : "", notAfter ? `before ${notAfter}` : ""]
           .filter(Boolean).join(" and ");
-        showToast(said ? `${stop.code}: ${said}.` : `${stop.code}: time window cleared.`);
+        // Say whether the CUSTOMER will hear about it — never leave it to
+        // be assumed (Patrick, 2026-10-08: "that never got announced").
+        const told = {
+          queued: "the customer will be told by email + text within a few minutes",
+          not_messaged: "not sent to the customer — they haven't had their first message yet; it will include this time",
+          flexible: "not sent — this customer is on the free bucket (the tech calls ahead)",
+          customer_window: "not sent — the customer set their own time on their page, and theirs is what the route uses",
+          no_booking: "no booking on this stop yet, so nobody was told",
+          error: "saved, but the customer notice could not be queued — tell them yourself"
+        };
+        const note = data.timeNotice ? told[data.timeNotice.queued ? "queued" : data.timeNotice.reason] || "" : "";
+        showToast(`${stop.code}: ${said || "time window cleared"}.${note ? ` ${note[0].toUpperCase()}${note.slice(1)}.` : ""}`,
+          data.timeNotice && data.timeNotice.reason === "error" ? "bad" : undefined);
       } catch (error) {
         showToast(error.message, "bad");
         save.disabled = false;

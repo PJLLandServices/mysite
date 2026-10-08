@@ -1003,7 +1003,13 @@ async function setAssignmentOutreach(id, patch, { action = "cadence", by = "syst
 // inside the send window. A queued notice that hasn't gone out yet keeps
 // its ORIGINAL oldDate through further moves: the customer is told
 // "was Sept 28, now Oct 3", not a chain of intermediate hops.
-async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, oldDate, resetResponse = true, queueNotice = false, by = "admin" } = {}) {
+//
+// `kind` says WHICH move this was, so the notice can say what happened:
+// "day" (the whole route day slid) or "stop" (Patrick moved this one
+// appointment). A stop move anywhere in a queued chain makes the notice a
+// stop notice — "your appointment has moved" is true of both, "one of our
+// whole service days moved" only of the first (Patrick, 2026-10-08).
+async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, oldDate, resetResponse = true, queueNotice = false, kind = "day", by = "admin" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
   if (idx === -1) return null;
@@ -1023,9 +1029,11 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
     delete outreach.responseBy;
   }
   if (queueNotice) {
+    const wasStop = outreach.pendingDayMove?.kind === "stop";
     outreach.pendingDayMove = {
       oldDate: outreach.pendingDayMove?.oldDate || oldDate,
       newDate: toDate,
+      kind: wasStop || kind === "stop" ? "stop" : "day",
       queuedAt: now
     };
   }
@@ -1034,7 +1042,7 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
   const bucket = toBucket === "morning" || toBucket === "afternoon" ? toBucket : current.assignment.bucket;
   history.push({
     ts: now, action: "day_moved", by,
-    note: `${oldDate} → ${toDate}${bucket !== current.assignment.bucket ? ` (${current.assignment.bucket} → ${bucket})` : ""} (route day moved)`
+    note: `${oldDate} → ${toDate}${bucket !== current.assignment.bucket ? ` (${current.assignment.bucket} → ${bucket})` : ""} (${kind === "stop" ? "stop moved" : "route day moved"})`
   });
 
   const next = {

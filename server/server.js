@@ -28004,13 +28004,13 @@ async function orderDayForDriving(rows) {
         const summary = appointmentActions.summarize(booking);
         return sendJson(res, 200, {
           ok: true,
-          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary), calendar: calendarFor(booking) }
+          appointment: { ...summary, bucketLabel: await promisedTimeLabel(booking), priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary), calendar: calendarFor(booking) }
         });
       }
       if (action === "confirm" && req.method === "POST") {
         const result = await appointmentActions.confirm(token);
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, bucketLabel: await promisedTimeLabel(result.booking), priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "zones" && req.method === "POST") {
         const body = await parseRequestBody(req);
@@ -28040,7 +28040,7 @@ async function orderDayForDriving(rows) {
             }, { baseUrl: baseUrlFromReq(req) })
           ]).catch(() => {});
         }
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel, zones: await zonesFor(result.booking, result.summary) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, bucketLabel: await promisedTimeLabel(result.booking), priceLabel, zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "free-bucket" && req.method === "POST") {
         const result = await appointmentActions.freeBucket(token);
@@ -28056,7 +28056,7 @@ async function orderDayForDriving(rows) {
           sendNewLeadEmail(alias, { baseUrl: baseUrlFromReq(req) }),
           sendNewLeadSms({ ...alias, contact: { ...alias.contact, notes: "" } }, { baseUrl: baseUrlFromReq(req) })
         ]).catch(() => {});
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, bucketLabel: await promisedTimeLabel(result.booking), priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "time-window" && req.method === "POST") {
         const body = await parseRequestBody(req);
@@ -28071,7 +28071,7 @@ async function orderDayForDriving(rows) {
           syncRoutedTimes(result.booking.assignment.season, result.booking.assignment.year)
             .catch((e) => console.warn("[appointment] time sync after window failed:", e?.message));
         }
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, bucketLabel: await promisedTimeLabel(result.booking), priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "cancel" && req.method === "POST") {
         const body = await parseRequestBody(req);
@@ -28109,7 +28109,7 @@ async function orderDayForDriving(rows) {
             contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
           }, { baseUrl: baseUrlFromReq(req) })
         ]).catch(() => {});
-        return sendJson(res, 200, { ok: true, appointment: result.summary });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, bucketLabel: await promisedTimeLabel(result.booking) } });
       }
       if (action === "availability" && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
@@ -28181,7 +28181,7 @@ async function orderDayForDriving(rows) {
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors, code: result.code });
         await bookings.markAssignmentResponded(booking.id, { via: "reschedule", by: "customer" });
         const fresh = await bookings.get(booking.id);
-        return sendJson(res, 200, { ok: true, appointment: appointmentActions.summarize(fresh) });
+        return sendJson(res, 200, { ok: true, appointment: { ...appointmentActions.summarize(fresh), bucketLabel: await promisedTimeLabel(fresh) } });
       }
       return sendJson(res, 405, { ok: false, errors: ["Unsupported."] });
     } catch (err) {
@@ -28530,18 +28530,32 @@ async function orderDayForDriving(rows) {
       const season = seasonPlanWindowMatch[1];
       const year = Number(seasonPlanWindowMatch[2]);
       const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
       const result = await seasonPlans.setStopWindow(season, year, {
         date: normalizeString(body.date, 10),
         propertyCode: normalizeString(body.propertyCode, 40),
         notBefore: normalizeString(body.notBefore, 5),
         notAfter: normalizeString(body.notAfter, 5)
-      }, { actor: session?.email || session?.name || "admin" });
+      }, { actor });
+      // A time set on a customer's stop is a promise: queue the notice
+      // that tells them (the cadence sweep sends it inside the send
+      // window, with the time as it stands then). Best-effort — the
+      // window itself is already saved; the reply says what happened so
+      // the screen never implies a customer was told when they weren't.
+      let timeNotice = null;
+      try {
+        timeNotice = await assignments.queueTimeNotice(season, year,
+          { date: result.window.date, code: result.window.propertyCode }, { actor });
+      } catch (e) {
+        console.warn("[assignments] time notice not queued:", e?.message);
+        timeNotice = { queued: false, reason: "error" };
+      }
       const plan = await resolveSeasonPlan(season, year);
       // A time window changes the sequencing clock; re-anchor assigned
       // bookings to the new arrivals in the background.
       syncRoutedTimes(season, year)
         .catch((e) => console.warn("[assignments] time sync after window change failed:", e?.message));
-      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window });
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window, timeNotice });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set that window."] });
     }
@@ -30514,6 +30528,17 @@ async function gatherBookedRows({ plan, season, year, all, leads }) {
 // does not join the drive. Returns { sequenced, rowByMapCode }.
 async function sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows }) {
   return assignments.sequenceWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows });
+}
+
+// The time an assignment customer is promised, as their appointment page
+// shows it: the half-day, or the window set on their plan stop (or their
+// own) — the same rule every message uses. Fails soft to the half-day.
+async function promisedTimeLabel(booking) {
+  try {
+    return appointmentActions.bucketLabelOf(booking, await assignmentCadence.planWindowFor(booking));
+  } catch {
+    return appointmentActions.bucketLabelOf(booking);
+  }
 }
 
 // A self-booked customer's placeholder minute follows the route (FLOW-43).
