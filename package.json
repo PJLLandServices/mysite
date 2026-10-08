@@ -159,7 +159,8 @@
     "test:material-list-line-protection": "node scripts/test-material-list-line-protection.mjs",
     "test:materials-required-ordered": "node scripts/test-materials-required-ordered.mjs",
     "test:photo-canvas": "node scripts/test-photo-canvas.mjs",
-    "test:invoice-delivery": "node scripts/test-invoice-first-send.mjs; a=$?; node scripts/test-invoice-pdf-pay-link.mjs; b=$?; node scripts/test-collect-payment-now.mjs; c=$?; node scripts/test-paid-in-full.mjs; d=$?; exit $((a|b|c|d))"
+    "test:invoice-delivery": "node scripts/test-invoice-first-send.mjs; a=$?; node scripts/test-invoice-pdf-pay-link.mjs; b=$?; node scripts/test-collect-payment-now.mjs; c=$?; node scripts/test-paid-in-full.mjs; d=$?; exit $((a|b|c|d))",
+    "test:ubst": "node scripts/run-ubst.mjs"
   },
   "engines": {
     "node": ">=18"

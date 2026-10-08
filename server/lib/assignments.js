@@ -630,6 +630,9 @@ async function assign(season, year, deps = {}) {
           ).toISOString(),
           durationMinutes: service.minutes,
           status: "confirmed",
+          // The promised half-day, on the record itself (PJL-133), beside
+          // the planning copy in `assignment`.
+          bucket: verdict.bucket,
           source: "assignment",
           assignment: {
             season, year: Number(year), batchId, assignedAt,
@@ -891,7 +894,10 @@ async function syncAssignedTimes(season, year, deps = {}) {
   const getPlan = deps.getPlan || seasonPlans.getPlan;
   const listProperties = deps.listProperties || properties.list;
   const listBookings = deps.listBookings || bookings.list;
-  const updateBooking = deps.updateBooking || bookings.update;
+  // The re-time writer: bookings.setRouteTime (PJL-133). A test that injects
+  // the old `updateBooking` seam still sees { scheduledFor } arrive.
+  const retime = deps.setRouteTime
+    || (deps.updateBooking ? (id, when) => deps.updateBooking(id, { scheduledFor: when }) : (id, when) => bookings.setRouteTime(id, when, { by: "route" }));
   const seq = deps.sequenceDay || resequence.sequenceDay;
   const bookedRowsByDate = deps.bookedRowsByDate instanceof Map ? deps.bookedRowsByDate : new Map();
   const retimeBooking = typeof deps.retimeBooking === "function" ? deps.retimeBooking : null;
@@ -957,7 +963,9 @@ async function syncAssignedTimes(season, year, deps = {}) {
         date, b.assignment.bucket, etaByCode.get(b.assignment.code), b.durationMinutes
       ).toISOString();
       if (b.scheduledFor === want) continue;
-      await updateBooking(b.id, { scheduledFor: want });
+      // A route re-time, not a reschedule (PJL-133): the minute moves inside
+      // the promised half-day; nothing is bumped or sent.
+      await retime(b.id, want);
       updated += 1;
     }
   }

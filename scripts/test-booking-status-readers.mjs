@@ -107,6 +107,12 @@ const ok = (name, cond, detail = "") => {
     // through, and drops the two that are simply not on the day.
     ["server/schedule.js",
       "calendar display: cancelled is rendered, not filtered"],
+    // The reconciliation audit (PJL-137) REPORTS states by name — a plan
+    // stop whose visit is already completed is reconciled, not missing —
+    // and only after asking holdsItsSlot() whether the row is live at all.
+    // It decides nothing for the customer or the calendar; it lists.
+    ["server/lib/booking-audit.js",
+      "read-only audit: names states to report them, asks holdsItsSlot() for liveness first"],
     // Browser-side CRM. It cannot require server/lib/bookings.js; the
     // server re-checks on every route it calls, so this copy decides a
     // link target, never an outcome.

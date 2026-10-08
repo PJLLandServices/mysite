@@ -165,6 +165,9 @@ const READ_CRM_ALLOWED = [
   "/api/work-orders", "/api/projects", "/api/properties", "/api/admin/quote-folder",
   "/api/purchase-orders", "/api/material-lists", "/api/quote-requests", "/api/parts",
   "/api/season-plans", "/api/schedule",
+  // The read-only booking reconciliation audit (PJL-137): counts and ids,
+  // never a write.
+  "/api/admin/booking-audit",
 ];
 
 function buildTools({ services }) {

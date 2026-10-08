@@ -61,7 +61,19 @@ export async function bootServer({ port, env = {}, seedData = null, preload = []
     if (entry === "server" || entry === ".git") continue;
     // server.js loads ../.env at boot. Never hand it the repo's.
     if (/^\.env($|\.)/.test(entry) && entry !== ".env.example") continue;
-    fs.symlinkSync(path.join(ROOT, entry), path.join(TMP, entry));
+    const src = path.join(ROOT, entry);
+    const dst = path.join(TMP, entry);
+    if (process.platform === "win32") {
+      // A symbolic link on Windows needs a privilege a normal account does
+      // not have (EPERM on the first entry, 2026-10-06). A directory
+      // junction needs none and resolves the same way for `require`; a
+      // top-level file (package.json, seasons.json, pricing.json) is small
+      // enough to copy. Linux and CI keep the symlinks exactly as before.
+      if (fs.statSync(src).isDirectory()) fs.symlinkSync(src, dst, "junction");
+      else fs.copyFileSync(src, dst);
+    } else {
+      fs.symlinkSync(src, dst);
+    }
   }
   fs.cpSync(path.join(ROOT, "server"), path.join(TMP, "server"), {
     recursive: true,

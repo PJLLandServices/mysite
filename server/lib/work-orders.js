@@ -336,6 +336,11 @@ function blankWorkOrder() {
     status: "scheduled",             // scheduled | on_site | awaiting_approval | approved | completed | cancelled
     propertyId: null,
     leadId: null,
+    // The Booking this work order fulfils (PJL-133). One visit, one record:
+    // scheduled work is resolved by this id first, never by "the latest
+    // work order for this lead" or a date heuristic. Null on a WO raised
+    // with no appointment behind it (a build task, a bare property job).
+    bookingId: null,
     // Canonical customer reference (Brief 2). Joins SCOPE_PROTECTED_FIELDS
     // so it locks at signature alongside the customer snapshot fields —
     // a signed WO's customer identity must not silently change.
@@ -643,6 +648,7 @@ function hydrate(w) {
   const hydrated = {
     ...base,
     ...w,
+    bookingId: typeof w?.bookingId === "string" && w.bookingId ? w.bookingId : null,
     zones: Array.isArray(w?.zones) ? w.zones.map(hydrateZone) : [],
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
@@ -1739,7 +1745,7 @@ async function listByLead(leadId) {
 // quote propagates onto the WO so the tech sees the bonus-pending banner
 // in field mode (1 hr of repair labour pending — temporarily disabled
 // until the tech confirms the on-site diagnosis matches the AI scope).
-async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null, warrantyClaim = null }) {
+async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null, warrantyClaim = null, bookingId = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   // Build-mode WOs are project-scoped and don't require a lead — the
   // proposal acceptance is the original handshake. Property is still
@@ -1758,6 +1764,7 @@ async function create({ type, lead, property, customId, quote = null, project = 
   // every get() answer the wrong one.
   if (customId && !records.some((r) => r.id === customId)) wo.id = customId;
   wo.type = type;
+  wo.bookingId = typeof bookingId === "string" && bookingId ? bookingId : null;
 
   // Brief 2 — build-mode wiring. parentProjectId + dailyLog seeded.
   // Customer snapshot pulled from the project (which has it from the
@@ -2861,9 +2868,56 @@ async function splitDuplicateIds() {
   return moved;
 }
 
+// ---- Booking identity (PJL-133) --------------------------------------
+//
+// The explicit link. A work order names the Booking it fulfils; a reader
+// asking "which work order is this visit's" goes by that id first, then by
+// the Booking's own list filtered to this visit (bookings.workOrdersForVisit,
+// the PJL-97 rule), and only then has no answer — never "the latest for this
+// lead". Set by booking-lifecycle.linkWorkOrder, which writes both sides.
+async function setBookingId(id, bookingId, { by = "system" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const clean = typeof bookingId === "string" && bookingId ? bookingId : null;
+  if (records[idx].bookingId === clean) return records[idx];
+  const next = { ...records[idx], bookingId: clean, updatedAt: new Date().toISOString() };
+  next.history = [...(next.history || []), { ts: next.updatedAt, action: clean ? "booking_linked" : "booking_unlinked", by, note: clean || records[idx].bookingId || "" }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+async function listByBooking(bookingId) {
+  if (!bookingId) return [];
+  const records = await readAll();
+  return records.filter((w) => w.bookingId === bookingId && !w.deletedAt && !w.archivedAt);
+}
+
+// The work order for a Booking, from a list of work orders. By explicit id
+// first (open ones before finished ones, newest first), else this visit's
+// linked work orders by the PJL-97 rule, else null — the caller creates.
+function resolveForBooking(booking, wos) {
+  if (!booking) return null;
+  const list = (Array.isArray(wos) ? wos : []).filter((w) => w && w.id && !w.deletedAt && !w.archivedAt);
+  const newest = (arr) => [...arr].sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))[0] || null;
+  const pick = (arr) => {
+    if (!arr.length) return null;
+    const open = arr.filter((w) => !WO_TERMINAL_STATUSES.has(w.status));
+    return newest(open.length ? open : arr);
+  };
+  const byId = pick(list.filter((w) => w.bookingId === booking.id));
+  if (byId) return byId;
+  const { workOrdersForVisit } = require("./bookings");   // lazy, as workOrderForLeadBooking does
+  return pick(workOrdersForVisit(booking, list));
+}
+
 module.exports = {
   TEMPLATES,
   versionMatches,
+  setBookingId: withStoreLock(setBookingId),
+  listByBooking,
+  resolveForBooking,
   ZONE_STATUSES,
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,

@@ -8943,3 +8943,90 @@ attribution by design.
 doesn't exist). Existing booking tests re-run: test-booking-guards, -hold, -lifecycle, -funnel,
 asset-versioning, build --check, booking-link lint all pass. `test-book` (Babel parse) and
 `test-reserve-receipts` fail identically on the parent — pre-existing, not touched here.
+
+**2026-10-06, late (Unified Booking Source of Truth — Phase 0, the fail-first suites):** P-PJL-39 /
+PJL-132. The inventory (`docs/UBST_PHASE0_INVENTORY.md`) found seven stores that can each say "there is
+an appointment" and one lifecycle, and ten suites now pin the contract the project builds toward
+(PJL-133 → PJL-138). They are **expected to fail** on today's code and are **deliberately not in
+`build:check`**; a suite joins the gate when the phase that makes it green ships. `npm run test:ubst`
+runs them all (`scripts/run-ubst.mjs`; one line per suite; exit 1 while any fails). Each suite's header
+records what failed on `305d7e3` and why. Verified on 2026-10-06: `no-raw-store-writes` 7/9,
+`cancel-everywhere` (Peter Bazios, six doors + the lead PATCH) 32/101, `returning-customer` 2/18,
+`wo-binds-one-booking` 9/17, `completion-reconciles` 12/23, `one-active-rule` 19/71,
+`idempotent-writers` 12/18 (six concurrent PATCHes to six bookings left ONE on disk — the store has no
+lock), `plan-stop-identity` 4/15, `audit-fixtures` 18/20 (the tool does not exist yet), `season-walk`
+8/108 (a whole season through every door, one invariant after every step). Shared fixtures:
+`scripts/lib/ubst-fixtures.mjs` over `scripts/lib/field-server.mjs`. **Harness change, Windows only:**
+`field-server.mjs` symlinked every repo entry into its temp copy, which needs a privilege a normal
+Windows account lacks (EPERM on `.claude`); it now uses directory junctions and copies top-level files
+on win32, and is unchanged on Linux and CI. No PASS flow touched; no production data read or changed by
+any suite (tripwires unchanged).
+
+**2026-10-07 (Unified Booking Source of Truth — Phase 1, the contract; PJL-133):** One module now owns
+what happens to an appointment: `server/lib/booking-lifecycle.js` (`cancelBooking`, `markNoShow`,
+`completeBooking`, `linkWorkOrder` / `unlinkWorkOrder`, `resolveBookingForWorkOrder`,
+`setStatusFromAdmin`), over `lib/bookings.js` (the record: new `complete`, `markNoShow`,
+`setLiveStatus`, `setRouteTime`, `detachWorkOrder`, `isTerminal`, `customerWasTold`,
+`primaryWorkOrderId`, `bucketFor`) and `lib/work-orders.js` (new `bookingId` on every work order,
+`setBookingId`, `listByBooking`, `resolveForBooking`). **Seven rules land with it.** (1) Every write to
+bookings.json runs under the store's queue (`withStoreLock`, the work-orders pattern): six concurrent
+PATCHes to six bookings now keep six (one survived before). (2) `bookings.update` refuses `status` and
+`scheduledFor` (`LIFECYCLE_FIELD`); the booking page's Status dropdown goes through
+`setStatusFromAdmin`, so "cancelled" from the menu is a real cancellation (cancelledAt, reason, lead
+mirror, work-order cascade) and a dead record is never revived; a date edit answers 422 "use
+Reschedule". (3) A Booking carries `bucket`, the half-day the customer was promised, from every writer
+(reserve, assignment, reschedule, day move); `scheduledFor` stays the route's minute and `setRouteTime`
+moves it without a reschedule and refuses to leave the promised half-day. (4) `bookings.remove`
+refuses a record the customer or the truck already knows about (`customerWasTold` → 409
+`customer_was_told`) unless `purge: true`: the Schedule page's Delete Permanently and Season Plan
+Unassign now stop at that record instead of erasing it (their conversion to cancel-with-reason is
+PJL-135). (5) The three GETs that healed a lead's envelope into a record on the way out
+(`GET /api/bookings?leadId`, portal `reschedule-availability`, portal `booking-actions`) are read-only;
+the boot + 10-minute sweep is the only heal. (6) The follow-up work order's booking is written by
+`bookings.createDirect` (it hand-built the record and `fs.writeFile`'d the store). (7) The Schedule
+page's cancel, the Field app's "Not today" and the Assistant's `cancel_booking` cascade this visit's
+open work orders to cancelled, as the portal's cancel already did; one implementation. Work orders
+raised for a lead booking are linked both ways (`wo.bookingId`); deleting a work order detaches it from
+every Booking that named it. **Not in this phase, by the approved order:** the delete/Unassign doors
+(PJL-135), property-path work orders (every season-plan visit) are still linked to nothing and the
+completion cascade does not call `completeBooking` (PJL-136), the plan stop carries no bookingId
+(PJL-134), readers that still consult `lead.booking` (PJL-138). Measured: `npm run test:ubst` 99
+failing of 409 (123 of 403 before); `no-raw-store-writes` 1/9 (the remaining one is the delete door),
+`idempotent-writers` 5/18 (the five are callers that send no request id). Every booking suite in
+`build:check` green; `test-customer-active-on-booking` now also asserts that no GET heals.
+`test-remove-visit`'s source guard reads a locked writer's own source (`withStoreLock` answers
+`toString` for the function it wraps). Harness note: `npm run build:check` cannot run through npm on
+Windows (the chain exceeds the shell's command-line limit); run it through bash. No PASS flow's
+behaviour changed except as listed.
+
+**2026-10-07 (Unified Booking Source of Truth — Phase 5a, the read-only reconciliation audit; PJL-137,
+first half):** `server/lib/booking-audit.js` (`runAudit(stores, { now })`, `formatReport`) reads
+bookings, leads, work orders, properties and the season plans together and names every place two of
+them disagree about an appointment. It never writes. **Fourteen categories**, six critical —
+`duplicate_active` (two live Bookings, one property, one day), `merged_visits` (one Booking holding
+work orders from different visits), `terminal_wo_on_live` (a live Booking whose own work order is
+finished), `plan_stop_deleted_booking` (a planned stop whose customer was messaged but has no Booking:
+the record was deleted — Peter's class), `id_collision`, `envelope_disagrees` (lead envelope vs
+canonical record) — and eight advisory — `stale_confirmed` (live but past-dated), `plan_stop_no_booking`,
+`wo_missing_booking_link` (the Booking can be inferred), `wo_without_booking`, `dangling_wo_id`,
+`lead_without_record`, `patch_flip` (terminal status with no cancelledAt: set by a plain field edit),
+`test_record`. Liveness is asked of `holdsItsSlot`, never spelled out; `test-booking-status-readers`
+allow-lists the module with that reason (it names states in order to report them). **Three doors to one
+report:** `node scripts/audit-bookings.mjs [--data DIR] [--json] [--now YYYY-MM-DD]` (exit 2 while any
+critical conflict exists, 1 advisory-only, 0 clean; TZ America/Toronto), `GET /api/admin/booking-audit`
+(`?format=text` for the human summary; admin session) and the PJL Assistant's `read_crm` (path
+whitelisted) — so production is audited where its data lives, never by copying it. Pinned by T9
+`scripts/test-ubst-audit-fixtures.mjs`: one fixture per category, the expected ids per category, the
+store bytes identical before and after, `--now` pinned to 2026-10-07 so "past" is stable; 22/22 (18 of
+20 failed on `305d7e3`). Measured: `npm run test:ubst` 81 failing of 411 (99 of 409 after Phase 1).
+**Production preview, 2026-10-06, read-only through the Assistant's read tools** (the route is not
+deployed until PR #401 merges): 143 bookings in 2026; 0 ever completed; 57 confirmed and already past
+(`stale_confirmed` — "nothing completes a Booking", confirmed live, Peter Bazios's May repair
+BK-2026-0002 among them); 76 confirmed ahead; 9 cancelled; 1 tentative; 0 no_show. Fall plan, Sep 28 →
+Oct 9 (36 of 68 stops, the response truncates there): 35 `on_day`, 1 `unassigned` (P-2026-0025, Oct 6),
+5 cancelled stops dropped with their booking ids kept, 1 moved (BK-2026-0139), 1 `skipped` with no
+booking at all (P-2026-0009, Peter Bazios — #398's flag over the deleted record). Lead-path bookings show
+a `synced_from_lead` history line every few minutes on Oct 6–7 with nothing changed (the envelope mirror
+is not idempotent; PJL-135). Full counts and ids come from the route after deploy. **Repair mode does not
+exist** (PJL-137's second half: a separate mode, backup-first, dry-run by default, deterministic, logged,
+stops on ambiguity) and no production data was changed by this work. No PASS flow touched.
