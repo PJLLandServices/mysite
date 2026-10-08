@@ -2,6 +2,33 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-08 (A hand-ordered day can be handed back — the "Back to automatic" button finally appears):**
+Patrick, Oct 14, 2026-10-06: *"i've self arranged the day and theres no way to have it go back to the
+auto."* True since the arrows shipped. The 2026-08-30 entry below says the day "offers 'Back to
+automatic'"; the code for it was all there and the page never once drew it. `season-plan.js` draws
+the notice from `day.manualOrder` on the plan it is SENT; `resolvePlanDay` (server.js) sent the
+sequencer's flag text ("Ordered by hand — the optimiser is not touching this day") and never the fact,
+so the screen printed the sentence and offered no button. Production confirmed it before the fix:
+Oct 9 came back flagged `manual_order` with no `manualOrder` key. **Why no suite caught it:** every
+one checked the STORE (`plans.days[d].manualOrder`), the sequencer's flag, or the `/auto-order` route —
+all three worked. None asked the question the page asks. **Now:** ONE rule,
+`seasonPlans.isHandOrdered(day)`, asked by the sequencer (`resequence.js`), by the two writers
+(`reorderStop`, `clearManualOrder`) and by `resolvePlanDay`, which sends `manualOrder: true|false` on
+every resolved day (`false` on a booked-only day: no stored day, nothing to hand back). No client
+change: the button, its styles and its `PATCH …/auto-order` call were already written. **What "Back to
+automatic" does, unchanged:** drops the hand order and the booked rows' positions for that one day,
+re-optimises it, re-stamps route minutes inside each customer's promised half-day (`syncRoutedTimes`),
+sends nobody anything. `scripts/test-back-to-automatic.mjs` (in build:check, 28 assertions, over HTTP
+the way the page loads it): an untouched day is sent `false`; one arrow press and it is sent `true`,
+on the arrow's own answer and on a fresh load; that is the field the page's condition reads (taken out
+of `season-plan.js`, so a rename on either side fails); Back to automatic answers `false`, the flag is
+gone, the optimiser's order is back and nothing of the hand order is left in the store; the fact and
+the flag never disagree on any day; no server-side reader outside the store tests the raw field. On
+the previous code 15 of the 28 fail. No FLOW-03 code touched (`availability.js`, `geo-filter.js`
+unchanged); the sequencer's behaviour is identical (`isHandOrdered` is the same test it already made).
+**Still open from the same evening, filed not fixed:** a forced booking is refused over route-estimate
+minutes; a tentative assignment booking keeps a stale route time.
+
 **2026-10-07, minutes later (Two booked customers can swap with each other):** Patrick, as soon as
 the arrows went live: *"two personally booked appointments can't jump each other now either."*
 `day.bookedOrder[key]` stored only `{ before: planCode }`, so two booked rows ahead of the same plan
