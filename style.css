@@ -1023,7 +1023,7 @@ img { max-width: 100%; height: auto; display: block; }
   gap: 48px;
   margin-bottom: 64px;
 }
-.footer-brand img { height: 52px; margin-bottom: 16px; }
+.footer-brand img { height: 52px; width: auto; margin-bottom: 16px; }
 .footer-brand p { font-size: 14px; line-height: 1.7; color: rgba(255,255,255,0.6); max-width: 280px; margin-bottom: 20px; }
 .footer-social { display: flex; gap: 12px; }
 .footer-social a {
