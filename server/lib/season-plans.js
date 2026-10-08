@@ -611,7 +611,7 @@ async function reorderStop(season, year, { date, bucket, propertyCode, direction
   if (!day) throw new Error(`${date} is not a route day in this plan.`);
 
   const keys = Array.isArray(bookedKeys) ? bookedKeys.map((k) => String(k || "").trim()).filter(Boolean) : [];
-  if (!day.manualOrder && Array.isArray(currentOrder) && currentOrder.length) {
+  if (!isHandOrdered(day) && Array.isArray(currentOrder) && currentOrder.length) {
     adoptBucketOrder(day, bucket, currentOrder.map((t) => String(t || "").trim()), keys);
   }
   const list = bucketOrderWithBooked(day, bucket, keys);
@@ -636,6 +636,17 @@ async function reorderStop(season, year, { date, bucket, propertyCode, direction
   return { plan: revalidated, warnings, reordered: { date, bucket, propertyCode: code, from, to } };
 }
 
+// IS THIS DAY HAND-ORDERED? One answer, asked by everyone who needs it: the
+// sequencer (which then walks the stored order instead of searching), the
+// two writers below, and the plan the page is sent. The page was the reader
+// that never got told. Its "Back to automatic" button is drawn from
+// `day.manualOrder` on the RESOLVED day, and resolvePlanDay sent the
+// sequencer's "Ordered by hand" flag text and not the fact itself — so from
+// the day the arrows shipped (2026-08-30) a hand-ordered day said so and
+// offered no way back. Patrick, Oct 14, 2026-10-06: "i've self arranged the
+// day and theres no way to have it go back to the auto."
+const isHandOrdered = (day) => Boolean(day && day.manualOrder === true);
+
 // Hand the day back to the optimiser. The order it currently holds is kept
 // until the next re-sequence recomputes it, so nothing jumps on the click.
 async function clearManualOrder(season, year, { date }, { actor = "admin" } = {}) {
@@ -646,7 +657,7 @@ async function clearManualOrder(season, year, { date }, { actor = "admin" } = {}
   if (!plan) throw new Error(`No ${key} plan to edit.`);
   const day = plan.days[date];
   if (!day) throw new Error(`${date} is not a route day in this plan.`);
-  if (!day.manualOrder) throw new Error(`${day.label || date} is already optimised automatically.`);
+  if (!isHandOrdered(day)) throw new Error(`${day.label || date} is already optimised automatically.`);
 
   delete day.manualOrder;
   delete day.bookedOrder; // a position only means something on a hand-ordered day
@@ -750,6 +761,7 @@ module.exports = {
   setBucketCap,
   reorderStop,
   clearManualOrder,
+  isHandOrdered,
   FILE,
   BUCKETS,
   DEFAULT_BUCKET_CAP,
