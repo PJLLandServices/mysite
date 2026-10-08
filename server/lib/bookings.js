@@ -1282,7 +1282,12 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
   }
   // The half-day travels too when the caller names one (a single stop
   // moved morning → afternoon is a new promise as much as a new date is).
-  const bucket = toBucket === "morning" || toBucket === "afternoon" ? toBucket : current.assignment.bucket;
+  // An exact time travels with the visit: 7:00 on the old day is 7:00 on
+  // the new one, not wherever the new day's route would put it — and its
+  // half-day is the one that minute falls in.
+  const startOnNewDay = exactOnMove ? atLocalTime(`${toDate}T12:00:00`, exactOnMove) : new Date(scheduledFor).toISOString();
+  const bucket = exactOnMove ? bucketFor(startOnNewDay)
+    : toBucket === "morning" || toBucket === "afternoon" ? toBucket : current.assignment.bucket;
   history.push({
     ts: now, action: "day_moved", by,
     note: `${oldDate} → ${toDate}${bucket !== current.assignment.bucket ? ` (${current.assignment.bucket} → ${bucket})` : ""} (${kind === "stop" ? "stop moved" : "route day moved"})`
@@ -1290,12 +1295,10 @@ async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, ol
 
   const next = {
     ...current,
-    // An exact time travels with the visit: 7:00 on the old day is 7:00 on
-    // the new one, not wherever the new day's route would put it.
-    scheduledFor: exactOnMove ? atLocalTime(`${toDate}T12:00:00`, exactOnMove) : new Date(scheduledFor).toISOString(),
+    scheduledFor: startOnNewDay,
     ...(exactOnMove ? { exactTime: exactOnMove } : {}),
-    bucket: exactOnMove ? bucketFor(atLocalTime(`${toDate}T12:00:00`, exactOnMove)) : bucket,
-    assignment: { ...current.assignment, date: toDate, bucket: exactOnMove ? bucketFor(atLocalTime(`${toDate}T12:00:00`, exactOnMove)) : bucket, outreach },
+    bucket,
+    assignment: { ...current.assignment, date: toDate, bucket, outreach },
     updatedAt: now,
     history
   };
