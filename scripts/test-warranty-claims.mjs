@@ -511,8 +511,8 @@ ok("and that note names the office", /contact the office/i.test(woHtml));
 ok("the money controls re-render once the role resolves",
   /renderUnlockControls\(loadedWorkOrder\);[\s\S]{0,400}renderServiceFeeWaiver\(loadedWorkOrder\);[\s\S]{0,120}renderWorkOrderWarranty\(loadedWorkOrder\);/.test(woJs));
 // A tech must keep the rest of their job — this is a scalpel, not a
-// lockout of the work-order API. Four work-order routes are admin-gated,
-// and all four are the SAME class of decision: they change what the
+// lockout of the work-order API. Five work-order routes are admin-gated,
+// and all five are the SAME class of decision: they change what the
 // customer is charged.
 //
 //   1. unlock/relock            (pre-existing)
@@ -523,6 +523,11 @@ ok("the money controls re-render once the role resolves",
 //                                the customer is charged nothing for it —
 //                                Patrick: "admin only; tech users cannot
 //                                see or invoke it")
+//   5. referral (PUT)           (the referrer's 10% credit, 2026-10-09:
+//                                naming who referred a customer takes 10%
+//                                off ANOTHER customer's next seasonal bill
+//                                — a discount, so the office's call. Reading
+//                                it stays "user".)
 //
 // The third joined when audited clock-time corrections came in. Patrick's
 // field/office split puts it here: "technicians clock in/out" in the
@@ -533,11 +538,11 @@ ok("the money controls re-render once the role resolves",
 // COUNT is not in this list — setting it is a live field action and stays
 // at "user".
 //
-// A FIFTH appearing here still means the lock was widened past what
+// A SIXTH appearing here still means the lock was widened past what
 // Patrick asked for. Do not bump this number without a reason on the
-// same footing as the four above.
+// same footing as the five above.
 const adminWoRoutes = (server.match(/^\s*if \(\/\^\\\/api[^\n]*work-orders[^\n]*return "admin";/gm) || []);
-eq("exactly four work-order routes are admin-only", adminWoRoutes.length, 4);
+eq("exactly five work-order routes are admin-only", adminWoRoutes.length, 5);
 ok("one of them is the pre-existing unlock/relock",
   adminWoRoutes.some((l) => l.includes("unlock|relock")), adminWoRoutes);
 ok("the other is the fee waiver",

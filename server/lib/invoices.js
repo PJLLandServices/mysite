@@ -910,6 +910,15 @@ async function createDraft({
   const now = new Date().toISOString();
   const year = new Date().getUTCFullYear();
   const id = await nextInvoiceId(year);
+  // A referral credit line (billing.billingFor) is CLAIMED here, under this
+  // lock, for this invoice — the moment it stops being available to any
+  // other visit. One already held by another live invoice is dropped from
+  // this one rather than used twice (lib/referrals.js).
+  const creditIds = (lineItems || []).map((l) => l && l.referralCreditId).filter(Boolean);
+  if (creditIds.length) {
+    const { claimed } = await require("./referrals").claimForInvoice(creditIds, { invoiceId: id, woId, invoiceRecords: records });
+    lineItems = lineItems.filter((l) => !l || !l.referralCreditId || claimed.includes(l.referralCreditId));
+  }
   // Normalize line items into a consistent shape so the invoice page
   // doesn't have to know about builder vs accepted-quote variants.
   const normalized = draftLinesFrom(lineItems);

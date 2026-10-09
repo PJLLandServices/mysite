@@ -59,10 +59,15 @@
     "extra_water_finished_basement": { "label": "Add-on: finished basement water-source complexity", "price": 225, "category": "install_addon", "quoteType": "flat" },
     "extra_lighting_timer":       { "label": "Add-on: lighting controller / timer",               "price": 195,   "category": "install_addon", "quoteType": "flat"  }
   },
+  "credits": {
+    "_doc": "Percentage credits, read only through pricing.referralCreditPercent(). referral_percent: when a customer refers a neighbour or friend, the referrer gets this percent off the seasonal service charge (spring opening / fall closing line only) of their next seasonal visit, as the welcome emails promise. One credit per referred customer, one credit per visit.",
+    "referral_percent": 10
+  },
   "rules": {
     "spring_fall_no_service_call": "Spring opening / fall closing is a flat-rate service covering the system check and standard adjustments (alignment, arc, rotation). The $95 service call is NOT charged on top. Any repairs found on-site are flagged, quoted separately, and only performed after customer approval.",
     "service_call_scope": "$95 service call covers mobilization + quick on-site assessment ONLY. It does NOT include any labour. All diagnostic and repair labour is billed separately at $95/hr. Repair quotes are issued with an assumed amount of time for the diagnosed work; if actual time runs over the estimate, additional labour is billed at $95/hr and quoted to the customer before continuing.",
-    "ai_intake_correct_diagnosis_bonus": "PJL's ONLY discount: if the AI repair tool correctly diagnoses the repair (i.e., the on-site fix matches what the AI predicted), the customer receives ONE HOUR of repair labour FREE on the diagnosed work. If the AI's diagnosis is wrong, no free hour applies. Anything else found on-site beyond the diagnosed repair is billed at parts + $95/hr, quoted before any extra work.",
+    "ai_intake_correct_diagnosis_bonus": "PJL's only discount on repairs: if the AI repair tool correctly diagnoses the repair (i.e., the on-site fix matches what the AI predicted), the customer receives ONE HOUR of repair labour FREE on the diagnosed work. If the AI's diagnosis is wrong, no free hour applies. Anything else found on-site beyond the diagnosed repair is billed at parts + $95/hr, quoted before any extra work.",
+    "referral_credit": "A customer who refers a neighbour or friend gets credits.referral_percent off the seasonal service charge of their next spring opening or fall closing. The referral is recorded on the new customer's visit before that visit's invoice is made; once the invoice exists it can't be added. The credit comes off the referrer's next seasonal visit that is not yet invoiced, one credit per visit. Repairs and parts are never discounted.",
     "whole_manifold_rule": "When ANY valve in a box fails, PJL replaces the ENTIRE manifold AND ALL valves in that box together. Never single-valve repair. Quote formula = manifold tier ($135 for 1-3 valves OR $285 for 4-6 valves) + ($74.95 × valve count) + $95 service call.",
     "backflow_not_offered": "PJL does NOT service backflow assemblies. Refer customer to a certified backflow tester.",
     "head_default_assumption": "Default head: 4\" Pro Spray for grass, 6\" for beds. Single $68 flat covers any size/type.",

@@ -24,6 +24,7 @@
 //   correctedQuote  the WO's onSiteQuote with the seasonal fee as it bills
 //                now, when that differs from what is stored (else null) —
 //                what an UNLOCKED work order is corrected to
+//                (+ the referrer's credit line, lib/referrals.js)
 //   total,       invoices.totalsForLines(lines).total
 //   noCharge,    lines exist and total $0 (fall-closing fix #8)
 //   fee,         the seasonal fee, or null on a non-seasonal WO:
@@ -87,7 +88,21 @@ async function billingFor(wo, { property } = {}) {
       console.warn(`[billing] seasonal fee re-resolve failed for ${wo?.id}: ${error}`);
     }
   }
-  const lines = pricing.billableLines(billWo, lineItemsFromWo(billWo));
+  let lines = pricing.billableLines(billWo, lineItemsFromWo(billWo));
+  // The referrer's credit (lib/referrals.js): 10% of the seasonal service
+  // charge, as its own line, on a seasonal visit of a customer who has
+  // referred someone. Added HERE, where every reader asks what a visit
+  // bills, so the tech's preview, the customer's "What am I signing for?",
+  // Finish and "Generate invoice now" all agree. Never stored on the work
+  // order: invoices.createDraft claims it when the invoice is made.
+  if (wo && SEASONAL.has(wo.type)) {
+    try {
+      const credit = await require("./referrals").creditLineForWorkOrder(billWo, lines);
+      if (credit) lines = [...lines, credit];
+    } catch (err) {
+      console.warn(`[billing] referral credit unavailable for ${wo?.id}: ${err?.message || err}`);
+    }
+  }
   const total = lines.length ? invoices.totalsForLines(lines).total : 0;
   return {
     lines, total, noCharge: lines.length > 0 && !(total > 0), fee, error,

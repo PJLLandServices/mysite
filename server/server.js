@@ -1750,6 +1750,10 @@ function needsAuth(method, pathname) {
   // Paid in Full (P-PJL-22 D) is the office's to record; a tech can
   // neither set nor see it. Above the generic rule, like the waiver.
   if (/^\/api\/work-orders\/[^/]+\/settlement$/.test(pathname)) return "admin";
+  // Recording who referred a customer gives the referrer 10% off a later
+  // bill — money, so the office's (Patrick's) call, like the waiver.
+  // Reading it is any staff's. Above the generic rule.
+  if (/^\/api\/work-orders\/[^/]+\/referral$/.test(pathname) && method !== "GET") return "admin";
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
@@ -22181,6 +22185,126 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create work order."] });
     }
+  }
+
+  // Referrals (lib/referrals.js) — "send a neighbour or friend our way".
+  //
+  // GET  /api/work-orders/:id/referral     who referred this visit's
+  //      customer, whether it can still be changed, the credit this visit
+  //      bills (if the customer is a referrer), and who they have referred.
+  // PUT  /api/work-orders/:id/referral     { referrerCustomerId | null } —
+  //      ADMIN. Refused once this visit has an invoice (Patrick: "Has to be
+  //      mentioned prior to processing! If I create the invoice it's not
+  //      available.").
+  // GET  /api/work-orders/:id/referral-candidates?q=  customers who could
+  //      have sent them: name, phone or a property's street; never the
+  //      customer themselves or anyone at one of their addresses.
+  const referralMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/referral$/);
+  const referralCandidatesMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/referral-candidates$/);
+  if (referralMatch || referralCandidatesMatch) {
+    const referralsLib = require("./lib/referrals");
+    const woId = decodeURIComponent((referralMatch || referralCandidatesMatch)[1]);
+    const wo = await workOrders.get(woId);
+    if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+    const customerId = wo.customerId || null;
+    const addressKey = (a) => String(a || "").split(",")[0].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const allProperties = await properties.list();
+    const firstAddress = new Map();
+    for (const p of allProperties) if (p.customerId && !firstAddress.has(p.customerId)) firstAddress.set(p.customerId, p.address || "");
+    const ownAddresses = new Set(allProperties.filter((p) => customerId && p.customerId === customerId).map((p) => addressKey(p.address)).filter(Boolean));
+    if (wo.address) ownAddresses.add(addressKey(wo.address));
+    const person = async (id) => {
+      if (!id) return null;
+      const c = await customers.get(id, { withProperties: false }).catch(() => null);
+      return c ? { customerId: c.id, name: c.name || "", address: firstAddress.get(c.id) || "" } : { customerId: id, name: "", address: "" };
+    };
+
+    if (referralCandidatesMatch && req.method === "GET") {
+      if (!customerId) return sendJson(res, 200, { ok: true, candidates: [] });
+      const q = String(new URL(req.url, baseUrlFromReq(req)).searchParams.get("q") || "").trim().toLowerCase();
+      if (q.length < 2) return sendJson(res, 200, { ok: true, candidates: [] });
+      const byAddress = new Set(allProperties.filter((p) => p.customerId && String(p.address || "").toLowerCase().includes(q)).map((p) => p.customerId));
+      const byContact = new Set((await customers.list({ search: q })).map((c) => c.id));
+      const all = await customers.list();
+      const candidates = all
+        .filter((c) => c.id !== customerId && (byContact.has(c.id) || byAddress.has(c.id)))
+        .filter((c) => !allProperties.some((p) => p.customerId === c.id && ownAddresses.has(addressKey(p.address))))
+        .slice(0, 20)
+        .map((c) => ({ customerId: c.id, name: c.name || "", address: firstAddress.get(c.id) || "" }));
+      return sendJson(res, 200, { ok: true, candidates });
+    }
+
+    const activeInvoice = (await invoices.listByWorkOrder(wo.id)).find((r) => r && r.status !== "void") || null;
+    const readView = async () => {
+      const records = await referralsLib.list();
+      const invoiceById = new Map((await invoices.list()).map((i) => [i.id, i]));
+      const current = referralsLib.referralOf(records, customerId);
+      // Changeable only on the visit it is being recorded on, while that
+      // visit has no invoice, and while its credit is unused.
+      const locked = !customerId || Boolean(activeInvoice)
+        || Boolean(current && current.recordedOnWoId && current.recordedOnWoId !== wo.id)
+        || Boolean(current && referralsLib.creditState(current, invoiceById) === "applied");
+      const credit = (await billing.billingFor(wo)).lines.find((l) => l && l.referralCreditId) || null;
+      const referred = [];
+      for (const r of records.filter((x) => customerId && x.referrerCustomerId === customerId && !x.removedAt)) {
+        const p = await person(r.referredCustomerId);
+        const state = referralsLib.creditState(r, invoiceById);
+        referred.push({ referralId: r.id, name: p?.name || "", state, usedHere: Boolean(credit && credit.referralCreditId === r.id) });
+      }
+      return {
+        ok: true,
+        customerId,
+        locked,
+        lockedReason: !customerId ? "no_customer" : activeInvoice ? "invoiced" : locked ? "recorded_elsewhere" : null,
+        referredBy: current ? { referralId: current.id, ...(await person(current.referrerCustomerId)) } : null,
+        credit: credit ? { referralId: credit.referralCreditId, label: credit.label, amount: -Number(credit.originalPrice) } : null,
+        referred
+      };
+    };
+
+    if (referralMatch && req.method === "GET") return sendJson(res, 200, await readView());
+
+    if (referralMatch && req.method === "PUT") {
+      if (!customerId) return sendJson(res, 409, { ok: false, code: "no_customer", errors: ["This visit isn't linked to a customer yet."] });
+      if (activeInvoice) {
+        return sendJson(res, 409, { ok: false, code: "invoiced", errors: [`This visit already has invoice ${activeInvoice.id}, so a referral can't be added or changed on it.`] });
+      }
+      const payload = await parseRequestBody(req);
+      const by = await actorLabel(req);
+      const records = await referralsLib.list();
+      const current = referralsLib.referralOf(records, customerId);
+      if (current && current.recordedOnWoId && current.recordedOnWoId !== wo.id) {
+        return sendJson(res, 409, { ok: false, code: "recorded_elsewhere", errors: ["This customer's referral was recorded on an earlier visit and can't be changed here."] });
+      }
+      const referrerCustomerId = payload?.referrerCustomerId ? String(payload.referrerCustomerId) : null;
+      let result;
+      if (!referrerCustomerId) {
+        result = await referralsLib.remove({ referredCustomerId: customerId, by });
+      } else {
+        const referrer = await customers.get(referrerCustomerId, { withProperties: false }).catch(() => null);
+        if (!referrer) return sendJson(res, 404, { ok: false, code: "unknown_referrer", errors: ["That customer wasn't found."] });
+        const sameAddress = allProperties.some((p) => p.customerId === referrerCustomerId && ownAddresses.has(addressKey(p.address)));
+        if (sameAddress) return sendJson(res, 409, { ok: false, code: "same_address", errors: ["Someone at the same address can't be the referrer."] });
+        result = await referralsLib.record({ referredCustomerId: customerId, referrerCustomerId, woId: wo.id, by });
+      }
+      if (!result.ok) {
+        const msg = result.code === "self_referral" ? "A customer can't refer themselves."
+          : result.code === "credit_used" ? "The referrer's credit for this has already been used on an invoice, so it can't be changed."
+            : "Couldn't save the referral.";
+        return sendJson(res, 409, { ok: false, code: result.code, errors: [msg] });
+      }
+      if (!result.unchanged) {
+        try {
+          await workOrders.appendHistory(wo.id, {
+            action: referrerCustomerId ? "referral_recorded" : "referral_removed",
+            by,
+            note: referrerCustomerId ? `Referred by ${(await person(referrerCustomerId))?.name || referrerCustomerId}` : "Referral removed"
+          });
+        } catch (_) {}
+      }
+      return sendJson(res, 200, await readView());
+    }
+    return sendJson(res, 405, { ok: false, errors: ["Method not allowed."] });
   }
 
   // GET /api/work-orders/:id/customer-summary — what the customer is

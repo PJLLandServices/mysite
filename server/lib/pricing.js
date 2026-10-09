@@ -527,7 +527,16 @@ function pricedQuoteForLock(wo, property, { commercial = false, zones = null } =
   return { onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: lines }, refresh };
 }
 
+// The referral credit's percent (pricing.json credits.referral_percent),
+// or null when it is missing or not a sensible percent. The ONE reader of
+// that key: lib/referrals.js asks here, nothing types the 10.
+function referralCreditPercent() {
+  const pct = Number(PRICING?.credits?.referral_percent);
+  return Number.isFinite(pct) && pct > 0 && pct <= 100 ? pct : null;
+}
+
 module.exports = {
+  referralCreditPercent,
   priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline, CUSTOM_QUOTE_NOTE_PREFIX,
   // PJL-96
   suggestSeasonalPrice, seasonalFeeDecision, pendingFeeLine, isPricePending, feeLineIndex, billableLines, PRICE_PENDING_NOTES,

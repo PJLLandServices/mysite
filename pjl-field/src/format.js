@@ -27,7 +27,9 @@ export const money = (n, currency) => {
   if (n === null || n === undefined || n === '') return null;
   const v = Number(n);
   if (!Number.isFinite(v)) return null;
-  const amount = `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // A credit line (a referral credit, a negotiated discount) reads
+  // "-$9.00", the way the invoice page and PDF print it — not "$-9.00".
+  const amount = `${v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return currency ? `${amount} ${String(currency).toUpperCase()}` : amount;
 };
 
