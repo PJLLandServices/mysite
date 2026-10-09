@@ -258,13 +258,30 @@ function hhmmToMinutes(text) {
 // against the AFTERNOON's capacity in the stage-1 gate (bucket
 // attribution reads the stored time). The plan screen still shows the
 // true overrun; the record stays a morning record.
-function scheduledStartFor(dateKey, bucketKey, arriveAt, serviceMinutes) {
+//
+// THE ONE EARLY EXCEPTION (2026-10-09). A morning stop whose OWN window
+// opens before the half-day — "after 07:00" on its plan stop, or the
+// customer's own ask — is where the route starts the day early
+// (resequence: an early first stop leaves the yard in time for it). Its
+// stored start is that arrival, not the 8:00 the half-day opens at:
+// Patrick's Oct 17 Orangeville stop sat at 07:00 on the Season Plan and
+// read 8:00 in the field app, because this clamp put it back. The floor
+// moves only as far as the stop's own window, and only in the morning;
+// everyone promised 8–12 is still never stored before 8:00.
+function earliestStartMinutes(bucketKey, window) {
+  const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
+  const fromMin = hhmmToMinutes(bucket?.from || "08:00");
+  const asked = window && /^\d{1,2}:\d{2}$/.test(String(window.notBefore || "")) ? hhmmToMinutes(window.notBefore) : null;
+  return bucketKey === "morning" && Number.isFinite(asked) && asked < fromMin ? asked : fromMin;
+}
+function scheduledStartFor(dateKey, bucketKey, arriveAt, serviceMinutes, window = null) {
   const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
   const fromMin = hhmmToMinutes(bucket?.from || "08:00");
   const toMin = hhmmToMinutes(bucket?.to || "17:00");
+  const floorMin = earliestStartMinutes(bucketKey, window);
   const latestStart = Math.max(fromMin, toMin - Math.max(1, Number(serviceMinutes) || 30));
   let startMin = arriveAt ? hhmmToMinutes(arriveAt) : fromMin;
-  startMin = Math.min(Math.max(startMin, fromMin), latestStart);
+  startMin = Math.min(Math.max(startMin, floorMin), latestStart);
   const [y, m, d] = dateKey.split("-").map(Number);
   return new Date(y, m - 1, d, Math.floor(startMin / 60), startMin % 60, 0, 0);
 }
@@ -965,12 +982,21 @@ async function syncAssignedTimes(season, year, deps = {}) {
     return etaCache.get(date);
   };
 
+  // A stop's own window, as the sequencer saw it: the customer's ask wins
+  // over the plan stop's standing "after / before" (requestedWindowsFor's
+  // rule), so the stored minute is floored by the same window the route
+  // was timed with — never one the route didn't use.
+  const windowFor = (date, code) => (code && customerWindows[code])
+    || (code && plan.days[date] && plan.days[date].constraints && plan.days[date].constraints[code])
+    || null;
+
   for (const [date, records] of byDate) {
     const etaByCode = await etasFor(date);
     for (const b of records) {
       checked += 1;
       const want = scheduledStartFor(
-        date, b.assignment.bucket, etaByCode.get(b.assignment.code), b.durationMinutes
+        date, b.assignment.bucket, etaByCode.get(b.assignment.code), b.durationMinutes,
+        windowFor(date, b.assignment.code)
       ).toISOString();
       if (b.scheduledFor === want) continue;
       // A route re-time, not a reschedule (PJL-133): the minute moves inside
@@ -1278,7 +1304,8 @@ async function followPlanMoves(season, year, { codes = null, dryRun = false, act
   return summary;
 }
 
-module.exports = { preflight, assign,
+module.exports = {
+  earliestStartMinutes, scheduledStartFor, preflight, assign,
   unplanned,
   lighterBucket,
   planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES, skippedThisSeason,

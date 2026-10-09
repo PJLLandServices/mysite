@@ -142,4 +142,49 @@ function mergeDaySchedule(bookings, allWos, dayStart, dayEnd) {
   return [...rows, ...scheduled].sort((a, b) => new Date(a.start) - new Date(b.start));
 }
 
-module.exports = { mergeDaySchedule, workOrderRow, townFromAddress, parseStored, WO_TYPE_LABELS, SKIP_WO_STATUS };
+// THE DAY IN THE SEASON PLAN'S ORDER (2026-10-09).
+//
+// Patrick's Oct 17: the Season Plan drove Orangeville first at 07:00 (an
+// "after 07:00" on that stop starts the day early), then East Gwillimbury
+// 8:17, Newmarket 9:00 and 9:35. The field app listed East Gwillimbury
+// first and Orangeville third, because /api/schedule/today ran its OWN
+// sequence from the yard that knew nothing of the stop's window or of a
+// day Patrick ordered by hand. Two orders for one day, and the truck
+// follows the app.
+//
+// So a day on the plan is listed in the plan's route: `route` is the
+// plan's sequenced timeline for this date, keyed "bk:<bookingId>" and
+// "prop:<propertyId>" -> { stopNumber, arriveAt "HH:MM" }. Every row the
+// plan placed sorts by its planned arrival; a row the plan does not know
+// (a work order raised straight against a property, say) sorts by its own
+// start time among them, so nothing is dropped or pushed to the end.
+// Returns null when the plan places none of the rows: the caller keeps
+// its own ordering then.
+function routeKeyFor(row, route) {
+  if (!row || !route) return null;
+  return (row.bookingId && route.get(`bk:${row.bookingId}`))
+    || (row.propertyId && route.get(`prop:${row.propertyId}`))
+    || null;
+}
+function minutesOfDay(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+function orderByPlanRoute(rows, route) {
+  if (!Array.isArray(rows) || !route || !route.size) return null;
+  const keyed = rows.map((row, i) => {
+    const pos = routeKeyFor(row, route);
+    const startMin = row && row.start ? (() => { const d = new Date(row.start); return d.getHours() * 60 + d.getMinutes(); })() : null;
+    const planned = pos ? minutesOfDay(pos.arriveAt) : null;
+    return { row, i, pos, at: planned != null ? planned : startMin, stop: pos ? pos.stopNumber : null };
+  });
+  if (!keyed.some((k) => k.pos)) return null;
+  return keyed
+    .sort((a, b) =>
+      ((a.at ?? 24 * 60) - (b.at ?? 24 * 60))
+      || ((a.stop ?? 999) - (b.stop ?? 999))
+      || (a.i - b.i))
+    .map((k) => k.row);
+}
+
+module.exports = { mergeDaySchedule, orderByPlanRoute, workOrderRow, townFromAddress, parseStored, WO_TYPE_LABELS, SKIP_WO_STATUS };
