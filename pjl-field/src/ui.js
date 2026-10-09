@@ -131,7 +131,10 @@ export function SelectRow({
 // `options` are `{ key, label, note, meta, group }`. `group` prints a
 // header the first time it changes, which is how the zone bands keep
 // residential and commercial apart without two lists.
-export function PickerSheet({ visible, title, options, selectedKey, onSelect, onClose }) {
+//
+// `search` (optional) puts a search box at the top of the sheet:
+// `{ value, onChangeText, placeholder }`. The caller filters `options`.
+export function PickerSheet({ visible, title, options, selectedKey, onSelect, onClose, search = null }) {
   // A SHEET IS NEVER UNDER A KEYBOARD. This lives here rather than in each
   // caller because the second caller forgot: the Properties tab opened its
   // town list straight from the search box with the keyboard still up over
@@ -160,6 +163,19 @@ export function PickerSheet({ visible, title, options, selectedKey, onSelect, on
       <View style={styles.sheet}>
         <View style={styles.grabber} />
         {shown.title ? <Text style={styles.sheetTitle}>{shown.title}</Text> : null}
+        {search ? (
+          <TextInput
+            value={search.value}
+            onChangeText={search.onChangeText}
+            placeholder={search.placeholder || 'Search'}
+            placeholderTextColor={colors.textFaint}
+            style={styles.sheetSearch}
+            autoCorrect={false}
+            autoCapitalize="none"
+            clearButtonMode="while-editing"
+            accessibilityLabel={search.placeholder || 'Search'}
+          />
+        ) : null}
         <FlatList
           data={rows}
           keyExtractor={(item) => String(item.key)}
@@ -367,6 +383,15 @@ const styles = StyleSheet.create({
     alignSelf: 'center', marginTop: space.sm, marginBottom: space.md,
   },
   sheetTitle: { ...type.section, marginHorizontal: space.lg, marginBottom: space.sm },
+  sheetSearch: {
+    ...type.body,
+    marginHorizontal: space.lg,
+    marginBottom: space.sm,
+    minHeight: 44,
+    paddingHorizontal: space.md,
+    borderRadius: 10,
+    backgroundColor: colors.ground,
+  },
   sheetList: { flexGrow: 0 },
   sheetGroup: {
     ...type.section,

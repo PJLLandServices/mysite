@@ -9099,3 +9099,76 @@ plan. An early first stop starts the day early (resequence, 2026-10-08).
 the pure sections unable to run, and passes 21 of 21. Related suites pass unchanged: routed-times,
 day-order, resequence, day-schedule, season-plan-buckets, plan-follows-bookings, plan-move-follows,
 day-preview, season-plan-moves, assignment-writer, today-map and day-reschedule.
+
+---
+
+## 2026-10-09: REFERRAL-01, the referrer's 10% credit (new flow; FLOW-23 PASS re-verified by tests)
+
+**Asked:** Patrick: "I offer a 10% discount to individuals who reference each other. I never made
+that function." All four welcome emails already promise it: "When a neighbour or friend books with
+us, you get 10% off your seasonal service charge." Nothing in the system backed that promise.
+
+**Patrick's rules:**
+- The referrer gets the credit, exactly as the email says.
+- It is 10% of the seasonal service charge only.
+- Each referral is one credit, and one credit is used per visit.
+- "Has to be mentioned prior to processing! If I create the invoice it's not available."
+
+**Built:**
+- `pricing.json`: `credits.referral_percent` (10), read only through `pricing.referralCreditPercent()`.
+- New rule `referral_credit`. The AI-bonus rule now reads "PJL's only discount on repairs".
+- `server/lib/referrals.js`, a new store (`data/referrals.json`).
+- `creditState()` is the ONE rule for a credit's state:
+  - **removed:** the referral was taken back.
+  - **applied:** a non-void invoice carries it.
+  - **available:** otherwise.
+- The state is derived from the invoice store, never a stored flag. So voiding the invoice that used
+  a credit hands it back, and a claim whose invoice was never written stays available.
+- `billing.billingFor` adds the credit as its own negative line on a seasonal visit of a referrer:
+  - It is `-(percent × the fee line)`, with HST on the net.
+  - The tech's preview, "What am I signing for?", Finish and Generate all read it there.
+  - An invoiced visit re-reads only the credit its own invoice claimed (the signed-scope reconcile
+    keeps it) and never picks up a new one.
+- `invoices.createDraft` claims the credit under the invoice lock. A credit another live invoice
+  already holds is dropped from the new invoice, never used twice.
+- API:
+  - `GET` and `PUT /api/work-orders/:id/referral`. The PUT is admin-only and is refused once the
+    visit has an invoice.
+  - `GET /api/work-orders/:id/referral-candidates?q=`. It never offers the customer themselves or
+    anyone at their address.
+- App: a "Referral" section on the fall-closing sign-off:
+  - a "Referred by" select row with a search sheet (`PickerSheet` gained an optional search box);
+  - the credit this visit bills, from the server;
+  - "has referred" with each credit's state.
+- `format.money` prints a credit line as "-$9.00".
+
+**The whole workflow:**
+- **New customer:** pays the normal price; nothing is sent to them.
+- **Referrer:** sees the credit line on their sign-off, invoice, pay link and Tap to Pay, all of
+  which charge the server's balance.
+- **Patrick:** records it on the sign-off. The work order history gets `referral_recorded` /
+  `referral_removed`, and the referral keeps its own history (`recorded`, `credit_applied`).
+- **Capacity / calendar:** untouched.
+- **Linked records:** an invoice is voided → the credit becomes available again by the rule.
+- **QuickBooks:** the credit line has no key and maps to the generic item, like the AI-bonus credit.
+
+**Deliberately left alone:**
+- **No "Referred by" on visits outside the native fall closing.** Spring openings and service calls
+  are finished on the web visit page, which has none. The credit itself still bills on any seasonal
+  visit, because billing is server-side.
+- **The customer emails are unchanged.**
+- **Public copy still contradicts this.** `faq.html` (2 places) and
+  `blog-sprinkler-system-cost-ontario.html` say the AI bonus is "the only discount PJL offers".
+  Left for Patrick.
+- **A pending or suggested seasonal fee takes no credit.** The credit waits for a priced visit.
+- **A Paid in Full (prepaid) visit takes no credit.** It is never invoiced.
+
+**Test:** `scripts/test-referral-credit.mjs` is in build:check. It has 51 checks:
+- the pure rule;
+- the app wiring;
+- a real server on temp data, with email, SMS and Stripe stubbed: record, lock after invoice,
+  credit on preview and invoice, used once, void returns it, the double claim refused, and a tech
+  refused.
+
+Without the change it fails: the library, the resolver, billing and the claim are missing, and the
+API calls fail.

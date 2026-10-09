@@ -24,6 +24,7 @@ import { colors, radius, space, type } from '../../theme';
 import { Button, ChoiceRow, Section } from './parts';
 import SignaturePad from './SignaturePad';
 import CustomerSummary from '../CustomerSummary';
+import ReferralSection from './ReferralSection';
 
 // The server's BYPASS_REASONS, minus admin_override — that one exists for
 // the desk, not for a driveway.
@@ -268,6 +269,8 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, busyLab
           ) : null}
         </View>
       ) : null}
+
+      <ReferralSection wo={wo} role={role} busy={busy} />
 
       <Section title="Before it closes">
         {officeHandles ? (

@@ -313,6 +313,19 @@ export const setWorkOrderPaidInFull = (id, reference) =>
 export const clearWorkOrderPaidInFull = (id) =>
   sendJson(`/api/work-orders/${encodeURIComponent(id)}/settlement`, 'DELETE').then((d) => d.workOrder);
 
+// Referrals ("send a neighbour or friend our way"): who sent this visit's
+// customer, the credit this visit bills if the customer is a referrer,
+// and the customers they could pick. Recording one is admin only — the
+// server refuses a tech — and refused once the visit has an invoice.
+// Online only.
+export const getReferral = (woId) =>
+  getJson(`/api/work-orders/${encodeURIComponent(woId)}/referral`);
+export const searchReferrers = (woId, q) =>
+  getJson(`/api/work-orders/${encodeURIComponent(woId)}/referral-candidates?q=${encodeURIComponent(q)}`).then((d) => d?.candidates || []);
+export const setReferral = (woId, referrerCustomerId) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(woId)}/referral`, 'PUT', { referrerCustomerId: referrerCustomerId || null },
+    { timeout: FINISH_STEP_TIMEOUT_MS, forbidden: 'Only the office can record a referral.' });
+
 export const collectNowInvoice = (id) =>
   sendJson(`/api/invoices/${encodeURIComponent(id)}/collect-now`, 'POST', {}).then((d) => d.invoice);
 
