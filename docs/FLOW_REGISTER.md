@@ -9057,3 +9057,45 @@ a `synced_from_lead` history line every few minutes on Oct 6–7 with nothing ch
 is not idempotent; PJL-135). Full counts and ids come from the route after deploy. **Repair mode does not
 exist** (PJL-137's second half: a separate mode, backup-first, dry-run by default, deterministic, logged,
 stops on ambiguity) and no production data was changed by this work. No PASS flow touched.
+
+---
+
+## 2026-10-09 — FLOW-31/43: the field app follows the Season Plan's day, order and times (no PASS flow's rule changed; re-verified by tests)
+
+**Found:** October 17, as Patrick sent it. The Season Plan drove 61 French Dr, Orangeville first at
+07:00, then Stewart 8:17, Steele 9:00 and Sirizzotti 9:35. The field app showed Stewart, Steele,
+Orangeville at 8:00 (third), then Sirizzotti. The Orangeville stop carries "after 07:00" on the
+plan. An early first stop starts the day early (resequence, 2026-10-08).
+
+**Two faults:**
+
+1. **The stored time.** `scheduledStartFor` clamped every start up to the half-day's opening, so the
+   route's 07:00 arrival was saved as 8:00.
+   - Now `earliestStartMinutes` is the one rule: a morning stop whose own window (customer's ask,
+     else the plan stop's) opens before 8:00 keeps the route's arrival, never earlier than that
+     window.
+   - Everyone promised 8–12 is still never stored before 8:00, and the upper clamp is unchanged.
+   - `syncAssignedTimes` passes the stop's window, the same one the sequencer used.
+2. **The order.** `/api/schedule/today` ran its own drive order from the yard, honouring only
+   exact times. It ignored a stop's window and a day ordered by hand.
+   - Now `planRouteForDate` builds the plan's route for that date with the same
+     `sequenceDayWithBookings` the Season Plan screen draws.
+   - `day-schedule.orderByPlanRoute` lists the rows by it. A row the plan doesn't know sorts by its
+     own time among them.
+   - A date the plan places nothing on falls back to the old drive order.
+
+**The whole workflow:**
+- **Customer:** nothing is sent. A route re-time is not a reschedule, and they were told "after
+  7:00 AM".
+- **Patrick / app:** the app shows 7:00 and Orangeville first, matching the website.
+- **Capacity:** unchanged; 7:00 still counts as the morning (`bookings.bucketFor`).
+- **Linked records:** none touched.
+- **Audit:** the booking's `retimed` history line on the next sync.
+- **Deliberately left alone:** the other writers of a stored start (`assign`, day and stop moves)
+  still floor at 8:00. The sync, which runs after every plan edit and on a timer, re-times them to
+  the route's arrival.
+
+**Test:** `scripts/test-plan-day-order.mjs` (in build:check). It fails 8 of 10 on the parent, with
+the pure sections unable to run, and passes 21 of 21. Related suites pass unchanged: routed-times,
+day-order, resequence, day-schedule, season-plan-buckets, plan-follows-bookings, plan-move-follows,
+day-preview, season-plan-moves, assignment-writer, today-map and day-reschedule.

@@ -58,7 +58,7 @@ const distanceLib = require("./lib/distance");
 const ga4 = require("./lib/ga4");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, bucketVerdicts, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
-const { mergeDaySchedule } = require("./lib/day-schedule");
+const { mergeDaySchedule, orderByPlanRoute } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
 const bookingReminders = require("./lib/booking-reminders");
 const welcomeEmail = require("./lib/welcome-email");
@@ -26167,6 +26167,42 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Cancelled / archived leads are filtered out — we don't surface them
   // to the field tech. Site visits show alongside paid services since
   // they're real on-site appointments too.
+// The Season Plan's route for one date, as the plan screen draws it — the
+// same sequence (plan stops, booked customers, stop windows, a hand-set
+// order) through the same sequenceDayWithBookings the board uses. Keyed
+// for orderByPlanRoute: "bk:<bookingId>" / "prop:<propertyId>" ->
+// { stopNumber, arriveAt }. Null for a date the plan has nothing on.
+async function planRouteForDate(dateKey) {
+  const [y, m] = String(dateKey || "").split("-").map(Number);
+  if (!y || !m) return null;
+  const season = Object.keys(SEASON_MONTHS_FOR_BOOKED).find((k) => SEASON_MONTHS_FOR_BOOKED[k].includes(m - 1));
+  if (!season) return null;
+  const driven = await assignments.drivenPlan(season, y);
+  if (!driven || !driven.plan) return null;
+  const plan = driven.plan;
+  const all = await properties.list();
+  const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+  const bookedRows = (await gatherBookedRows({ plan, season, year: y, all, leads: await readLeads() })).get(dateKey) || [];
+  const storedDay = (plan.days && plan.days[dateKey]) || null;
+  if (!storedDay && !bookedRows.length) return null;
+  const requestedWindows = await assignments.requestedWindowsFor(season, y);
+  const { sequenced, rowByMapCode } = await sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows });
+  const route = new Map();
+  for (const t of (sequenced && sequenced.timeline) || []) {
+    const pos = { stopNumber: t.stopNumber, arriveAt: t.arriveAt || null };
+    const row = rowByMapCode.get(t.propertyCode);
+    if (row) {
+      if (row.bookingId) route.set(`bk:${row.bookingId}`, pos);
+      if (row.propertyId) route.set(`prop:${row.propertyId}`, pos);
+      continue;
+    }
+    const property = byCode.get(t.propertyCode);
+    if (property && property.id) route.set(`prop:${property.id}`, pos);
+  }
+  return route;
+}
+
+
 // Put a day's stops in driving order.
 //
 // THE BUG THIS REPLACES. /api/schedule/today sorted by booking.start, and
@@ -26191,7 +26227,20 @@ Customer signature captured at ${new Date().toISOString()}.`;
 // Rows with no coordinates keep their place rather than being dropped, and
 // any failure falls back to the time order that was there before: a day sheet
 // that is merely in the old order beats a day sheet that fails to render.
-async function orderDayForDriving(rows) {
+async function orderDayForDriving(rows, dateKey = null) {
+  // A day on the Season Plan is listed in the plan's route, so the field
+  // app and the plan screen can never disagree about who is first
+  // (2026-10-09, Oct 17: Orangeville "after 07:00" first on the plan,
+  // third in the app). Only a day the plan places none of falls through
+  // to the drive-order below.
+  if (dateKey) {
+    try {
+      const byPlan = orderByPlanRoute(rows, await planRouteForDate(dateKey));
+      if (byPlan) return byPlan;
+    } catch (err) {
+      console.warn("[schedule/today] plan order unavailable, ordering by drive:", err?.message);
+    }
+  }
   try {
     const withCoords = rows.filter((r) => r && r.coords && r.coords.lat != null);
     if (withCoords.length < 2) return rows;
@@ -26450,7 +26499,8 @@ async function orderDayForDriving(rows) {
     // merge is additive: every row above renders exactly as before, and
     // a work order already named by a row is never listed twice.
     const merged = mergeDaySchedule(dayBookings, allWos, dayStart, dayEnd);
-    const ordered = await orderDayForDriving(merged);
+    const dayKey = (() => { const d = new Date(dayStart); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+    const ordered = await orderDayForDriving(merged, dayKey);
 
     return sendJson(res, 200, {
       ok: true,
